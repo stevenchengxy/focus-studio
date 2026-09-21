@@ -12,3 +12,4 @@ swift "$SCRIPT_DIR/test-localization.swift"
 zsh "$SCRIPT_DIR/test-language-preferences.sh"
 zsh "$SCRIPT_DIR/test-app-regression.sh" --skip-build
 bash "$SCRIPT_DIR/test-codex-connection.sh"
+bash "$SCRIPT_DIR/test-ai-gateway.sh"

@@ -57,6 +57,8 @@ final class StudioModel: ObservableObject {
 
     let captureEngine = CaptureEngine()
     let codexDirector = CodexDirectorService()
+    /// LLM provider keys and the default text model for every AI feature.
+    let aiGateway = AIGatewayStore()
     private let store: ProjectStore
     private let interactionTrackingAccess: @MainActor () -> Bool
     private let inputMonitoringAccess: @MainActor () -> Bool
@@ -105,8 +107,18 @@ final class StudioModel: ObservableObject {
         // QA hook: `open -n "Focus Studio.app" --env FOCUS_STUDIO_START_DESTINATION=recorder`
         // lands on the recording picker so screenshots of live previews can be
         // taken without scripted clicks. Ignored for any other value.
-        if ProcessInfo.processInfo.environment["FOCUS_STUDIO_START_DESTINATION"] == "recorder" {
+        switch ProcessInfo.processInfo.environment["FOCUS_STUDIO_START_DESTINATION"] {
+        case "recorder":
             await showRecorder()
+        case "editor":
+            // Opens the most recent project so editor screenshots need no clicks.
+            if let project = projects.first { open(project) }
+        default:
+            break
+        }
+        if ProcessInfo.processInfo.environment["FOCUS_STUDIO_OPEN_SETTINGS"] == "1" {
+            // Same action the app menu's Settings… item sends.
+            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
         }
     }
 

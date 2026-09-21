@@ -7,10 +7,12 @@ struct FocusStudioApp: App {
     var body: some Scene {
         WindowGroup {
             AppLocalizedView {
-                StudioRootView()
-                    .environmentObject(model)
-                    .preferredColorScheme(.dark)
-                    .frame(minWidth: 1_080, minHeight: 700)
+                TextCompletionInjector(store: model.aiGateway) {
+                    StudioRootView()
+                        .environmentObject(model)
+                        .preferredColorScheme(.dark)
+                        .frame(minWidth: 1_080, minHeight: 700)
+                }
             }
         }
         .windowStyle(.hiddenTitleBar)
@@ -20,8 +22,13 @@ struct FocusStudioApp: App {
 
         Settings {
             AppLocalizedView {
-                CodexConnectionSettingsView(director: model.codexDirector, showsDoneButton: false)
-                    .preferredColorScheme(.dark)
+                TabView {
+                    AIGatewaySettingsView(store: model.aiGateway)
+                        .tabItem { Label("AI models", systemImage: "sparkles") }
+                    CodexConnectionSettingsView(director: model.codexDirector, showsDoneButton: false)
+                        .tabItem { Label("Codex", systemImage: "terminal") }
+                }
+                .preferredColorScheme(.dark)
             }
         }
     }

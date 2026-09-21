@@ -49,6 +49,13 @@ Focus Studio 是一个原生 macOS 产品 Demo 录制与编辑器，核心工作
 
 4 首原创 BGM 和 4 种原创音效由 [`scripts/generate-audio-assets.swift`](scripts/generate-audio-assets.swift) 程序化生成；另外收录了作者页面明确标记为 CC0 的 `City Loop`、`Overworld (BGM)`、`Calm Loop` 与 `Loading Screen Loop`。完整作者、来源、许可、SHA-256 与编码信息见 [`Resources/Audio/README.md`](Resources/Audio/README.md)。构建脚本会生成原创资源、验证网络资源哈希并打包完整目录。
 
+## AI 模型网关与 AI 编辑（1.3）
+
+- **设置 → AI 模型**：为 OpenAI、Anthropic、DeepSeek、GLM（智谱）、Kimi（Moonshot）、OpenRouter、火山方舟或任意 OpenAI 兼容端点填入密钥（保存在 macOS 钥匙串），一键测试并拉取模型列表，选择一个"默认文本模型"。OpenRouter 用一把密钥即可访问多家厂商模型。Codex Director 仍走本机 Codex。
+- **章节与字幕**：时间线新增 Chapters 泳道，检查器新增 Captions 工具；字幕条在预览与导出中一致渲染（可选位置、大小、章节编号），支持导出 SRT。
+- **AI 编辑**：填写"这个 demo 展示什么"，AI 依据录制的点击、缩放与输入时间生成章节与字幕，也可一键润色；所有结果都可以手动修改。没有配置 AI 模型时，这些按钮禁用，其余功能不受影响。
+- **界面**：说明性文字改为工具提示，保留控件与状态，降低信息密度。
+
 ## 界面动效（1.2）
 
 页面切换、录制源卡片选中、项目库卡片悬停、编辑器工具栏高亮与检查器切换、时间线 Zoom 块选中、倒计时数字都使用统一的 `StudioMotion` 动效词汇（0.12–0.28 秒）。系统开启"减弱动态效果"时全部退化为淡入淡出。项目库卡片显示通过正式渲染管线生成的带背景样式的首帧海报。

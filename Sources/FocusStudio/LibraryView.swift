@@ -69,11 +69,9 @@ struct LibraryView: View {
                             Text("Make every click easy to follow.")
                                 .font(.system(size: 34, weight: .bold, design: .rounded))
                                 .tracking(-0.8)
-                            Text("Record your Mac, then Focus Studio automatically turns clicks into smooth, editable camera moves.")
-                                .font(.system(size: 15))
+                            Text("Record. Clicks become cinematic zooms. Edit, caption, export.")
+                                .font(.system(size: 14))
                                 .foregroundStyle(StudioTheme.secondaryText)
-                                .lineSpacing(4)
-                                .frame(maxWidth: 560, alignment: .leading)
 
                             HStack(spacing: 10) {
                                 Button {
@@ -176,9 +174,6 @@ struct LibraryView: View {
                                 .foregroundStyle(StudioTheme.secondaryText)
                             Text("Your first recording will appear here")
                                 .font(.system(size: 14, weight: .medium))
-                            Text("Everything is stored locally on this Mac.")
-                                .font(.system(size: 12))
-                                .foregroundStyle(StudioTheme.secondaryText)
                         }
                         .frame(maxWidth: .infinity)
                         .frame(height: 190)
@@ -263,16 +258,10 @@ struct LibraryView: View {
                     }
                     .buttonStyle(.bordered)
                     .accessibilityIdentifier("library.selectionMode")
+                    .help(LocalizedStringKey(selection.isSelecting
+                        ? "Selection mode: click cards to select; Shift-click selects a range."
+                        : "Use the checkboxes to select recordings, or Command-click a card."))
                 }
-            }
-            if selection.isSelecting {
-                Text("Selection mode: click cards to select; Shift-click selects a range.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(StudioTheme.secondaryText)
-            } else if !model.projects.isEmpty {
-                Text("Use the checkboxes to select recordings, or Command-click a card.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(StudioTheme.secondaryText)
             }
             if let trashedCount {
                 HStack {

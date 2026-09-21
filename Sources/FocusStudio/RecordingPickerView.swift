@@ -76,26 +76,20 @@ struct RecordingPickerView: View {
                     }
                     .pickerStyle(.segmented)
                     .frame(maxWidth: 430)
+                    .help(LocalizedStringKey(sourceHint))
 
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Image(systemName: sourceHintIcon)
-                            .foregroundStyle(kind == .display ? StudioTheme.yellow : StudioTheme.purple)
-                        Text(LocalizedStringKey(sourceHint))
-                            .font(.system(size: 10))
-                            .foregroundStyle(StudioTheme.secondaryText)
-                            .lineSpacing(2)
-                        Spacer(minLength: 0)
-                        if kind == .display, let browser = preferredBrowserWindow {
-                            Button("Use \(browser.appName ?? L10n.tr("browser")) window") {
-                                kind = .window
-                                model.selectedTargetID = browser.id
-                            }
-                            .buttonStyle(.plain)
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(StudioTheme.purple)
+                    if kind == .display, let browser = preferredBrowserWindow {
+                        Button {
+                            kind = .window
+                            model.selectedTargetID = browser.id
+                        } label: {
+                            Label("Use \(browser.appName ?? L10n.tr("browser")) window", systemImage: "macwindow")
                         }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(StudioTheme.purple)
+                        .help(LocalizedStringKey(sourceHint))
                     }
-                    .frame(maxWidth: 620, alignment: .leading)
 
                     ScrollView {
                         if filteredTargets.isEmpty, model.capturePermissionDenied {
@@ -207,12 +201,6 @@ struct RecordingPickerView: View {
                             icon: "rectangle.inset.filled",
                             isOn: $model.browserContentOnly
                         )
-                        Text("The crop is non-destructive and stays adjustable in the editor.")
-                            .font(.system(size: 9))
-                            .foregroundStyle(StudioTheme.secondaryText)
-                            .padding(.leading, 33)
-                            .padding(.top, -7)
-                            .padding(.bottom, 4)
                         if model.browserContentOnly {
                             Divider().overlay(StudioTheme.line)
                             SettingToggle(
@@ -253,10 +241,9 @@ struct RecordingPickerView: View {
                             .foregroundStyle(selectedAreaIsReady ? StudioTheme.purple : StudioTheme.secondaryText)
 
                             if selectedAreaIsReady, let area = model.selectedAreaTarget {
-                                Text("\(Int(area.frame.width.rounded())) × \(Int(area.frame.height.rounded())) points · outside content and the menu bar stay out of the recording")
-                                    .font(.system(size: 9))
+                                Text(verbatim: "\(Int(area.frame.width.rounded())) × \(Int(area.frame.height.rounded()))")
+                                    .font(.system(size: 10, design: .monospaced))
                                     .foregroundStyle(StudioTheme.secondaryText)
-                                    .lineSpacing(2)
                                 Button("Reselect area") {
                                     chooseRecordingArea()
                                 }
@@ -270,34 +257,24 @@ struct RecordingPickerView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                     }
 
-                    VStack(alignment: .leading, spacing: 7) {
-                        Label("Permissions", systemImage: "lock.shield")
+                    HStack(spacing: 8) {
+                        Image(systemName: model.automaticZooms && !model.interactionTrackingAuthorized ? "exclamationmark.triangle" : "checkmark.shield")
+                            .foregroundStyle(model.automaticZooms && !model.interactionTrackingAuthorized ? StudioTheme.yellow : StudioTheme.secondaryText)
+                        Text("Permissions")
                             .font(.system(size: 11, weight: .semibold))
-                        Text("Screen-only recording starts without optional permission prompts. Input Monitoring captures clicks; Accessibility keeps zoom focused while you type and detects text cursors. Enable these in Privacy & Security when needed.")
-                            .font(.system(size: 11))
-                            .foregroundStyle(StudioTheme.secondaryText)
-                            .lineSpacing(2)
+                        Spacer()
                         if model.automaticZooms {
-                            Label(
-                                LocalizedStringKey(model.interactionTrackingAuthorized
-                                    ? "Interaction permissions allowed — verify by clicking and typing"
-                                    : "Interaction permissions need attention"),
-                                systemImage: model.interactionTrackingAuthorized ? "checkmark.circle" : "exclamationmark.triangle"
-                            )
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(model.interactionTrackingAuthorized ? StudioTheme.secondaryText : StudioTheme.yellow)
-                            HStack {
-                                if !model.accessibilityAuthorized {
-                                    Button("Accessibility") { model.openAccessibilitySettings() }
-                                }
-                                if !model.inputMonitoringAuthorized {
-                                    Button("Input Monitoring") { model.openInputMonitoringSettings() }
-                                }
+                            if !model.accessibilityAuthorized {
+                                Button("Accessibility") { model.openAccessibilitySettings() }
                             }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
+                            if !model.inputMonitoringAuthorized {
+                                Button("Input Monitoring") { model.openInputMonitoringSettings() }
+                            }
                         }
                     }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("Screen-only recording starts without optional permission prompts. Input Monitoring captures clicks; Accessibility keeps zoom focused while you type and detects text cursors. Enable these in Privacy & Security when needed.")
 
                     Button {
                         if kind == .area, !selectedAreaIsReady {
@@ -381,14 +358,6 @@ struct RecordingPickerView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Automatic zooms are on, but interaction permissions are incomplete. Enable Accessibility and Input Monitoring for Focus Studio, then return. Otherwise clicks or typing may not generate zooms; granting access later cannot restore missing events in this recording.")
-        }
-    }
-
-    private var sourceHintIcon: String {
-        switch kind {
-        case .display: return "exclamationmark.triangle"
-        case .window: return "macwindow"
-        case .area: return "crop"
         }
     }
 
@@ -524,9 +493,6 @@ struct RecordingCountdownView: View {
                 withAnimation(.easeInOut(duration: 1).repeatForever(autoreverses: true)) { pulse = true }
             }
 
-            Text("Recording starts after the countdown")
-                .font(.system(size: 12))
-                .foregroundStyle(StudioTheme.secondaryText)
             Text(model.selectedTarget?.title ?? L10n.tr("Selected source"))
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(StudioTheme.secondaryText)
@@ -695,16 +661,12 @@ private struct SettingToggle: View {
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(StudioTheme.secondaryText)
                 .frame(width: 22)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(LocalizedStringKey(title)).font(.system(size: 12, weight: .medium))
-                Text(LocalizedStringKey(subtitle))
-                    .font(.system(size: 10))
-                    .foregroundStyle(StudioTheme.secondaryText)
-            }
+            Text(LocalizedStringKey(title)).font(.system(size: 12, weight: .medium))
             Spacer()
             Toggle("", isOn: $isOn).labelsHidden().toggleStyle(.switch)
         }
-        .padding(.vertical, 13)
+        .padding(.vertical, 11)
+        .help(LocalizedStringKey(subtitle))
     }
 }
 

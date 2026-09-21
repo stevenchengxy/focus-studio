@@ -27,11 +27,7 @@ struct CodexConnectionSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Codex connection").font(.system(size: 20, weight: .semibold))
-                    Text("Set up your own account on this Mac.")
-                        .font(.system(size: 12)).foregroundStyle(StudioTheme.secondaryText)
-                }
+                Text("Codex connection").font(.system(size: 20, weight: .semibold))
                 Spacer()
                 if showsDoneButton {
                     Button("Done") { apiKey = ""; dismiss() }
@@ -42,11 +38,8 @@ struct CodexConnectionSettingsView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        AppLanguagePicker()
-                        Text("Changes immediately. Your recording and edits stay open.")
-                            .font(.system(size: 11)).foregroundStyle(StudioTheme.secondaryText)
-                    }
+                    AppLanguagePicker()
+                        .help("Changes immediately. Your recording and edits stay open.")
                     Divider()
                     executableSection
                     accountSection
@@ -98,9 +91,7 @@ struct CodexConnectionSettingsView: View {
     private var executableSection: some View {
         VStack(alignment: .leading, spacing: 9) {
             Text("1. Codex installation").font(.system(size: 13, weight: .semibold))
-            Text("Install Codex CLI or the Codex desktop app. Leave the path empty to detect it automatically, or choose your installation.")
-                .font(.system(size: 11)).foregroundStyle(StudioTheme.secondaryText)
-                .fixedSize(horizontal: false, vertical: true)
+                .help("Install Codex CLI or the Codex desktop app. Leave the path empty to detect it automatically, or choose your installation.")
             HStack {
                 TextField("Automatic detection", text: $draft.executablePath)
                     .textFieldStyle(.roundedBorder)
@@ -214,9 +205,6 @@ struct CodexConnectionSettingsView: View {
             .pickerStyle(.segmented)
             .disabled(director.connectionState.isBusy)
             if draft.accountScope == .focusStudio {
-                Text("Sign in with ChatGPT or enter an OpenAI API key. Codex saves this separate account in macOS Keychain; your other Codex sessions are not changed.")
-                    .font(.system(size: 11)).foregroundStyle(StudioTheme.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
                 if director.connectionState == .signingIn, let loginURL = director.loginURL {
                     HStack {
                         ProgressView().controlSize(.small)
@@ -256,9 +244,9 @@ struct CodexConnectionSettingsView: View {
                         .font(.system(size: 10)).foregroundStyle(StudioTheme.secondaryText)
                 }
             } else {
-                Text("Reuses the account configured in your local Codex CLI. Manage that account in Codex. No credentials are copied into Focus Studio or installation packages.")
+                Text("Uses your existing Codex sign-in.")
                     .font(.system(size: 11)).foregroundStyle(StudioTheme.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .help("Reuses the account configured in your local Codex CLI. Manage that account in Codex. No credentials are copied into Focus Studio or installation packages.")
             }
             if hasUnsavedChanges || !director.isServerConnected {
                 Text("Select Save & test connection first to enable sign-in.")
@@ -280,9 +268,6 @@ struct CodexConnectionSettingsView: View {
                 }
             }
             .disabled(director.connectionState.isBusy)
-            Text("Available models are loaded from your account after sign-in. The connection test does not generate a plan.")
-                .font(.system(size: 11)).foregroundStyle(StudioTheme.secondaryText)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

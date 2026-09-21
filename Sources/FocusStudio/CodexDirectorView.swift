@@ -61,13 +61,9 @@ struct CodexDirectorView: View {
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(StudioTheme.purple)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Codex Director")
-                    .font(.system(size: 15, weight: .semibold))
-                Text("Describe the product demo you want to record")
-                    .font(.system(size: 11))
-                    .foregroundStyle(StudioTheme.secondaryText)
-            }
+            Text("Codex Director")
+                .font(.system(size: 15, weight: .semibold))
+                .help("Describe the product demo you want to record")
 
             Spacer()
 
@@ -129,11 +125,7 @@ struct CodexDirectorView: View {
         VStack(spacing: 0) {
             if !director.canCreatePlan && director.connectionState != .generating {
                 HStack(alignment: .center, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Connect your Codex account").font(.system(size: 13, weight: .semibold))
-                        Text("Choose your installation, sign in, and test the connection.")
-                            .font(.system(size: 11)).foregroundStyle(StudioTheme.secondaryText)
-                    }
+                    Text("Connect your Codex account").font(.system(size: 13, weight: .semibold))
                     Spacer()
                     Button("Set up Codex") { showsConnectionSettings = true }
                         .buttonStyle(PrimaryButtonStyle())
@@ -202,11 +194,8 @@ struct CodexDirectorView: View {
                 .font(.system(size: 12))
                 .foregroundStyle(StudioTheme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Include a URL and Focus Studio will open it, capture the visible content, and send that screenshot with your prompt to Codex for visual planning.")
-                .font(.system(size: 10))
-                .foregroundStyle(StudioTheme.secondaryText.opacity(0.82))
-                .fixedSize(horizontal: false, vertical: true)
         }
+        .help("Include a URL and Focus Studio will open it, capture the visible content, and send that screenshot with your prompt to Codex for visual planning.")
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(StudioTheme.panelRaised)
@@ -270,9 +259,10 @@ struct CodexDirectorView: View {
                 )
 
             HStack {
-                Text("Prompts and URL screenshots are sent to Codex. Nothing runs until you approve the plan.")
+                Text("Nothing runs until you approve the plan.")
                     .font(.system(size: 10))
                     .foregroundStyle(StudioTheme.secondaryText)
+                    .help("Prompts and URL screenshots are sent to Codex. Nothing runs until you approve the plan.")
                 Spacer()
                 Button("Create plan") { submitPrompt() }
                     .buttonStyle(PrimaryButtonStyle())
@@ -359,9 +349,6 @@ struct CodexDirectorView: View {
                         .foregroundStyle(StudioTheme.secondaryText)
                     Text("Your validated plan will appear here")
                         .font(.system(size: 12, weight: .medium))
-                    Text("Nothing runs until you select the run button.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(StudioTheme.secondaryText)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }

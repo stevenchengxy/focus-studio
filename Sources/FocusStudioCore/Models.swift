@@ -474,6 +474,124 @@ public struct ProductDemoAudioSettings: Codable, Hashable, Sendable {
     }
 }
 
+/// Where a chapter caption sits on the rendered canvas.
+public enum CaptionPosition: String, Codable, Hashable, Sendable, CaseIterable {
+    case bottom
+    case top
+}
+
+/// A narrated section of a product demo: a time range plus the on-video
+/// caption shown while it is active. Chapters live beside zoom segments and
+/// never modify the captured recording or its interaction metadata.
+public struct DemoChapter: Codable, Hashable, Sendable, Identifiable {
+    public var id: UUID
+    public var start: Double
+    public var end: Double
+    public var title: String
+    /// Rendered on the video when non-empty; otherwise the title is shown.
+    public var caption: String
+    public var isEnabled: Bool
+
+    public init(
+        id: UUID = UUID(),
+        start: Double,
+        end: Double,
+        title: String,
+        caption: String = "",
+        isEnabled: Bool = true
+    ) {
+        self.id = id
+        self.start = start
+        self.end = end
+        self.title = title
+        self.caption = caption
+        self.isEnabled = isEnabled
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case start
+        case end
+        case title
+        case caption
+        case isEnabled
+    }
+
+    /// Tolerant of hand-written or AI-produced JSON: only the time range is required.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        start = try container.decode(Double.self, forKey: .start)
+        end = try container.decode(Double.self, forKey: .end)
+        title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
+        caption = try container.decodeIfPresent(String.self, forKey: .caption) ?? ""
+        isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+    }
+
+    /// The text drawn on the video: the caption, or the title when no caption exists.
+    public var displayText: String {
+        let trimmedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedCaption.isEmpty { return trimmedCaption }
+        return title.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+/// Appearance of the caption pill shared by preview and export.
+///
+/// Stored as an optional on ``ProjectSettings`` so projects written before
+/// chapters existed decode unchanged; a missing value means these defaults.
+public struct CaptionStyle: Codable, Hashable, Sendable {
+    public static let scaleRange = 0.7...1.6
+    public static let defaultAccentColorHex = "#8061FF"
+
+    public var position: CaptionPosition
+    /// Multiplies the reference caption size (2.4% of the canvas height).
+    public var scale: Double
+    public var showsChapterNumber: Bool
+    /// Hex color of the chapter-number chip. Nil uses the app accent.
+    public var accentColor: String?
+
+    public init(
+        position: CaptionPosition = .bottom,
+        scale: Double = 1,
+        showsChapterNumber: Bool = true,
+        accentColor: String? = nil
+    ) {
+        self.position = position
+        self.scale = scale
+        self.showsChapterNumber = showsChapterNumber
+        self.accentColor = accentColor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case position
+        case scale
+        case showsChapterNumber
+        case accentColor
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        position = try container.decodeIfPresent(CaptionPosition.self, forKey: .position) ?? .bottom
+        scale = try container.decodeIfPresent(Double.self, forKey: .scale) ?? 1
+        showsChapterNumber = try container.decodeIfPresent(Bool.self, forKey: .showsChapterNumber) ?? true
+        accentColor = try container.decodeIfPresent(String.self, forKey: .accentColor)
+    }
+
+    public var sanitized: CaptionStyle {
+        var result = self
+        result.scale = scale.isFinite ? scale.clamped(to: Self.scaleRange) : 1
+        if let accentColor, accentColor.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            result.accentColor = nil
+        }
+        return result
+    }
+
+    public var resolvedAccentColorHex: String {
+        sanitized.accentColor ?? Self.defaultAccentColorHex
+    }
+}
+
 public struct ProjectSettings: Codable, Hashable, Sendable {
     public var autoZoomEnabled = true
     public var zoomScale = 1.75
@@ -519,8 +637,16 @@ public struct ProjectSettings: Codable, Hashable, Sendable {
     public var exportWidth = 1920
     /// Optional to preserve decoding of projects created before audio finishing.
     public var productDemoAudio: ProductDemoAudioSettings?
+    /// Optional so projects saved before chapter captions decode unchanged.
+    public var captionStyle: CaptionStyle?
+    /// What the demo shows, in the user's words. Feeds AI chapter generation.
+    public var productDescription: String?
 
     public init() {}
+
+    public var resolvedCaptionStyle: CaptionStyle {
+        (captionStyle ?? CaptionStyle()).sanitized
+    }
 
     /// Defaults for rendering legacy projects and for initializing the audio UI.
     public var resolvedProductDemoAudio: ProductDemoAudioSettings {
@@ -571,6 +697,9 @@ public struct RecordingProject: Codable, Hashable, Sendable, Identifiable {
     /// Optional so existing projects remain readable without migration.
     public var typingActivity: [TypingActivity]?
     public var zoomSegments: [ZoomSegment]
+    /// Narrated chapters with on-video captions. Optional so projects written
+    /// by earlier builds decode unchanged; nil and empty are equivalent.
+    public var chapters: [DemoChapter]?
     public var settings: ProjectSettings
 
     public init(
@@ -585,6 +714,7 @@ public struct RecordingProject: Codable, Hashable, Sendable, Identifiable {
         clickEvents: [ClickEvent] = [],
         typingActivity: [TypingActivity]? = nil,
         zoomSegments: [ZoomSegment] = [],
+        chapters: [DemoChapter]? = nil,
         settings: ProjectSettings = .init()
     ) {
         self.id = id
@@ -598,6 +728,7 @@ public struct RecordingProject: Codable, Hashable, Sendable, Identifiable {
         self.clickEvents = clickEvents
         self.typingActivity = typingActivity
         self.zoomSegments = zoomSegments
+        self.chapters = chapters
         self.settings = settings
     }
 }

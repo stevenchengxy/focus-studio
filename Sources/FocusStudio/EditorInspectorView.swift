@@ -2,9 +2,11 @@ import AppKit
 import FocusStudioCore
 import ImageIO
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum EditorTool: String, CaseIterable, Identifiable {
     case zoom
+    case captions
     case design
     case cursor
     case audio
@@ -16,6 +18,7 @@ enum EditorTool: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .zoom: return "plus.magnifyingglass"
+        case .captions: return "captions.bubble"
         case .design: return "paintpalette"
         case .cursor: return "cursorarrow"
         case .audio: return "waveform"
@@ -27,9 +30,13 @@ enum EditorTool: String, CaseIterable, Identifiable {
 
 struct EditorInspectorView: View {
     @EnvironmentObject private var model: StudioModel
+    @Environment(\.textCompletion) private var textCompletion
     @Binding var project: RecordingProject
     @Binding var selectedZoomID: UUID?
+    @Binding var selectedChapterID: UUID?
     let tool: EditorTool
+    @State private var isGeneratingChapters = false
+    @State private var captionsMessage: String?
     private let systemWallpapers = SystemWallpaperCatalog.installed
 
     private var selectedZoomIndex: Int? {
@@ -91,6 +98,8 @@ struct EditorInspectorView: View {
                         .accessibilityIdentifier("editor.selectedZoom")
                     }
                     zoomInspector
+                case .captions:
+                    captionsInspector
                 case .design:
                     designInspector
                 case .cursor:
@@ -148,9 +157,6 @@ struct EditorInspectorView: View {
                 NumberField(title: "End", value: segmentTimingBinding(zoom, value: \.end, edit: ZoomTimingEdit.end), range: 0...max(0, project.duration), suffix: "s")
                 NumberField(title: "Total duration", value: segmentTimingBinding(zoom, value: \.duration, edit: ZoomTimingEdit.duration), range: 0...max(0, project.duration), suffix: "s")
                 NumberField(title: "Hold at full zoom", value: segmentTimingBinding(zoom, value: \.hold, edit: ZoomTimingEdit.hold), range: 0...max(0, project.duration), suffix: "s")
-                Text("Timing edits stay manual and are not replaced by automatic zoom settings.")
-                    .font(.system(size: 9))
-                    .foregroundStyle(StudioTheme.secondaryText)
                 Toggle("Instant animation", isOn: zoom.isInstant)
                     .font(.system(size: 11))
                 Toggle("Enabled", isOn: zoom.isEnabled)
@@ -184,10 +190,6 @@ struct EditorInspectorView: View {
                 }
                 .controlSize(.small)
                 .disabled(zoom.wrappedValue.isInstant)
-                Text("Smaller seconds = faster. These speeds affect only the selected zoom. Short blocks fit transitions proportionally.")
-                    .font(.system(size: 9))
-                    .foregroundStyle(StudioTheme.secondaryText)
-                    .lineSpacing(2)
                 Text("In \(timing.easeIn, specifier: "%.2f")s · Hold \(timing.hold, specifier: "%.2f")s · Out \(timing.easeOut, specifier: "%.2f")s")
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundStyle(StudioTheme.secondaryText)
@@ -195,10 +197,6 @@ struct EditorInspectorView: View {
                     zoom.wrappedValue = ZoomTiming.applying(.resetTransitions, to: zoom.wrappedValue, projectDuration: project.duration, settings: project.settings)
                 }
                 .font(.system(size: 10))
-                Text("Drag the center of a block to move it. Drag its left or right handle to change its start or end.")
-                    .font(.system(size: 9))
-                    .foregroundStyle(StudioTheme.secondaryText)
-                    .lineSpacing(2)
             }
             InspectorSection("Focus point") {
                 LabeledSlider(value: zoom.targetX, range: 0...1, label: "Horizontal", suffix: "%", multiplier: 100, decimals: 0)
@@ -227,10 +225,6 @@ struct EditorInspectorView: View {
                 Text("Or double-click the Zoom lane to add a manual camera move.")
                     .font(.system(size: 10))
                     .foregroundStyle(StudioTheme.secondaryText)
-                    .multilineTextAlignment(.center)
-                Text("Drag the edges to change the zoom interval. Select a block to edit its duration and transition speeds here.")
-                    .font(.system(size: 9))
-                    .foregroundStyle(StudioTheme.secondaryText.opacity(0.8))
                     .multilineTextAlignment(.center)
             }
             .frame(maxWidth: .infinity)
@@ -317,10 +311,6 @@ struct EditorInspectorView: View {
                 }
                 .font(.system(size: 10, weight: .medium))
 
-                Text("Browser presets hide tabs and toolbars without changing the original recording.")
-                    .font(.system(size: 9))
-                    .foregroundStyle(StudioTheme.secondaryText)
-                    .lineSpacing(2)
             }
             InspectorSection("Background") {
                 LazyVGrid(
@@ -478,10 +468,6 @@ struct EditorInspectorView: View {
                         Text(LocalizedStringKey(style.rawValue.capitalized)).tag(style)
                     }
                 }
-                Text("The cursor automatically changes to an I-beam over editable text fields when macOS exposes that information.")
-                    .font(.system(size: 9))
-                    .foregroundStyle(StudioTheme.secondaryText)
-                    .lineSpacing(2)
             }
         }
     }
@@ -509,10 +495,6 @@ struct EditorInspectorView: View {
                     .buttonStyle(.plain)
                     .font(.system(size: 10, weight: .medium))
                 }
-                Text("New recordings stay untouched. Music and effects are only mixed after you choose them here; the raw recording is never changed.")
-                    .font(.system(size: 9))
-                    .foregroundStyle(StudioTheme.secondaryText)
-                    .lineSpacing(2)
             }
 
             if project.settings.productDemoAudio != nil {
@@ -654,10 +636,6 @@ struct EditorInspectorView: View {
                             decimals: 0
                         )
                     }
-                    Text("Use effects on meaningful selections and camera moves; restrained cues keep short demos polished.")
-                        .font(.system(size: 9))
-                        .foregroundStyle(StudioTheme.secondaryText)
-                        .lineSpacing(2)
                 }
             }
         }
@@ -675,10 +653,6 @@ struct EditorInspectorView: View {
                 LabeledSlider(value: zoomHoldBinding, range: 0.2...3, label: "Click hold", suffix: "s", decimals: 2)
                 LabeledSlider(value: zoomTimingBinding(\.zoomEaseOut), range: 0.05...1.4, label: "Zoom out", suffix: "s", decimals: 2)
                 LabeledSlider(value: zoomChainGapBinding, range: 0...ProjectSettings.maximumZoomChainGap, label: "Link nearby clicks", suffix: "s", decimals: 1)
-                Text("Clicks within this gap keep the camera zoomed in and pan to the next target instead of zooming out first.")
-                    .font(.system(size: 9))
-                    .foregroundStyle(StudioTheme.secondaryText)
-                    .lineSpacing(2)
             }
             InspectorSection("Typing focus") {
                 Toggle("Hold zoom while typing", isOn: typingZoomBinding(\.enabled))
@@ -925,6 +899,344 @@ struct EditorInspectorView: View {
             get: { Color(hex: value.wrappedValue) },
             set: { color in value.wrappedValue = color.hexString ?? value.wrappedValue }
         )
+    }
+}
+
+// MARK: - Captions
+
+private let chapterTint = Color(red: 0.13, green: 0.66, blue: 0.80)
+
+extension EditorInspectorView {
+    /// Chapters in playback order; numbering matches the timeline, SRT and video.
+    private var sortedChapters: [DemoChapter] {
+        (project.chapters ?? []).sorted(by: ChapterMath.precedes)
+    }
+
+    private var selectedChapter: DemoChapter? {
+        guard let selectedChapterID else { return nil }
+        return project.chapters?.first { $0.id == selectedChapterID }
+    }
+
+    private func chapterNumber(_ id: UUID) -> Int {
+        (sortedChapters.firstIndex { $0.id == id } ?? 0) + 1
+    }
+
+    @ViewBuilder
+    private var captionsInspector: some View {
+        let chapters = sortedChapters
+        InspectorSection("Chapters") {
+            if chapters.isEmpty {
+                HStack(spacing: 7) {
+                    Image(systemName: "captions.bubble")
+                    Text("No chapters")
+                }
+                .font(.system(size: 10))
+                .foregroundStyle(StudioTheme.secondaryText)
+                .help("Double-click the Chapters lane or add one here")
+            } else {
+                VStack(spacing: 4) {
+                    ForEach(Array(chapters.enumerated()), id: \.element.id) { index, chapter in
+                        chapterRow(chapter, number: index + 1)
+                    }
+                }
+            }
+            HStack(spacing: 8) {
+                Button("Add chapter", action: addChapter)
+                    .help("Add a 4-second chapter after the last one")
+                    .accessibilityIdentifier("captions.addChapter")
+                Button("From zooms", action: deriveChaptersFromZooms)
+                    .help("Create chapters from the zoom blocks")
+                    .accessibilityIdentifier("captions.fromZooms")
+                Button("Export SRT…", action: exportSRT)
+                    .disabled(chapters.isEmpty)
+                    .help("Save captions as a SubRip subtitle file")
+            }
+            .font(.system(size: 10, weight: .medium))
+            .controlSize(.small)
+        }
+
+        if let selected = selectedChapter {
+            let chapter = chapterBinding(selected)
+            InspectorSection(L10n.format("Chapter %lld", chapterNumber(selected.id))) {
+                TextField("Title", text: chapter.title)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11))
+                    .accessibilityIdentifier("captions.title")
+                TextField("Caption", text: chapter.caption, axis: .vertical)
+                    .lineLimit(1...3)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11))
+                    .help("Shown on the video; the title is used when empty")
+                    .accessibilityIdentifier("captions.caption")
+                NumberField(
+                    title: "Start",
+                    value: chapterTimeBinding(chapter, value: \.start, edit: ChapterEdit.start),
+                    range: 0...max(0, project.duration),
+                    suffix: "s"
+                )
+                NumberField(
+                    title: "End",
+                    value: chapterTimeBinding(chapter, value: \.end, edit: ChapterEdit.end),
+                    range: 0...max(0, project.duration),
+                    suffix: "s"
+                )
+                Toggle("Enabled", isOn: chapter.isEnabled)
+                    .font(.system(size: 11))
+                Button(role: .destructive) {
+                    removeChapter(selected.id)
+                } label: {
+                    Label("Remove", systemImage: "trash")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(StudioTheme.red)
+            }
+            .id(selected.id)
+        }
+
+        InspectorSection("Style") {
+            Picker("Position", selection: captionStyleBinding(\.position)) {
+                Text("Bottom").tag(CaptionPosition.bottom)
+                Text("Top").tag(CaptionPosition.top)
+            }
+            LabeledSlider(
+                value: captionStyleBinding(\.scale),
+                range: CaptionStyle.scaleRange,
+                label: "Size",
+                suffix: "×",
+                decimals: 2
+            )
+            Toggle("Chapter number", isOn: captionStyleBinding(\.showsChapterNumber))
+                .font(.system(size: 11))
+                .help("Show the chapter number on the caption")
+            ColorPicker("Accent", selection: accentColorBinding, supportsOpacity: false)
+                .font(.system(size: 11))
+                .disabled(!project.settings.resolvedCaptionStyle.showsChapterNumber)
+        }
+
+        InspectorSection("AI") {
+            TextField("What does this demo show?", text: productDescriptionBinding, axis: .vertical)
+                .lineLimit(1...4)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 11))
+                .help("Used to write chapter titles and captions")
+                .accessibilityIdentifier("captions.productDescription")
+            HStack(spacing: 8) {
+                Button("Generate chapters", action: generateChapters)
+                    .help(LocalizedStringKey(textCompletion == nil
+                        ? "Set up an AI model in Settings"
+                        : "Write chapters from the clicks, zooms and typing"))
+                    .accessibilityIdentifier("captions.generate")
+                Button("Polish captions", action: polishCaptions)
+                    .disabled(chapters.isEmpty)
+                    .help(LocalizedStringKey(textCompletion == nil
+                        ? "Set up an AI model in Settings"
+                        : "Rewrite every caption concisely"))
+                    .accessibilityIdentifier("captions.polish")
+                if isGeneratingChapters {
+                    ProgressView().controlSize(.small)
+                }
+            }
+            .font(.system(size: 10, weight: .medium))
+            .controlSize(.small)
+            .disabled(textCompletion == nil || isGeneratingChapters)
+            if let captionsMessage {
+                Text(verbatim: captionsMessage)
+                    .font(.system(size: 9))
+                    .foregroundStyle(StudioTheme.red)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func chapterRow(_ chapter: DemoChapter, number: Int) -> some View {
+        let isSelected = selectedChapterID == chapter.id
+        return HStack(spacing: 7) {
+            Text(verbatim: "\(number)")
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white)
+                .frame(width: 18, height: 18)
+                .background(chapter.isEnabled ? chapterTint : Color.gray.opacity(0.5))
+                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+            VStack(alignment: .leading, spacing: 1) {
+                Group {
+                    if chapter.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text("Untitled")
+                    } else {
+                        Text(verbatim: chapter.title)
+                    }
+                }
+                .font(.system(size: 10, weight: .semibold))
+                .lineLimit(1)
+                Text(verbatim: "\(seconds(chapter.start))–\(seconds(chapter.end))s")
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundStyle(StudioTheme.secondaryText)
+            }
+            Spacer(minLength: 4)
+            Toggle("Enabled", isOn: chapterBinding(chapter).isEnabled)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+        }
+        .padding(.horizontal, 7)
+        .frame(height: 36)
+        .background(Color.white.opacity(isSelected ? 0.08 : 0.025))
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(isSelected ? chapterTint.opacity(0.9) : Color.clear, lineWidth: 1)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture { selectedChapterID = chapter.id }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Text("Chapter \(number)"))
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityIdentifier("captions.chapter.\(chapter.id.uuidString)")
+    }
+
+    private func seconds(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(2)))
+    }
+
+    private func chapterBinding(_ chapter: DemoChapter) -> Binding<DemoChapter> {
+        Binding(
+            get: { project.chapters?.first { $0.id == chapter.id } ?? chapter },
+            set: { updated in
+                guard let index = project.chapters?.firstIndex(where: { $0.id == chapter.id }) else { return }
+                project.chapters?[index] = updated
+            }
+        )
+    }
+
+    private func chapterTimeBinding(
+        _ chapter: Binding<DemoChapter>,
+        value: KeyPath<DemoChapter, Double>,
+        edit: @escaping (Double) -> ChapterEdit
+    ) -> Binding<Double> {
+        Binding(
+            get: { chapter.wrappedValue[keyPath: value] },
+            set: { requested in
+                chapter.wrappedValue = ChapterMath.applying(
+                    edit(requested),
+                    to: chapter.wrappedValue,
+                    duration: project.duration
+                )
+            }
+        )
+    }
+
+    private func captionStyleBinding<Value>(
+        _ keyPath: WritableKeyPath<CaptionStyle, Value>
+    ) -> Binding<Value> {
+        Binding(
+            get: { project.settings.resolvedCaptionStyle[keyPath: keyPath] },
+            set: { newValue in
+                var style = project.settings.resolvedCaptionStyle
+                style[keyPath: keyPath] = newValue
+                project.settings.captionStyle = style.sanitized
+            }
+        )
+    }
+
+    private var accentColorBinding: Binding<Color> {
+        hexColorBinding(Binding(
+            get: { project.settings.resolvedCaptionStyle.resolvedAccentColorHex },
+            set: { hex in
+                var style = project.settings.resolvedCaptionStyle
+                style.accentColor = hex
+                project.settings.captionStyle = style
+            }
+        ))
+    }
+
+    private var productDescriptionBinding: Binding<String> {
+        Binding(
+            get: { project.settings.productDescription ?? "" },
+            set: { project.settings.productDescription = $0.isEmpty ? nil : $0 }
+        )
+    }
+
+    private func addChapter() {
+        let existing = project.chapters ?? []
+        guard let chapter = ChapterMath.newChapter(
+            at: existing.map(\.end).max() ?? 0,
+            duration: project.duration,
+            title: L10n.format("Chapter %lld", existing.count + 1)
+        ) else { return }
+        project.chapters = existing + [chapter]
+        selectedChapterID = chapter.id
+    }
+
+    private func removeChapter(_ id: UUID) {
+        project.chapters?.removeAll { $0.id == id }
+        if selectedChapterID == id { selectedChapterID = nil }
+    }
+
+    private func deriveChaptersFromZooms() {
+        let derived = ChapterMath.chaptersFromZooms(project: project) { L10n.format("Chapter %lld", $0) }
+        project.chapters = derived
+        selectedChapterID = derived.first?.id
+        captionsMessage = nil
+    }
+
+    private func exportSRT() {
+        let panel = NSSavePanel()
+        panel.title = L10n.tr("Export captions")
+        panel.nameFieldStringValue = "\(project.title).srt"
+        panel.allowedContentTypes = [UTType(filenameExtension: "srt", conformingTo: .plainText) ?? .plainText]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let text = ChapterMath.srt(for: ChapterMath.sanitized(project.chapters ?? [], duration: project.duration))
+        do {
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            captionsMessage = nil
+        } catch {
+            captionsMessage = error.localizedDescription
+        }
+    }
+
+    private func generateChapters() {
+        guard let provider = textCompletion, !isGeneratingChapters else { return }
+        let snapshot = project
+        let language = L10n.locale.identifier
+        isGeneratingChapters = true
+        captionsMessage = nil
+        Task { @MainActor in
+            defer { isGeneratingChapters = false }
+            do {
+                let chapters = try await DemoChapterGenerator.generateChapters(
+                    project: snapshot,
+                    language: language,
+                    provider: provider
+                )
+                project.chapters = chapters
+                selectedChapterID = chapters.first?.id
+            } catch {
+                captionsMessage = L10n.tr(error.localizedDescription)
+            }
+        }
+    }
+
+    private func polishCaptions() {
+        guard let provider = textCompletion, !isGeneratingChapters else { return }
+        let snapshot = project
+        let chapters = sortedChapters
+        let language = L10n.locale.identifier
+        isGeneratingChapters = true
+        captionsMessage = nil
+        Task { @MainActor in
+            defer { isGeneratingChapters = false }
+            do {
+                project.chapters = try await DemoChapterGenerator.polishCaptions(
+                    chapters,
+                    project: snapshot,
+                    language: language,
+                    provider: provider
+                )
+            } catch {
+                captionsMessage = L10n.tr(error.localizedDescription)
+            }
+        }
     }
 }
 

@@ -10,6 +10,7 @@ struct EditorView: View {
     @State private var currentTime = 0.0
     @State private var isPlaying = false
     @State private var selectedZoomID: UUID?
+    @State private var selectedChapterID: UUID?
     @State private var selectedTool: EditorTool = .zoom
     @State private var renderError: String?
     @State private var isExporting = false
@@ -47,6 +48,7 @@ struct EditorView: View {
                         project: $project,
                         currentTime: $currentTime,
                         selectedZoomID: $selectedZoomID,
+                        selectedChapterID: $selectedChapterID,
                         selectedTool: $selectedTool
                     )
                 }
@@ -55,6 +57,7 @@ struct EditorView: View {
                 EditorInspectorView(
                     project: $project,
                     selectedZoomID: $selectedZoomID,
+                    selectedChapterID: $selectedChapterID,
                     tool: selectedTool
                 )
                 .id(selectedTool)
@@ -90,6 +93,9 @@ struct EditorView: View {
         }
         .onChange(of: selectedZoomID) { _, id in
             if id != nil { selectedTool = .zoom }
+        }
+        .onChange(of: selectedChapterID) { _, id in
+            if id != nil { selectedTool = .captions }
         }
     }
 

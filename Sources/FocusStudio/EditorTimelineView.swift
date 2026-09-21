@@ -6,6 +6,7 @@ struct EditorTimelineView: View {
     @Binding var project: RecordingProject
     @Binding var currentTime: Double
     @Binding var selectedZoomID: UUID?
+    @Binding var selectedChapterID: UUID?
     @Binding var selectedTool: EditorTool
 
     private let labelWidth = 76.0
@@ -79,6 +80,48 @@ struct EditorTimelineView: View {
                     .coordinateSpace(name: "zoom-timeline")
                 }
 
+                timelineRow(label: "Chapters", icon: "captions.bubble") {
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(Color.white.opacity(0.025))
+                            .contentShape(Rectangle())
+                            .gesture(
+                                SpatialTapGesture(count: 2).onEnded { value in
+                                    addChapter(at: value.location.x, timelineWidth: timelineWidth, duration: duration)
+                                }
+                            )
+
+                        ForEach(chapters) { $chapter in
+                            ChapterBlockView(
+                                chapter: $chapter,
+                                duration: duration,
+                                timelineWidth: timelineWidth,
+                                ordinal: chapterNumber(chapter.id),
+                                isSelected: selectedChapterID == chapter.id,
+                                onSelect: {
+                                    selectedChapterID = chapter.id
+                                    selectedTool = .captions
+                                },
+                                onDelete: {
+                                    let id = chapter.id
+                                    project.chapters?.removeAll { $0.id == id }
+                                    if selectedChapterID == id { selectedChapterID = nil }
+                                }
+                            )
+                            .zIndex(selectedChapterID == chapter.id ? 1 : 0)
+                        }
+
+                        if (project.chapters ?? []).isEmpty {
+                            Text("Double-click to add a chapter")
+                                .font(.system(size: 10))
+                                .foregroundStyle(StudioTheme.secondaryText)
+                                .padding(.leading, 10)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                    .coordinateSpace(name: "chapter-timeline")
+                }
+
                 timelineRow(label: "Cursor", icon: "cursorarrow") {
                     CursorTrack(samples: project.cursorSamples, duration: duration)
                         .contentShape(Rectangle())
@@ -120,9 +163,37 @@ struct EditorTimelineView: View {
                     .allowsHitTesting(false)
             }
         }
-        .frame(height: 163)
+        .frame(height: 194)
         .padding(.vertical, 8)
         .background(StudioTheme.panel)
+    }
+
+    /// Nil and empty chapter lists are equivalent; the lane edits a plain array.
+    private var chapters: Binding<[DemoChapter]> {
+        Binding(
+            get: { project.chapters ?? [] },
+            set: { project.chapters = $0 }
+        )
+    }
+
+    /// Numbering follows playback order, matching the Inspector, SRT and video.
+    private func chapterNumber(_ id: UUID) -> Int {
+        let sorted = (project.chapters ?? []).sorted(by: ChapterMath.precedes)
+        return (sorted.firstIndex { $0.id == id } ?? 0) + 1
+    }
+
+    private func addChapter(at x: CGFloat, timelineWidth: Double, duration: Double) {
+        guard duration > 0, timelineWidth > 0 else { return }
+        let time = (Double(x) / timelineWidth * duration).clamped(to: 0...duration)
+        let existing = project.chapters ?? []
+        guard let chapter = ChapterMath.newChapter(
+            at: time,
+            duration: duration,
+            title: L10n.format("Chapter %lld", existing.count + 1)
+        ) else { return }
+        project.chapters = existing + [chapter]
+        selectedChapterID = chapter.id
+        selectedTool = .captions
     }
 
     private func addZoom(at x: CGFloat, timelineWidth: Double, duration: Double) {
@@ -402,6 +473,162 @@ private struct ZoomBlockView: View {
         }
         onSelect()
         segment = ZoomTiming.applying(edit(delta), to: segment, projectDuration: duration, settings: settings)
+    }
+
+    private func seconds(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(2)))
+    }
+}
+
+private struct ChapterBlockView: View {
+    @Binding var chapter: DemoChapter
+    let duration: Double
+    let timelineWidth: Double
+    let ordinal: Int
+    let isSelected: Bool
+    let onSelect: () -> Void
+    let onDelete: () -> Void
+
+    @State private var moveOrigin: DemoChapter?
+    @State private var leadingOrigin: DemoChapter?
+    @State private var trailingOrigin: DemoChapter?
+
+    private let handleWidth = 14.0
+    private static let tint = Color(red: 0.13, green: 0.66, blue: 0.80)
+
+    var body: some View {
+        let startX = chapter.start / duration * timelineWidth
+        let width = min(timelineWidth, max(40, (chapter.end - chapter.start) / duration * timelineWidth))
+        let displayedStart = startX.clamped(to: 0...max(0, timelineWidth - width))
+
+        ZStack {
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(chapter.isEnabled ? Self.tint : Color.gray.opacity(0.45))
+                .shadow(color: Self.tint.opacity(isSelected ? 0.55 : 0), radius: isSelected ? 6 : 0)
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .stroke(Color.white.opacity(isSelected ? 0.9 : 0), lineWidth: 1.5)
+            HStack(spacing: 0) {
+                resizeHandle(isLeading: true)
+                moveHandle(showTitle: width >= 64)
+                    .frame(maxWidth: .infinity)
+                resizeHandle(isLeading: false)
+            }
+        }
+        .frame(width: width, height: 24)
+        .offset(x: displayedStart)
+        .animation(.easeOut(duration: 0.15), value: isSelected)
+        .animation(.easeOut(duration: 0.15), value: chapter.isEnabled)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Text("Chapter \(ordinal)"))
+        .accessibilityIdentifier("chapter.\(chapter.id.uuidString)")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .help("Start \(seconds(chapter.start))s · End \(seconds(chapter.end))s · Duration \(seconds(chapter.end - chapter.start))s. Drag the middle to move; drag either edge to resize.")
+        .contextMenu {
+            Button(LocalizedStringKey(chapter.isEnabled ? "Disable" : "Enable")) {
+                onSelect()
+                chapter.isEnabled.toggle()
+            }
+            Button("Remove", role: .destructive, action: onDelete)
+        }
+    }
+
+    private func moveHandle(showTitle: Bool) -> some View {
+        HStack(spacing: 5) {
+            Text(verbatim: "\(ordinal)")
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+            if showTitle {
+                Text(verbatim: chapter.displayText)
+                    .font(.system(size: 9, weight: .medium))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
+        .foregroundStyle(.white.opacity(0.94))
+        .padding(.horizontal, 2)
+        .frame(maxWidth: .infinity, minHeight: 24)
+        .background(Color.white.opacity(0.001))
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onSelect)
+        .gesture(
+            DragGesture(minimumDistance: 2, coordinateSpace: .named("chapter-timeline"))
+                .onChanged { value in
+                    onSelect()
+                    let origin = moveOrigin ?? chapter
+                    if moveOrigin == nil { moveOrigin = origin }
+                    chapter = ChapterMath.applying(
+                        .move(origin.start + timeDelta(value.translation.width)),
+                        to: origin,
+                        duration: duration
+                    )
+                }
+                .onEnded { _ in moveOrigin = nil }
+        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text("Move chapter \(ordinal)"))
+        .accessibilityValue("Start \(seconds(chapter.start)) seconds, end \(seconds(chapter.end)) seconds")
+        .accessibilityHint("Drag to move the whole interval. Adjust to move by one tenth of a second.")
+        .accessibilityIdentifier("chapter.\(chapter.id.uuidString).move")
+        .accessibilityAction { onSelect() }
+        .accessibilityAdjustableAction { direction in
+            adjust(direction) { .move(chapter.start + $0) }
+        }
+    }
+
+    private func resizeHandle(isLeading: Bool) -> some View {
+        ZStack {
+            Rectangle().fill(Color.white.opacity(isSelected ? 0.18 : 0.06))
+            RoundedRectangle(cornerRadius: 1)
+                .fill(Color.white.opacity(isSelected ? 1 : 0.72))
+                .frame(width: 3, height: 12)
+        }
+            .frame(width: handleWidth, height: 24)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onSelect)
+            .gesture(
+                DragGesture(minimumDistance: 2, coordinateSpace: .named("chapter-timeline"))
+                    .onChanged { value in
+                        onSelect()
+                        let delta = timeDelta(value.translation.width)
+                        let origin = (isLeading ? leadingOrigin : trailingOrigin) ?? chapter
+                        if isLeading {
+                            if leadingOrigin == nil { leadingOrigin = origin }
+                        } else {
+                            if trailingOrigin == nil { trailingOrigin = origin }
+                        }
+                        chapter = ChapterMath.applying(
+                            isLeading ? .start(origin.start + delta) : .end(origin.end + delta),
+                            to: origin,
+                            duration: duration
+                        )
+                    }
+                    .onEnded { _ in
+                        if isLeading { leadingOrigin = nil } else { trailingOrigin = nil }
+                    }
+            )
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(isLeading ? Text("Chapter \(ordinal) start") : Text("Chapter \(ordinal) end"))
+            .accessibilityValue("\(seconds(isLeading ? chapter.start : chapter.end)) seconds")
+            .accessibilityHint(Text(LocalizedStringKey(isLeading ? "Drag the left edge to change the start. Adjust by one tenth of a second." : "Drag the right edge to change the end. Adjust by one tenth of a second.")))
+            .accessibilityIdentifier("chapter.\(chapter.id.uuidString).\(isLeading ? "start" : "end")")
+            .accessibilityAction { onSelect() }
+            .accessibilityAdjustableAction { direction in
+                adjust(direction) { isLeading ? .start(chapter.start + $0) : .end(chapter.end + $0) }
+            }
+    }
+
+    private func timeDelta(_ translation: CGFloat) -> Double {
+        Double(translation) / max(1, timelineWidth) * duration
+    }
+
+    private func adjust(_ direction: AccessibilityAdjustmentDirection, edit: (Double) -> ChapterEdit) {
+        let delta: Double
+        switch direction {
+        case .increment: delta = 0.1
+        case .decrement: delta = -0.1
+        @unknown default: return
+        }
+        onSelect()
+        chapter = ChapterMath.applying(edit(delta), to: chapter, duration: duration)
     }
 
     private func seconds(_ value: Double) -> String {
