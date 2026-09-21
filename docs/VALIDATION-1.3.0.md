@@ -34,4 +34,9 @@
 
 ## 安装包
 
-见文末（Universal 2 构建完成后填写）。
+`FOCUS_STUDIO_APP_DIR="$PWD/dist/candidates/1.3.0/Focus Studio.app" zsh scripts/build-app.sh` 与 `scripts/package-release.sh --skip-build` 通过：arm64 + x86_64 Universal 2、macOS 15.0 最低系统版本、仅系统框架、图标与 685 键双语资源、12 个音频素材验证通过，DMG 完整性校验 VALID。ad-hoc 本地签名，未经 Apple 公证；Intel 切片仅经交叉编译。用户正在运行的 `dist/Focus Studio.app`（1.1.2）未被替换或重启。
+
+- `dist/candidates/1.3.0/Focus Studio.app`
+- `dist/releases/Focus-Studio-1.3.0-universal-local.dmg`（SHA-256 `24da526eee099005ffd23e8db685ed0d0fda7b09002ed57ab50f4a5245a97c31`）
+- `dist/releases/Focus-Studio-1.3.0-universal-local.zip`（SHA-256 `331ca93e12aa13beaa21e539810041444f09ec2f559e8dfde7c0e8dbfc355f36`）
+- `dist/releases/Focus-Studio-1.3.0-universal-local.sha256`
