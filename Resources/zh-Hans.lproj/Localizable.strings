@@ -142,6 +142,8 @@
 "Brightness" = "亮度";
 "Browser presets hide tabs and toolbars without changing the original recording." = "浏览器预设可隐藏标签页和工具栏，不会修改原始录制。";
 "Calm Gradient" = "宁静渐变";
+"Calm Loop" = "宁静循环";
+"Calm · Chill synths · Seamless loop" = "宁静 · 舒缓合成器 · 无缝循环";
 "Calm · Minimal · Seamless loop" = "宁静 · 极简 · 无缝循环";
 "Calm · Spacious · Narration-friendly" = "宁静 · 空灵 · 适合旁白";
 "Cancel" = "取消";
@@ -239,6 +241,7 @@
 "Follow System" = "跟随系统";
 "Frame rate" = "帧率";
 "Full window" = "完整窗口";
+"Futuristic · Electronic pulse · Dev tools" = "未来感 · 电子脉冲 · 适合开发工具";
 "General" = "通用";
 "Gentle" = "轻柔";
 "Get ready" = "准备开始";
@@ -274,6 +277,7 @@
 "Keep the input in focus until typing pauses, then ease back out. Changes rebuild automatic zooms and preserve your manual blocks." = "输入期间保持聚焦，暂停后平滑缩回。修改会重新生成自动缩放，并保留手动片段。";
 "Language" = "语言";
 "Left" = "左侧";
+"Loading Screen Loop" = "加载画面循环";
 "MACOS WALLPAPERS" = "macOS 壁纸";
 "Make every click easy to follow." = "让每次点击都清晰易懂。";
 "Manual" = "手动";
@@ -538,3 +542,10 @@
 "Moved %lld of %lld selected projects to Trash. The remaining projects were kept.\n%@" = "已将所选项目中的 %lld / %lld 个移到废纸篓，其余项目已保留。\n%@";
 "“%@”: %@" = "“%@”：%@";
 "%lld selected projects are no longer in the library." = "所选项目中有 %lld 个已不在项目库中。";
+
+/* 1.2: cinematic zoom, click chaining, live source previews */
+"Cinematic" = "电影感";
+"Link nearby clicks" = "链接相邻点击";
+"Clicks within this gap keep the camera zoomed in and pan to the next target instead of zooming out first." = "在此间隔内的连续点击会让镜头保持放大并平滑移动到下一个目标，而不是先缩回再放大。";
+"LIVE" = "实时";
+"Live preview" = "实时预览";

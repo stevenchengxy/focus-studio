@@ -32,6 +32,18 @@ public enum TimelineMath {
                 previous.automaticSource?.originalEnd = previous.end
                 result[result.count - 1] = previous
             } else {
+                if var previous = result.last,
+                   shouldChain(previous: previous, nextStart: start, nextX: click.x, nextY: click.y, settings: settings) {
+                    // Keep the camera committed and pan to the next click instead
+                    // of zooming out only to zoom straight back in. The previous
+                    // cue stays at full scale until the new cue has fully taken over.
+                    previous.end = min(
+                        duration,
+                        max(previous.end, start + max(0, settings.zoomEaseIn) + max(0, settings.zoomEaseOut))
+                    )
+                    previous.automaticSource?.originalEnd = previous.end
+                    result[result.count - 1] = previous
+                }
                 result.append(
                     ZoomSegment(
                         start: start,
@@ -113,6 +125,23 @@ public enum TimelineMath {
             }
         }
         return result.sorted { $0.start < $1.start }
+    }
+
+    /// Camera moves between nearby clicks read as one deliberate pan. Distant
+    /// targets still zoom out first so the pan never races across the frame.
+    public static let zoomChainMaximumDistance = 0.5
+
+    static func shouldChain(
+        previous: ZoomSegment,
+        nextStart: Double,
+        nextX: Double,
+        nextY: Double,
+        settings: ProjectSettings
+    ) -> Bool {
+        let gap = settings.resolvedZoomChainGap
+        guard gap > 0, nextStart >= previous.end else { return false }
+        guard nextStart - previous.end <= gap else { return false }
+        return hypot(nextX - previous.targetX, nextY - previous.targetY) <= zoomChainMaximumDistance
     }
 
     /// Global auto-zoom controls rebuild metadata-derived cues while preserving
@@ -223,31 +252,43 @@ public enum TimelineMath {
 
         guard !active.isEmpty else { return ZoomState() }
 
-        // Auto zooms can overlap when clicks happen close together. Blending their
-        // focus points while keeping the strongest active scale creates one smooth
-        // camera move instead of briefly snapping back to 1x at the next segment.
-        let strongest = active.max {
-            let lhs = 1 + (max(1, $0.segment.scale) - 1) * $0.amount
-            let rhs = 1 + (max(1, $1.segment.scale) - 1) * $1.amount
-            return lhs < rhs
-        }!
-        let scale = 1 + (max(1, strongest.segment.scale) - 1) * strongest.amount
-        // Fold focus points in timeline order. A newer click therefore completes
-        // its camera move at its own target instead of getting stuck halfway
-        // between two fully-active zooms. Its envelope still provides a smooth
-        // handoff on both entry and exit.
-        var focusX = active[0].segment.targetX
-        var focusY = active[0].segment.targetY
-        for entry in active.dropFirst() {
-            let handoff = smootherStep(entry.amount)
-            focusX += (entry.segment.targetX - focusX) * handoff
-            focusY += (entry.segment.targetY - focusY) * handoff
+        // Auto zooms can overlap when clicks happen close together. Combining
+        // their envelopes as a smooth union (1 - Π(1 - amount)) keeps the camera
+        // committed through a handoff and, unlike picking the strongest cue,
+        // never introduces a velocity kink at the moment one cue overtakes
+        // another. Target scales are blended by envelope weight so cues with
+        // different magnitudes still cross-fade continuously.
+        var union = 1.0
+        var weightSum = 0.0
+        var weightedScale = 0.0
+        for entry in active {
+            union *= 1 - entry.amount
+            weightSum += entry.amount
+            weightedScale += entry.amount * max(1, entry.segment.scale)
+        }
+        let combinedAmount = 1 - union
+        let targetScale = weightSum > 0 ? weightedScale / weightSum : 1
+        let scale = 1 + (targetScale - 1) * combinedAmount
+
+        // The pan is eased with the same envelope as the scale, starting from
+        // the overview centre. Each cue moves toward the focus point it can
+        // reach at its own full scale, so the camera never chases the source
+        // edge and then stops abruptly when the edge constraint releases.
+        // Folding in timeline order lets a newer click finish at its own target.
+        var focusX = 0.5
+        var focusY = 0.5
+        for entry in active {
+            let fullScale = max(1, entry.segment.scale)
+            let visibleX = clampedFocus(entry.segment.targetX, scale: fullScale)
+            let visibleY = clampedFocus(entry.segment.targetY, scale: fullScale)
+            focusX += (visibleX - focusX) * entry.amount
+            focusY += (visibleY - focusY) * entry.amount
         }
         return ZoomState(
             scale: scale,
             centerX: clampedFocus(focusX, scale: scale),
             centerY: clampedFocus(focusY, scale: scale),
-            progress: active.map(\.amount).max() ?? 0
+            progress: combinedAmount
         )
     }
 
@@ -399,6 +440,26 @@ public enum TimelineMath {
         return t * t * t * (t * (t * 6 - 15) + 10)
     }
 
+    /// smootherStep with its velocity peak pulled toward the start (t^0.7):
+    /// the camera commits early and spends most of the move settling. The
+    /// warp exponent stays above 2/3 so velocity and acceleration are both
+    /// zero at t = 0 as well as at t = 1.
+    public static func cinematicEase(_ value: Double) -> Double {
+        let t = value.clamped(to: 0...1)
+        return smootherStep(pow(t, 0.7))
+    }
+
+    /// Envelope of a single cue at a normalized time, exposed for tests and
+    /// for UI curve previews. `value` is the fraction of the transition that
+    /// has elapsed when entering, or the fraction remaining when leaving.
+    public static func transitionAmount(
+        _ value: Double,
+        style: ScreenAnimationStyle,
+        isEntering: Bool
+    ) -> Double {
+        zoomCurve(value, style: style, isEntering: isEntering)
+    }
+
     private static func zoomCurve(
         _ value: Double,
         style: ScreenAnimationStyle,
@@ -406,6 +467,11 @@ public enum TimelineMath {
     ) -> Double {
         let t = value.clamped(to: 0...1)
         switch style {
+        case .cinematic:
+            // Entering: quick commit, long settle. Leaving `t` counts down the
+            // remaining fraction, so mirror the curve: the pull-back starts
+            // decisively and lands on the overview without a visible stop.
+            return isEntering ? cinematicEase(t) : 1 - cinematicEase(1 - t)
         case .focused:
             // Responsive on the way in, calm on the way back to the overview.
             return isEntering ? 1 - pow(1 - t, 3) : smootherStep(t)

@@ -403,6 +403,9 @@ public struct ClickAnimationSettings: Codable, Hashable, Sendable {
 }
 
 public enum ScreenAnimationStyle: String, Codable, Sendable, CaseIterable {
+    /// A camera-operator curve: quick to commit, long gentle settle, and
+    /// continuous velocity and acceleration at both ends. Default for new projects.
+    case cinematic
     case focused
     case smooth
     case gentle
@@ -410,6 +413,7 @@ public enum ScreenAnimationStyle: String, Codable, Sendable, CaseIterable {
 
     public var title: String {
         switch self {
+        case .cinematic: return "Cinematic"
         case .focused: return "Focused"
         case .smooth: return "Smooth"
         case .gentle: return "Gentle"
@@ -484,7 +488,11 @@ public struct ProjectSettings: Codable, Hashable, Sendable {
     /// Optional so projects saved before cursor themes were introduced decode
     /// with the native system cursor instead of failing migration.
     public var cursorAppearance: CursorAppearance?
-    public var screenAnimation: ScreenAnimationStyle = .smooth
+    public var screenAnimation: ScreenAnimationStyle = .cinematic
+    /// Seconds after an automatic zoom ends during which a nearby click keeps
+    /// the camera zoomed in and pans instead of zooming out and back in.
+    /// Optional so projects saved before click chaining decode unchanged.
+    public var zoomChainGap: Double?
     public var hideIdleCursor = true
     public var showClickRing = true
     /// Optional to keep recordings saved before editable click feedback readable.
@@ -529,6 +537,14 @@ public struct ProjectSettings: Codable, Hashable, Sendable {
 
     public var resolvedTypingZoom: TypingZoomSettings {
         (typingZoom ?? TypingZoomSettings()).sanitized
+    }
+
+    public static let defaultZoomChainGap = 1.0
+    public static let maximumZoomChainGap = 2.5
+
+    public var resolvedZoomChainGap: Double {
+        guard let zoomChainGap, zoomChainGap.isFinite else { return Self.defaultZoomChainGap }
+        return zoomChainGap.clamped(to: 0...Self.maximumZoomChainGap)
     }
 
     public var resolvedBackgroundBlur: Double {

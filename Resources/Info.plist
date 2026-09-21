@@ -2,44 +2,44 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleDevelopmentRegion</key>
-    <string>en</string>
-    <key>CFBundleDisplayName</key>
-    <string>Focus Studio</string>
-    <key>CFBundleIconFile</key>
-    <string>FocusStudio.icns</string>
-    <key>CFBundleLocalizations</key>
-    <array>
-        <string>en</string>
-        <string>zh-Hans</string>
-    </array>
-    <key>CFBundleExecutable</key>
-    <string>FocusStudio</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.local.focusstudio</string>
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>6.0</string>
-    <key>CFBundleName</key>
-    <string>Focus Studio</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleShortVersionString</key>
-    <string>1.1.3</string>
-    <key>CFBundleVersion</key>
-    <string>5</string>
-    <key>LSApplicationCategoryType</key>
-    <string>public.app-category.video</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>15.0</string>
-    <key>NSHighResolutionCapable</key>
-    <true/>
-    <key>NSScreenCaptureUsageDescription</key>
-    <string>Focus Studio records the screen or window you select to create your video.</string>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>Focus Studio records your microphone when you enable narration.</string>
-    <key>NSAudioCaptureUsageDescription</key>
-    <string>Focus Studio records system audio when you enable app sound.</string>
-    <key>NSPrincipalClass</key>
-    <string>NSApplication</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Focus Studio</string>
+	<key>CFBundleExecutable</key>
+	<string>FocusStudio</string>
+	<key>CFBundleIconFile</key>
+	<string>FocusStudio.icns</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.local.focusstudio</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>zh-Hans</string>
+	</array>
+	<key>CFBundleName</key>
+	<string>Focus Studio</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.2.0</string>
+	<key>CFBundleVersion</key>
+	<string>6</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.video</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>15.0</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Focus Studio records system audio when you enable app sound.</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Focus Studio records your microphone when you enable narration.</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>Focus Studio records the screen or window you select to create your video.</string>
 </dict>
 </plist>

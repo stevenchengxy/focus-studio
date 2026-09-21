@@ -52,6 +52,8 @@ final class StudioModel: ObservableObject {
     @Published private(set) var recordingCountdown = 3
     @Published private(set) var isRunningCodexPlan = false
     @Published private(set) var isManagingProjects = false
+    /// In-memory live thumbnails for the recording picker; released on leaving it.
+    let sourcePreview = SourcePreviewProvider()
 
     let captureEngine = CaptureEngine()
     let codexDirector = CodexDirectorService()

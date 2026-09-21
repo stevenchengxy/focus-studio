@@ -160,16 +160,14 @@ struct RecordingPickerView: View {
                             .padding(.vertical, 70)
                             .studioPanel()
                         } else {
-                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 14)], spacing: 14) {
-                                ForEach(filteredTargets) { target in
-                                    TargetCard(
-                                        target: target,
-                                        isSelected: targetIsSelected(target)
-                                    ) {
-                                        selectTargetCard(target)
-                                    }
-                                }
-                            }
+                            SourceGridView(
+                                preview: model.sourcePreview,
+                                targets: filteredTargets,
+                                kind: kind,
+                                areaTarget: kind == .area ? model.selectedAreaTarget : nil,
+                                isSelected: targetIsSelected,
+                                onSelect: selectTargetCard
+                            )
                             .padding(1)
                         }
                     }
@@ -360,6 +358,16 @@ struct RecordingPickerView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             model.refreshInteractionTrackingPermission()
         }
+        .onAppear { syncSourcePreview() }
+        .onDisappear { model.sourcePreview.stop() }
+        .onChange(of: filteredTargets.map(\.id)) { _, _ in syncSourcePreview() }
+        .onChange(of: model.selectedTargetID) { _, _ in syncSourcePreview() }
+        .onChange(of: areaDisplayID) { _, _ in syncSourcePreview() }
+        .onChange(of: model.isSelectingArea) { _, selecting in
+            // The area selection overlay covers the display; pause previews
+            // so the live stream never shows the selection UI itself.
+            if selecting { model.sourcePreview.stop() } else { syncSourcePreview() }
+        }
         .alert("Interaction tracking needs setup", isPresented: $model.isShowingInteractionSetup) {
             if !model.accessibilityAuthorized {
                 Button("Open Accessibility Settings") { model.openAccessibilitySettings() }
@@ -441,11 +449,56 @@ struct RecordingPickerView: View {
         guard let display = selectedAreaDisplay else { return }
         Task { await model.selectRecordingArea(on: display) }
     }
+
+    /// The selected card streams live; every other visible card refreshes
+    /// about once per second. Nothing runs once the picker is gone.
+    private func syncSourcePreview() {
+        guard !model.isSelectingArea, !model.capturePermissionDenied else { return }
+        let liveID: String?
+        switch kind {
+        case .area:
+            liveID = selectedAreaDisplay?.id
+        case .display, .window:
+            liveID = model.selectedTarget?.kind == kind ? model.selectedTargetID : nil
+        }
+        model.sourcePreview.start(targets: filteredTargets, liveTargetID: liveID)
+    }
+}
+
+/// Observes the preview provider separately from the picker so a new frame
+/// only redraws the cards, not the settings column.
+private struct SourceGridView: View {
+    @ObservedObject var preview: SourcePreviewProvider
+    let targets: [CaptureTargetInfo]
+    let kind: CaptureTargetKind
+    let areaTarget: CaptureTargetInfo?
+    let isSelected: (CaptureTargetInfo) -> Bool
+    let onSelect: (CaptureTargetInfo) -> Void
+
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 14)], spacing: 14) {
+            ForEach(targets) { target in
+                TargetCard(
+                    target: target,
+                    isSelected: isSelected(target),
+                    preview: preview.images[target.id],
+                    isLive: preview.liveTargetID == target.id && preview.images[target.id] != nil,
+                    areaFrame: areaTarget.flatMap { area in
+                        area.nativeID == target.nativeID ? area.frame : nil
+                    }
+                ) {
+                    onSelect(target)
+                }
+            }
+        }
+    }
 }
 
 struct RecordingCountdownView: View {
     @EnvironmentObject private var model: StudioModel
     @ObservedObject private var localization = AppLocalization.shared
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var pulse = false
 
     var body: some View {
         VStack(spacing: 22) {
@@ -456,12 +509,19 @@ struct RecordingCountdownView: View {
                 Circle()
                     .fill(StudioTheme.red.opacity(0.16))
                     .frame(width: 150, height: 150)
+                    .scaleEffect(pulse ? 1.06 : 0.96)
                 Circle()
                     .stroke(StudioTheme.red.opacity(0.38), lineWidth: 2)
                     .frame(width: 118, height: 118)
                 Text("\(model.recordingCountdown)")
                     .font(.system(size: 70, weight: .medium, design: .rounded))
                     .monospacedDigit()
+                    .contentTransition(.numericText(countsDown: true))
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: model.recordingCountdown)
+            }
+            .onAppear {
+                guard !reduceMotion else { return }
+                withAnimation(.easeInOut(duration: 1).repeatForever(autoreverses: true)) { pulse = true }
             }
 
             Text("Recording starts after the countdown")
@@ -489,7 +549,11 @@ struct RecordingCountdownView: View {
 private struct TargetCard: View {
     let target: CaptureTargetInfo
     let isSelected: Bool
+    let preview: CGImage?
+    let isLive: Bool
+    let areaFrame: CaptureRect?
     let action: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Button(action: action) {
@@ -497,9 +561,46 @@ private struct TargetCard: View {
                 ZStack {
                     RoundedRectangle(cornerRadius: 9, style: .continuous)
                         .fill(Color.black.opacity(0.45))
-                    Image(systemName: target.kind == .display ? "display" : "macwindow")
-                        .font(.system(size: 38, weight: .light))
-                        .foregroundStyle(.white.opacity(0.52))
+                    if let preview {
+                        GeometryReader { proxy in
+                            let fitted = fittedRect(for: preview, in: proxy.size)
+                            Image(decorative: preview, scale: 1)
+                                .resizable()
+                                .interpolation(.medium)
+                                .frame(width: fitted.width, height: fitted.height)
+                                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                                .position(x: fitted.midX, y: fitted.midY)
+                            if let areaFrame {
+                                let rect = areaRect(areaFrame, in: fitted)
+                                Rectangle()
+                                    .fill(Color.black.opacity(0.42))
+                                    .frame(width: fitted.width, height: fitted.height)
+                                    .position(x: fitted.midX, y: fitted.midY)
+                                    .mask {
+                                        Rectangle()
+                                            .overlay(alignment: .topLeading) {
+                                                Rectangle()
+                                                    .frame(width: rect.width, height: rect.height)
+                                                    .offset(x: rect.minX - fitted.minX, y: rect.minY - fitted.minY)
+                                                    .blendMode(.destinationOut)
+                                            }
+                                            .compositingGroup()
+                                            .frame(width: fitted.width, height: fitted.height)
+                                    }
+                                Rectangle()
+                                    .stroke(StudioTheme.purple, lineWidth: 1.5)
+                                    .frame(width: rect.width, height: rect.height)
+                                    .position(x: rect.midX, y: rect.midY)
+                            }
+                        }
+                        .padding(6)
+                        .transition(.opacity)
+                    } else {
+                        Image(systemName: target.kind == .display ? "display" : "macwindow")
+                            .font(.system(size: 38, weight: .light))
+                            .foregroundStyle(.white.opacity(0.52))
+                            .transition(.opacity)
+                    }
                     if isSelected {
                         Image(systemName: "checkmark.circle.fill")
                             .font(.system(size: 20, weight: .semibold))
@@ -507,9 +608,27 @@ private struct TargetCard: View {
                             .symbolRenderingMode(.palette)
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                             .padding(9)
+                            .transition(.scale(scale: 0.6).combined(with: .opacity))
+                    }
+                    if isLive {
+                        HStack(spacing: 4) {
+                            Circle().fill(StudioTheme.red).frame(width: 5, height: 5)
+                            Text("LIVE")
+                                .font(.system(size: 8, weight: .bold))
+                                .tracking(0.6)
+                        }
+                        .padding(.horizontal, 6)
+                        .frame(height: 17)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                        .padding(9)
+                        .transition(.opacity)
+                        .accessibilityLabel("Live preview")
                     }
                 }
                 .frame(height: 130)
+                .animation(reduceMotion ? nil : StudioMotion.fade, value: preview == nil)
+                .animation(reduceMotion ? nil : StudioMotion.fade, value: isLive)
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(target.title)
@@ -528,13 +647,39 @@ private struct TargetCard: View {
                 RoundedRectangle(cornerRadius: 13, style: .continuous)
                     .stroke(isSelected ? StudioTheme.purple : StudioTheme.line, lineWidth: isSelected ? 2 : 1)
             )
+            .animation(reduceMotion ? nil : StudioMotion.selection, value: isSelected)
         }
         .buttonStyle(.plain)
+        .hoverLift()
         .accessibilityLabel(
             "\(target.appName.map { "\($0), " } ?? "")\(target.title), \(Int(target.frame.width)) by \(Int(target.frame.height))"
         )
         .accessibilityValue(Text(LocalizedStringKey(isSelected ? "Selected" : "Not selected")))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private func fittedRect(for image: CGImage, in size: CGSize) -> CGRect {
+        let imageRatio = Double(max(1, image.width)) / Double(max(1, image.height))
+        let boxRatio = size.width / max(1, size.height)
+        let fitted: CGSize = imageRatio > boxRatio
+            ? CGSize(width: size.width, height: size.width / imageRatio)
+            : CGSize(width: size.height * imageRatio, height: size.height)
+        return CGRect(
+            x: (size.width - fitted.width) / 2,
+            y: (size.height - fitted.height) / 2,
+            width: fitted.width,
+            height: fitted.height
+        )
+    }
+
+    /// Maps a global area rectangle onto the display thumbnail.
+    private func areaRect(_ area: CaptureRect, in fitted: CGRect) -> CGRect {
+        let scaleX = fitted.width / max(1, target.frame.width)
+        let scaleY = fitted.height / max(1, target.frame.height)
+        let x = fitted.minX + (area.x - target.frame.x) * scaleX
+        let y = fitted.minY + (area.y - target.frame.y) * scaleY
+        return CGRect(x: x, y: y, width: area.width * scaleX, height: area.height * scaleY)
+            .intersection(fitted)
     }
 }
 

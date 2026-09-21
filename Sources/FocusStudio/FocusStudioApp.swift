@@ -29,45 +29,53 @@ struct FocusStudioApp: App {
 
 struct StudioRootView: View {
     @EnvironmentObject private var model: StudioModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
             StudioTheme.window.ignoresSafeArea()
 
-            switch model.destination {
-            case .library:
-                LibraryView()
-            case .director:
-                CodexDirectorView(
-                    director: model.codexDirector,
-                    onClose: { model.closeDirector() },
-                    onCreatePlan: { prompt in
-                        Task { await model.createCodexPlan(from: prompt) }
-                    },
-                    onRunPlan: { plan in
-                        model.startCodexPlan(plan)
-                    }
-                )
-            case .recorder:
-                RecordingPickerView()
-            case .countdown:
-                RecordingCountdownView()
-            case .recording:
-                ActiveRecordingView()
-            case .editor:
-                if let project = model.activeProject {
-                    EditorView(
-                        // A disappearing editor can still read its bindings.
-                        project: model.editorBinding(for: project)
+            // Each destination is its own identity so SwiftUI cross-fades the
+            // pages instead of morphing unrelated controls into each other.
+            Group {
+                switch model.destination {
+                case .library:
+                    LibraryView()
+                case .director:
+                    CodexDirectorView(
+                        director: model.codexDirector,
+                        onClose: { model.closeDirector() },
+                        onCreatePlan: { prompt in
+                            Task { await model.createCodexPlan(from: prompt) }
+                        },
+                        onRunPlan: { plan in
+                            model.startCodexPlan(plan)
+                        }
                     )
-                    .id(project.id)
-                } else {
-                    ProgressView("Opening project…")
+                case .recorder:
+                    RecordingPickerView()
+                case .countdown:
+                    RecordingCountdownView()
+                case .recording:
+                    ActiveRecordingView()
+                case .editor:
+                    if let project = model.activeProject {
+                        EditorView(
+                            // A disappearing editor can still read its bindings.
+                            project: model.editorBinding(for: project)
+                        )
+                        .id(project.id)
+                    } else {
+                        ProgressView("Opening project…")
+                    }
                 }
             }
+            .id(model.destination)
+            .transition(StudioMotion.page(reduceMotion: reduceMotion))
 
             if model.isBusy {
                 Color.black.opacity(0.32).ignoresSafeArea()
+                    .transition(.opacity)
                 VStack(spacing: 12) {
                     ProgressView()
                         .controlSize(.large)
@@ -77,8 +85,11 @@ struct StudioRootView: View {
                 .padding(24)
                 .background(.ultraThinMaterial)
                 .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                .transition(.opacity.combined(with: .scale(scale: 0.96)))
             }
         }
+        .animation(reduceMotion ? nil : StudioMotion.pageAnimation, value: model.destination)
+        .animation(StudioMotion.fade, value: model.isBusy)
         .foregroundStyle(StudioTheme.text)
         .task { await model.bootstrap() }
         .alert("Focus Studio", isPresented: $model.isShowingError) {

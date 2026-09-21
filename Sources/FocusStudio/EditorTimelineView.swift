@@ -276,10 +276,9 @@ private struct ZoomBlockView: View {
         ZStack {
             RoundedRectangle(cornerRadius: 5, style: .continuous)
                 .fill(segment.isEnabled ? StudioTheme.purple : Color.gray.opacity(0.45))
-            if isSelected {
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .stroke(Color.white.opacity(0.9), lineWidth: 1.5)
-            }
+                .shadow(color: StudioTheme.purple.opacity(isSelected ? 0.55 : 0), radius: isSelected ? 6 : 0)
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .stroke(Color.white.opacity(isSelected ? 0.9 : 0), lineWidth: 1.5)
             HStack(spacing: 0) {
                 resizeHandle(isLeading: true)
                 moveHandle(showDuration: width >= 84)
@@ -289,6 +288,8 @@ private struct ZoomBlockView: View {
         }
         .frame(width: width, height: 24)
         .offset(x: displayedStart)
+        .animation(.easeOut(duration: 0.15), value: isSelected)
+        .animation(.easeOut(duration: 0.15), value: segment.isEnabled)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text("Zoom \(ordinal)"))
         .accessibilityIdentifier("zoom.\(segment.id.uuidString)")

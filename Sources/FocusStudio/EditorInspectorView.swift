@@ -674,6 +674,11 @@ struct EditorInspectorView: View {
                 LabeledSlider(value: zoomTimingBinding(\.zoomEaseIn), range: 0.05...1, label: "Zoom in", suffix: "s", decimals: 2)
                 LabeledSlider(value: zoomHoldBinding, range: 0.2...3, label: "Click hold", suffix: "s", decimals: 2)
                 LabeledSlider(value: zoomTimingBinding(\.zoomEaseOut), range: 0.05...1.4, label: "Zoom out", suffix: "s", decimals: 2)
+                LabeledSlider(value: zoomChainGapBinding, range: 0...ProjectSettings.maximumZoomChainGap, label: "Link nearby clicks", suffix: "s", decimals: 1)
+                Text("Clicks within this gap keep the camera zoomed in and pan to the next target instead of zooming out first.")
+                    .font(.system(size: 9))
+                    .foregroundStyle(StudioTheme.secondaryText)
+                    .lineSpacing(2)
             }
             InspectorSection("Typing focus") {
                 Toggle("Hold zoom while typing", isOn: typingZoomBinding(\.enabled))
@@ -824,6 +829,18 @@ struct EditorInspectorView: View {
                 let oldValue = project.settings.zoomHold
                 project.settings.zoomHold = newValue
                 TimelineMath.adjustAutomaticClickHold(in: &project, by: newValue - oldValue)
+            }
+        )
+    }
+
+    private var zoomChainGapBinding: Binding<Double> {
+        Binding(
+            get: { project.settings.resolvedZoomChainGap },
+            set: { value in
+                project.settings.zoomChainGap = value
+                // Chaining only changes how automatic cues are grouped; manual
+                // blocks are preserved by regeneration.
+                TimelineMath.regenerateAutomaticZoomSegments(in: &project)
             }
         )
     }

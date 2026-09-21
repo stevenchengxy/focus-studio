@@ -9,6 +9,7 @@ Focus Studio 是一个原生 macOS 产品 Demo 录制与编辑器，核心工作
 ### 录制与控制
 
 - 整屏或单窗口录制（ScreenCaptureKit）
+- 录制源实时预览（1.2）：显示器和窗口卡片约每秒刷新一次缩略图，当前选中的卡片以 12 fps 实时流预览；区域模式在显示器缩略图上标出已框选的区域。预览只保留在内存中，离开录制页立即释放
 - 固定区域录制：选择显示器后拖拽框选，`Esc` 取消、`Return`/双击确认；视频、截图与鼠标坐标共用同一范围
 - 点击 **Start recording** 后先显示可取消的 3 秒倒计时，倒计时结束前不会启动录制或计时
 - 跨显示器、跨 Space/全屏的悬浮录制控制条，包含计时、截图、完成和取消
@@ -19,7 +20,9 @@ Focus Studio 是一个原生 macOS 产品 Demo 录制与编辑器，核心工作
 
 ### Demo 编辑与导出
 
-- 点击自动缩放、连续点击焦点交接，以及 Focused / Smooth / Gentle / Snappy 四种动画节奏
+- 点击自动缩放、连续点击焦点交接，以及 Cinematic / Focused / Smooth / Gentle / Snappy 五种动画节奏；新项目默认 **Cinematic**：镜头先快速切入、再长时间平缓落定，起止两端速度与加速度均为零
+- 相邻点击 pan 链接（1.2）：上一段缩放结束后 1 秒内（可在 Animation 面板调整为 0–2.5 秒）出现的下一次点击，会让镜头保持放大并平滑移动到新目标，而不是先缩回再放大；目标相距过远时仍会先缩回
+- 重叠缩放的包络以平滑并集合成，焦点从全景中心按同一曲线缓动进入，消除了交接瞬间与画面边缘约束释放时的速度突变；pan 过程叠加方向性运动模糊
 - 新录制持续输入时保持焦点放大，输入结束后按可调等待时间平滑缩回；仅记录活动时间与位置，不保存按键或文字
 - 紫色 Zoom 时间线：新增、选择、移动、拉伸、禁用和删除
 - Auto / Manual Zoom、焦点、倍率、起止时间、Instant 参数
@@ -38,13 +41,21 @@ Focus Studio 是一个原生 macOS 产品 Demo 录制与编辑器，核心工作
 新录制、导入视频和截图 Demo **不会自动添加任何音乐或音效**。只有用户在 Audio 面板点击 **Add music or effects** 并明确选择后，才会启用非破坏式混音；预览与最终导出使用相同的音频配置：
 
 - 单独调整原始录制音量
-- 从 6 首内置 BGM 中手动选择，或导入自己的音频文件
+- 从 8 首内置 BGM 中手动选择，或导入自己的音频文件
 - BGM 自动循环或裁切至视频时长，并支持音量、淡入和淡出
 - 根据点击事件自动加入克制的确认音效
 - 在每段 Zoom 的进入和退出点自动加入柔和的 whoosh
 - 从 4 种音效中选择，并可分别开关点击/缩放音效和调整音量
 
-4 首原创 BGM 和 4 种原创音效由 [`scripts/generate-audio-assets.swift`](scripts/generate-audio-assets.swift) 程序化生成；另外收录了作者页面明确标记为 CC0 的 `City Loop` 与 `Overworld (BGM)`。完整作者、来源、许可、SHA-256 与编码信息见 [`Resources/Audio/README.md`](Resources/Audio/README.md)。构建脚本会生成原创资源、验证网络资源哈希并打包完整目录。
+4 首原创 BGM 和 4 种原创音效由 [`scripts/generate-audio-assets.swift`](scripts/generate-audio-assets.swift) 程序化生成；另外收录了作者页面明确标记为 CC0 的 `City Loop`、`Overworld (BGM)`、`Calm Loop` 与 `Loading Screen Loop`。完整作者、来源、许可、SHA-256 与编码信息见 [`Resources/Audio/README.md`](Resources/Audio/README.md)。构建脚本会生成原创资源、验证网络资源哈希并打包完整目录。
+
+## 界面动效（1.2）
+
+页面切换、录制源卡片选中、项目库卡片悬停、编辑器工具栏高亮与检查器切换、时间线 Zoom 块选中、倒计时数字都使用统一的 `StudioMotion` 动效词汇（0.12–0.28 秒）。系统开启"减弱动态效果"时全部退化为淡入淡出。项目库卡片显示通过正式渲染管线生成的带背景样式的首帧海报。
+
+## AI 视频与生图 Skills（火山引擎）
+
+`skills/` 目录提供四个 Claude Code Skills：用火山方舟 Seedance 生成片头/转场/片尾镜头、用 Seedream 生成标题卡与主视觉、把 Focus Studio 项目转成分镜 JSON，以及用 ffmpeg 把 AI 片段与录屏导出合成为企业级产品演示视频。AI 片段是可选项，不影响录制与编辑。密钥只从环境变量或 `~/.config/focus-studio/ark.env` 读取，绝不写入仓库。详见 [`skills/README.md`](skills/README.md)。
 
 ## 截图转 Demo
 
@@ -147,7 +158,7 @@ open "dist/Focus Studio.app"
 - 生成一段确定性合成网格视频、点击事件和对应自动 Zoom；
 - 通过正式渲染管线验证预览/导出一致性；
 - 验证源音频、循环 BGM、淡入淡出、点击音效和 Zoom 音效可进入最终 MP4；
-- 验证新项目不自动配置 BGM/点击音/Zoom 音，并验证 6 首 BGM、4 种 SFX 的 catalog 完整性；
+- 验证新项目不自动配置 BGM/点击音/Zoom 音，并验证 8 首 BGM、4 种 SFX 的 catalog 完整性；
 - 检查输出尺寸、时长、缩放帧差异、裁剪区域与音视频可读性。
 - 用隔离的临时项目库反复测试打开、编辑、返回、旧绑定读取与过期回调，验证最新修改落盘。
 

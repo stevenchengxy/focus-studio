@@ -352,6 +352,8 @@ private struct ProjectCard: View {
     let onSelect: () -> Void
     let onRename: () -> Void
     let onDelete: () -> Void
+    @ObservedObject private var posters = ProjectPosterStore.shared
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -402,6 +404,9 @@ private struct ProjectCard: View {
                 .padding(-4)
                 .allowsHitTesting(false)
         }
+        .animation(reduceMotion ? nil : StudioMotion.selection, value: isSelected)
+        .hoverLift()
+        .task(id: project.id) { posters.requestPoster(for: project) }
         .contextMenu {
             Button("Open recording", action: onOpen)
             Button("Rename", action: onRename)
@@ -419,12 +424,20 @@ private struct ProjectCard: View {
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
-                    Image(systemName: "play.rectangle.fill")
-                        .font(.system(size: 31))
-                        .foregroundStyle(.white.opacity(0.88))
+                    if let poster = posters.poster(for: project) {
+                        Image(nsImage: poster)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .transition(.opacity)
+                    } else {
+                        Image(systemName: "play.rectangle.fill")
+                            .font(.system(size: 31))
+                            .foregroundStyle(.white.opacity(0.88))
+                    }
                 }
                 .frame(height: 145)
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .animation(StudioMotion.fade, value: posters.poster(for: project) == nil)
 
                 VStack(alignment: .leading, spacing: 5) {
                     Text(project.title)

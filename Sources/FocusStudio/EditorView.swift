@@ -14,6 +14,8 @@ struct EditorView: View {
     @State private var renderError: String?
     @State private var isExporting = false
     @State private var exportMessage: String?
+    @Namespace private var toolHighlight
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 0) {
@@ -55,9 +57,13 @@ struct EditorView: View {
                     selectedZoomID: $selectedZoomID,
                     tool: selectedTool
                 )
+                .id(selectedTool)
+                .transition(StudioMotion.panel(reduceMotion: reduceMotion))
                 .frame(width: 292)
+                .clipped()
             }
         }
+        .animation(reduceMotion ? nil : StudioMotion.panelAnimation, value: selectedTool)
         .overlay {
             if isExporting {
                 Color.black.opacity(0.42).ignoresSafeArea()
@@ -151,7 +157,9 @@ struct EditorView: View {
     private var toolRail: some View {
         VStack(spacing: 8) {
             ForEach(EditorTool.allCases) { tool in
-                Button { selectedTool = tool } label: {
+                Button {
+                    withAnimation(reduceMotion ? nil : StudioMotion.selection) { selectedTool = tool }
+                } label: {
                     VStack(spacing: 4) {
                         Image(systemName: tool.icon)
                             .font(.system(size: 15, weight: .medium))
@@ -160,10 +168,17 @@ struct EditorView: View {
                     }
                     .foregroundStyle(selectedTool == tool ? .white : StudioTheme.secondaryText)
                     .frame(width: 51, height: 49)
-                    .background(selectedTool == tool ? StudioTheme.purple.opacity(0.22) : Color.clear)
-                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    .background {
+                        if selectedTool == tool {
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .fill(StudioTheme.purple.opacity(0.22))
+                                .matchedGeometryEffect(id: "tool-highlight", in: toolHighlight)
+                        }
+                    }
+                    .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                 }
                 .buttonStyle(.plain)
+                .hoverLift(scale: 1.04, shadowOpacity: 0)
             }
             Spacer()
         }

@@ -796,9 +796,13 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
 
         let motionBlur = project.settings.motionBlur.clamped(to: 0...1)
         if motionBlur > 0 {
-            let previousTime = max(0, seconds - 1 / Double(project.settings.frameRate.clamped(to: 1...120)))
+            let frameInterval = 1 / Double(project.settings.frameRate.clamped(to: 1...120))
+            let previousTime = max(0, seconds - frameInterval)
             let previousZoom = zoomState(at: previousTime)
-            let scaleVelocity = abs(zoom.scale - previousZoom.scale) / max(0.001, seconds - previousTime)
+            let elapsed = max(0.001, seconds - previousTime)
+            // The zoom focus always lands on the centre of the screen frame, so
+            // radial blur about that centre matches the scale change exactly.
+            let scaleVelocity = abs(zoom.scale - previousZoom.scale) / elapsed
             let blurAmount = min(18, scaleVelocity * 2.2) * motionBlur
             if blurAmount >= 0.08 {
                 placedSource = placedSource
@@ -808,6 +812,23 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
                             y: geometry.screenFrame.midY
                         ),
                         kCIInputAmountKey: blurAmount
+                    ])
+                    .cropped(to: geometry.screenFrame)
+            }
+            // A pan (chained clicks, focus handoff) moves the image sideways
+            // under the frame. Blur along that direction by the per-frame
+            // displacement, which reads as continuous motion instead of
+            // strobing between sharp positions.
+            let panX = (zoom.centerX - previousZoom.centerX) * sourceSize.width * zoomScale * placementScale
+            let panY = (zoom.centerY - previousZoom.centerY) * sourceSize.height * zoomScale * placementScale
+            let panDistance = hypot(panX, panY)
+            let panRadius = min(28, panDistance * 0.55) * motionBlur
+            if panRadius >= 0.6 {
+                placedSource = placedSource
+                    .clampedToExtent()
+                    .applyingFilter("CIMotionBlur", parameters: [
+                        kCIInputRadiusKey: panRadius,
+                        kCIInputAngleKey: atan2(-panY, panX)
                     ])
                     .cropped(to: geometry.screenFrame)
             }

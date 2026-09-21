@@ -142,6 +142,8 @@
 "Brightness" = "Brightness";
 "Browser presets hide tabs and toolbars without changing the original recording." = "Browser presets hide tabs and toolbars without changing the original recording.";
 "Calm Gradient" = "Calm Gradient";
+"Calm Loop" = "Calm Loop";
+"Calm · Chill synths · Seamless loop" = "Calm · Chill synths · Seamless loop";
 "Calm · Minimal · Seamless loop" = "Calm · Minimal · Seamless loop";
 "Calm · Spacious · Narration-friendly" = "Calm · Spacious · Narration-friendly";
 "Cancel" = "Cancel";
@@ -239,6 +241,7 @@
 "Follow System" = "Follow System";
 "Frame rate" = "Frame rate";
 "Full window" = "Full window";
+"Futuristic · Electronic pulse · Dev tools" = "Futuristic · Electronic pulse · Dev tools";
 "General" = "General";
 "Gentle" = "Gentle";
 "Get ready" = "Get ready";
@@ -274,6 +277,7 @@
 "Keep the input in focus until typing pauses, then ease back out. Changes rebuild automatic zooms and preserve your manual blocks." = "Keep the input in focus until typing pauses, then ease back out. Changes rebuild automatic zooms and preserve your manual blocks.";
 "Language" = "Language";
 "Left" = "Left";
+"Loading Screen Loop" = "Loading Screen Loop";
 "MACOS WALLPAPERS" = "MACOS WALLPAPERS";
 "Make every click easy to follow." = "Make every click easy to follow.";
 "Manual" = "Manual";
@@ -538,3 +542,10 @@
 "Moved %lld of %lld selected projects to Trash. The remaining projects were kept.\n%@" = "Moved %lld of %lld selected projects to Trash. The remaining projects were kept.\n%@";
 "“%@”: %@" = "“%@”: %@";
 "%lld selected projects are no longer in the library." = "%lld selected projects are no longer in the library.";
+
+/* 1.2: cinematic zoom, click chaining, live source previews */
+"Cinematic" = "Cinematic";
+"Link nearby clicks" = "Link nearby clicks";
+"Clicks within this gap keep the camera zoomed in and pan to the next target instead of zooming out first." = "Clicks within this gap keep the camera zoomed in and pan to the next target instead of zooming out first.";
+"LIVE" = "LIVE";
+"Live preview" = "Live preview";
