@@ -8,6 +8,11 @@ import time
 scenario = os.environ.get("FOCUS_STUDIO_CODEX_FIXTURE", "new-user")
 authenticated = scenario in ("existing", "stale-model")
 
+if len(sys.argv) > 1 and sys.argv[1] == "--version":
+    # Version probing happens before any protocol traffic and never reads stdin.
+    print("codex-cli 9.9.9")
+    sys.exit(0)
+
 
 def send(value):
     print(json.dumps(value), flush=True)
@@ -22,6 +27,16 @@ for line in sys.stdin:
         continue
     result = {}
     if method == "initialize":
+        if scenario == "config-error":
+            # An older CLI rejecting a config.toml written by a newer one. The
+            # secret-looking line must be redacted and only the last three
+            # lines may be shown.
+            for line in ("older diagnostic that must not be shown",
+                         "warning: Authorization: Bearer FAKE-BEARER-TOKEN key=FAKE-KEY-VALUE sk-FAKESECRET123",
+                         "Error loading configuration: unknown variant `ultra`, expected one of `minimal`, `low`, `medium`, `high`",
+                         "in `model_reasoning_effort`"):
+                print(line, file=sys.stderr, flush=True)
+            sys.exit(1)
         if scenario == "slow-connect":
             time.sleep(0.35)
         if scenario not in ("existing", "stale-model"):

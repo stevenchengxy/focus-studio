@@ -102,6 +102,12 @@ final class StudioModel: ObservableObject {
         guard !didBootstrap else { return }
         didBootstrap = true
         await reloadProjects()
+        // QA hook: `open -n "Focus Studio.app" --env FOCUS_STUDIO_START_DESTINATION=recorder`
+        // lands on the recording picker so screenshots of live previews can be
+        // taken without scripted clicks. Ignored for any other value.
+        if ProcessInfo.processInfo.environment["FOCUS_STUDIO_START_DESTINATION"] == "recorder" {
+            await showRecorder()
+        }
     }
 
     func reloadProjects() async {

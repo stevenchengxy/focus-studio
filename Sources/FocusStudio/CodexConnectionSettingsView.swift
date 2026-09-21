@@ -8,6 +8,9 @@ struct CodexConnectionSettingsView: View {
     @State private var draft: CodexConnectionPreferences
     @State private var apiKey = ""
     @State private var showAPIKey = false
+    @State private var installations: [CodexInstallation] = []
+    @State private var isDetectingInstallations = false
+    @State private var detectionTask: Task<Void, Never>?
     var showsDoneButton: Bool
 
     init(director: CodexDirectorService, showsDoneButton: Bool = true) {
@@ -54,7 +57,7 @@ struct CodexConnectionSettingsView: View {
             }
             Divider()
             HStack {
-                Link("Setup guide", destination: URL(string: "https://learn.chatgpt.com/docs/cli")!)
+                Link("Setup guide", destination: URL(string: "https://developers.openai.com/codex/cli/")!)
                     .font(.system(size: 12))
                 Spacer()
                 if director.isServerConnected {
@@ -75,14 +78,21 @@ struct CodexConnectionSettingsView: View {
         .background(StudioTheme.panel)
         .foregroundStyle(StudioTheme.text)
         .environment(\.locale, localization.locale)
-        .onAppear { draft = director.preferences }
+        .onAppear {
+            draft = director.preferences
+            detectInstallations()
+        }
         .onChange(of: director.preferences) { previous, current in
             // The menu Settings window may be created before a Director sheet
             // saves preferences. Reflect that change without replacing a draft
             // the user is actively editing in this view.
             if draft.normalized == previous { draft = current }
         }
-        .onDisappear { apiKey = "" }
+        .onDisappear {
+            apiKey = ""
+            detectionTask?.cancel()
+            detectionTask = nil
+        }
     }
 
     private var executableSection: some View {
@@ -106,6 +116,89 @@ struct CodexConnectionSettingsView: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            installationsList
+        }
+    }
+
+    /// Every executable found on this Mac with the version it reports, newest
+    /// first. Automatic detection launches the recommended one; "Use" pins a
+    /// specific installation instead.
+    private var installationsList: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("Detected installations").font(.system(size: 11, weight: .semibold))
+                if isDetectingInstallations {
+                    ProgressView().controlSize(.small)
+                    Text("Checking versions…").font(.system(size: 11)).foregroundStyle(StudioTheme.secondaryText)
+                }
+                Spacer()
+                Button("Detect again", action: detectInstallations)
+                    .disabled(isDetectingInstallations)
+            }
+            if installations.isEmpty {
+                if !isDetectingInstallations {
+                    Text("No Codex installation was found. Install Codex CLI or the ChatGPT desktop app, or choose the executable above.")
+                        .font(.system(size: 11)).foregroundStyle(StudioTheme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                ForEach(installations) { installation in
+                    installationRow(installation)
+                }
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(StudioTheme.window)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func installationRow(_ installation: CodexInstallation) -> some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    if installation.versionString.isEmpty {
+                        Text("Version unknown").font(.system(size: 11, weight: .medium))
+                    } else {
+                        Text(verbatim: installation.versionString).font(.system(size: 11, weight: .medium))
+                    }
+                    if installation.isRecommended {
+                        installationTag("Recommended", color: StudioTheme.purple)
+                    }
+                    if installation.path == director.resolvedExecutablePath {
+                        installationTag("Last used", color: StudioTheme.secondaryText)
+                    }
+                }
+                Text(verbatim: installation.path)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(StudioTheme.secondaryText)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Button("Use") { draft.executablePath = installation.path }
+                .disabled(draft.executablePath == installation.path || director.connectionState.isBusy)
+        }
+    }
+
+    private func installationTag(_ title: LocalizedStringKey, color: Color) -> some View {
+        Text(title)
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 6)
+            .frame(height: 16)
+            .background(color.opacity(0.14))
+            .clipShape(Capsule())
+    }
+
+    private func detectInstallations() {
+        detectionTask?.cancel()
+        isDetectingInstallations = true
+        detectionTask = Task { @MainActor in
+            let found = await CodexExecutableDiscovery.installations()
+            guard !Task.isCancelled else { return }
+            installations = found
+            isDetectingInstallations = false
         }
     }
 

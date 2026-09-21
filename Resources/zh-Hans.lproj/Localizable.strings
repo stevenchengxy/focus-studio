@@ -549,3 +549,16 @@
 "Clicks within this gap keep the camera zoomed in and pan to the next target instead of zooming out first." = "在此间隔内的连续点击会让镜头保持放大并平滑移动到下一个目标，而不是先缩回再放大。";
 "LIVE" = "实时";
 "Live preview" = "实时预览";
+
+/* 1.2: Codex installation detection and exit diagnostics */
+"Detected installations" = "检测到的安装";
+"Checking versions…" = "正在检查版本…";
+"Detect again" = "重新检测";
+"No Codex installation was found. Install Codex CLI or the ChatGPT desktop app, or choose the executable above." = "未找到 Codex 安装。请安装 Codex CLI 或 ChatGPT 桌面应用，或在上方选择可执行文件。";
+"Version unknown" = "版本未知";
+"Recommended" = "推荐";
+"Last used" = "上次使用";
+"Use" = "使用";
+"Codex app-server exited with status %d." = "Codex app-server 已退出，状态码 %d。";
+"Codex app-server exited with status %d: %@" = "Codex app-server 已退出，状态码 %d：%@";
+"Update Codex CLI or fix ~/.codex/config.toml." = "请更新 Codex CLI 或修复 ~/.codex/config.toml。";

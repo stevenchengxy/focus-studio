@@ -42,6 +42,8 @@ enum CodexDirectorServiceError: LocalizedError {
     case turnAlreadyRunning
     case turnFailed(String)
     case invalidPlan([String])
+    case processExited(status: Int32, diagnostics: [String])
+    case configurationError(status: Int32, diagnostics: [String])
 
     var errorDescription: String? {
         switch self {
@@ -69,7 +71,18 @@ enum CodexDirectorServiceError: LocalizedError {
             return "Codex could not create the plan: \(message)"
         case let .invalidPlan(issues):
             return "Codex returned a plan that needs correction: \(issues.joined(separator: " "))"
+        case let .processExited(status, diagnostics):
+            return Self.exitDescription(status: status, diagnostics: diagnostics)
+        case let .configurationError(status, diagnostics):
+            return Self.exitDescription(status: status, diagnostics: diagnostics)
+                + "\nUpdate Codex CLI or fix ~/.codex/config.toml."
         }
+    }
+
+    /// `diagnostics` are the last stderr lines, already redacted and truncated.
+    private static func exitDescription(status: Int32, diagnostics: [String]) -> String {
+        let prefix = "Codex app-server exited with status \(status)"
+        return diagnostics.isEmpty ? prefix + "." : prefix + ": " + diagnostics.joined(separator: " ")
     }
 }
 
@@ -110,6 +123,12 @@ final class CodexDirectorService: ObservableObject {
     private var errorHandle: FileHandle?
     private var outputBuffer = Data()
     private var errorBuffer = Data()
+    private var recentDiagnostics: [String] = []
+    private var errorStreamClosed = false
+    private var pendingExitStatus: Int32?
+    private var exitReportTask: Task<Void, Never>?
+    private static let diagnosticLineLimit = 20
+    private static let diagnosticLengthLimit = 300
     private var nextRequestID = 1
     private var pendingRequests: [Int: CheckedContinuation<CodexJSONValue, Error>] = [:]
     private var timeoutTasks: [Int: Task<Void, Never>] = [:]
@@ -163,7 +182,7 @@ final class CodexDirectorService: ObservableObject {
         connectionTestSummary = nil
 
         do {
-            try launchProcess()
+            try await launchProcess()
             _ = try await request(
                 method: "initialize",
                 params: .object([
@@ -466,8 +485,12 @@ final class CodexDirectorService: ObservableObject {
         }
     }
 
-    private func launchProcess() throws {
-        let executableURL = try CodexExecutableDiscovery.resolve(explicitPath: preferences.executablePath)
+    private func launchProcess() async throws {
+        let generation = connectionGeneration
+        // Automatic detection probes every installation's version off the main
+        // actor. A disconnect while probing must not start an orphaned server.
+        let executableURL = try await CodexExecutableDiscovery.resolveExecutable(explicitPath: preferences.executablePath)
+        guard generation == connectionGeneration else { throw CancellationError() }
         resolvedExecutablePath = executableURL.path
         try FileManager.default.createDirectory(
             at: configuration.workingDirectoryURL,
@@ -484,16 +507,14 @@ final class CodexDirectorService: ObservableObject {
         process.arguments = ["app-server"]
         process.currentDirectoryURL = configuration.workingDirectoryURL
         var environment = ProcessInfo.processInfo.environment
-        let executableDirectory = executableURL.deletingLastPathComponent().path
-        environment["PATH"] = ([executableDirectory, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
-            + (environment["PATH"] ?? "").split(separator: ":").map(String.init)).joined(separator: ":")
+        environment["PATH"] = CodexExecutableDiscovery.launchPath(for: executableURL, environment: environment)
         if preferences.accountScope == .focusStudio {
             try FileManager.default.createDirectory(at: configuration.accountDirectoryURL, withIntermediateDirectories: true)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: configuration.accountDirectoryURL.path)
             // A separate app-specific Codex home prevents sign-in/sign-out here
             // from replacing the user's desktop/terminal Codex credentials.
             environment["CODEX_HOME"] = configuration.accountDirectoryURL.path
-            for key in ["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"] {
+            for key in CodexExecutableDiscovery.credentialEnvironmentKeys {
                 environment.removeValue(forKey: key)
             }
             process.arguments = ["app-server", "-c", "cli_auth_credentials_store=\"keyring\""]
@@ -502,7 +523,6 @@ final class CodexDirectorService: ObservableObject {
         process.standardInput = standardInput
         process.standardOutput = standardOutput
         process.standardError = standardError
-        let generation = connectionGeneration
         process.terminationHandler = { [weak self] process in
             Task { @MainActor in
                 guard self?.connectionGeneration == generation else { return }
@@ -517,6 +537,9 @@ final class CodexDirectorService: ObservableObject {
         errorHandle = standardError.fileHandleForReading
         outputBuffer.removeAll(keepingCapacity: true)
         errorBuffer.removeAll(keepingCapacity: true)
+        recentDiagnostics.removeAll()
+        errorStreamClosed = false
+        pendingExitStatus = nil
         isStopping = false
 
         outputHandle?.readabilityHandler = { [weak self] handle in
@@ -533,13 +556,14 @@ final class CodexDirectorService: ObservableObject {
 
         errorHandle?.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            guard !data.isEmpty else {
-                handle.readabilityHandler = nil
-                return
-            }
+            if data.isEmpty { handle.readabilityHandler = nil }
             Task { @MainActor [weak self] in
                 guard self?.connectionGeneration == generation else { return }
-                self?.receiveErrorOutput(data)
+                if data.isEmpty {
+                    self?.errorStreamDidClose()
+                } else {
+                    self?.receiveErrorOutput(data)
+                }
             }
         }
     }
@@ -821,23 +845,76 @@ final class CodexDirectorService: ObservableObject {
         return plan
     }
 
+    /// Diagnostics from an external executable may echo login params. Raw
+    /// stderr stays out of console logs; only redacted, truncated lines are
+    /// buffered, and they are shown solely when the server dies during setup.
     private func receiveDiagnostic(_ line: String) {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
         #if DEBUG
-        if !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            // Diagnostics from an external executable may echo login params.
-            // Keep raw stderr out of console logs and user-visible errors.
-            if ProcessInfo.processInfo.environment["FOCUS_STUDIO_PROTOCOL_LOG"] == "1" {
-                print("[Codex app-server] diagnostic received (content omitted)")
-            }
+        if ProcessInfo.processInfo.environment["FOCUS_STUDIO_PROTOCOL_LOG"] == "1" {
+            print("[Codex app-server] diagnostic received (content omitted)")
         }
         #endif
+        recentDiagnostics.append(Self.redactedDiagnostic(trimmed))
+        if recentDiagnostics.count > Self.diagnosticLineLimit {
+            recentDiagnostics.removeFirst(recentDiagnostics.count - Self.diagnosticLineLimit)
+        }
+    }
+
+    /// Replaces API keys, bearer tokens, and key=value secrets before a stderr
+    /// line can reach the UI, then bounds its length.
+    static func redactedDiagnostic(_ line: String) -> String {
+        var text = line
+        for pattern in [#/sk-[A-Za-z0-9_-]+/#, #/Bearer \S+/#, #/"apiKey"\s*:\s*"[^"]*"/#, #/key=\S+/#] {
+            text = text.replacing(pattern.ignoresCase(), with: "[redacted]")
+        }
+        guard text.count > diagnosticLengthLimit else { return text }
+        return String(text.prefix(diagnosticLengthLimit)) + "…"
     }
 
     private func processDidExit(status: Int32) {
         guard !isStopping else { return }
+        // stderr data and termination arrive from separate queues. Wait briefly
+        // for the stream to close so the final lines make it into the error.
+        guard !errorStreamClosed else {
+            finishExit(status: status)
+            return
+        }
+        pendingExitStatus = status
+        let generation = connectionGeneration
+        exitReportTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled, let self, self.connectionGeneration == generation,
+                  let status = self.pendingExitStatus else { return }
+            self.finishExit(status: status)
+        }
+    }
+
+    private func errorStreamDidClose() {
+        errorStreamClosed = true
+        // A final message without a trailing newline is still a diagnostic.
+        if !errorBuffer.isEmpty, let rest = String(data: errorBuffer, encoding: .utf8) {
+            errorBuffer.removeAll(keepingCapacity: false)
+            receiveDiagnostic(rest)
+        }
+        if let status = pendingExitStatus { finishExit(status: status) }
+    }
+
+    private func finishExit(status: Int32) {
+        exitReportTask?.cancel()
+        exitReportTask = nil
+        pendingExitStatus = nil
+        // Only setup-phase output is surfaced: after the handshake, stderr may
+        // echo sign-in params or user content.
+        let duringSetup = !initialized || connectionState == .connecting
+        let diagnostics = status != 0 && duringSetup ? Array(recentDiagnostics.suffix(3)) : []
         stopProcess()
+        let mentionsConfiguration = diagnostics.contains { $0.contains("Error loading configuration") }
         report(
-            CodexDirectorServiceError.turnFailed("app-server exited with status \(status)"),
+            mentionsConfiguration
+                ? CodexDirectorServiceError.configurationError(status: status, diagnostics: diagnostics)
+                : CodexDirectorServiceError.processExited(status: status, diagnostics: diagnostics),
             preserveConnection: false
         )
     }
@@ -871,6 +948,9 @@ final class CodexDirectorService: ObservableObject {
         activeTurnID = nil
         turnDeadlineTask?.cancel()
         turnDeadlineTask = nil
+        exitReportTask?.cancel()
+        exitReportTask = nil
+        pendingExitStatus = nil
 
         timeoutTasks.values.forEach { $0.cancel() }
         timeoutTasks.removeAll()

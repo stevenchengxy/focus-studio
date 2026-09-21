@@ -549,3 +549,16 @@
 "Clicks within this gap keep the camera zoomed in and pan to the next target instead of zooming out first." = "Clicks within this gap keep the camera zoomed in and pan to the next target instead of zooming out first.";
 "LIVE" = "LIVE";
 "Live preview" = "Live preview";
+
+/* 1.2: Codex installation detection and exit diagnostics */
+"Detected installations" = "Detected installations";
+"Checking versions…" = "Checking versions…";
+"Detect again" = "Detect again";
+"No Codex installation was found. Install Codex CLI or the ChatGPT desktop app, or choose the executable above." = "No Codex installation was found. Install Codex CLI or the ChatGPT desktop app, or choose the executable above.";
+"Version unknown" = "Version unknown";
+"Recommended" = "Recommended";
+"Last used" = "Last used";
+"Use" = "Use";
+"Codex app-server exited with status %d." = "Codex app-server exited with status %d.";
+"Codex app-server exited with status %d: %@" = "Codex app-server exited with status %d: %@";
+"Update Codex CLI or fix ~/.codex/config.toml." = "Update Codex CLI or fix ~/.codex/config.toml.";

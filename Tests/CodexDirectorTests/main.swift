@@ -35,6 +35,64 @@ struct CodexConnectionTests {
             _ = try CodexExecutableDiscovery.resolve(explicitPath: "/missing/codex/fixture")
             fatalError("Explicit invalid executable must not silently fall back")
         } catch CodexDirectorServiceError.invalidExecutable { }
+
+        // Version-aware discovery: the newest installation wins regardless of
+        // PATH order, and candidates that cannot answer --version rank last.
+        check(CodexVersion(parsing: "codex-cli 0.155.0-alpha.9.2")! > CodexVersion(parsing: "codex-cli 0.42.0")!, "0.155.x beats 0.42.0")
+        check(CodexVersion(parsing: "0.155.0-alpha.9.2")! < CodexVersion(parsing: "0.155.0")!, "pre-release ranks below its release")
+        check(CodexVersion(parsing: "0.155.0-alpha.9.2")! < CodexVersion(parsing: "0.155.0-alpha.10")!, "numeric pre-release identifiers")
+        check(CodexVersion(parsing: "0.155.0-alpha")! < CodexVersion(parsing: "0.155.0-alpha.1")!, "longer pre-release ranks higher")
+        check(CodexVersion(parsing: "no version here") == nil, "unparseable version output")
+        func writeCandidate(_ name: String, _ body: String, executable: Bool = true) throws -> String {
+            let directory = testDirectory.appendingPathComponent(name, isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let file = directory.appendingPathComponent("codex")
+            try "#!/bin/sh\n\(body)\n".write(to: file, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: executable ? 0o755 : 0o644], ofItemAtPath: file.path)
+            return file.path
+        }
+        let older = try writeCandidate("older", "printf 'codex-cli 0.42.0\\n'")
+        // Would rank last if the probe leaked the caller's API key.
+        let newer = try writeCandidate("newer", "[ -z \"$OPENAI_API_KEY\" ] || exit 3\nprintf 'codex-cli 0.155.0-alpha.9.2\\n'")
+        let broken = try writeCandidate("broken", "exit 1")
+        let slow = try writeCandidate("slow", "sleep 5")
+        _ = try writeCandidate("plain", "printf 'codex-cli 8.0.0\\n'", executable: false)
+        let alias = testDirectory.appendingPathComponent("alias", isDirectory: true)
+        try FileManager.default.createDirectory(at: alias, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: alias.appendingPathComponent("codex").path, withDestinationPath: newer)
+        func searchPath(_ names: [String]) -> String {
+            names.map { testDirectory.appendingPathComponent($0).path }.joined(separator: ":")
+        }
+        let fakeEnvironment = [
+            "PATH": searchPath(["older", "broken", "newer", "alias", "slow", "plain", "older"]),
+            "OPENAI_API_KEY": "FAKE-TEST-SECRET-NOT-A-REAL-KEY"
+        ]
+        // A fresh script's first launch takes a few hundred milliseconds here;
+        // only the deliberately hanging candidate should exceed the timeout.
+        let installations = await CodexExecutableDiscovery.installations(
+            environment: fakeEnvironment, searchesStandardLocations: false, probeTimeout: 2
+        )
+        check(installations.map(\.path) == [newer, older, broken, slow],
+              "newest first, failing candidates last, duplicates and non-executables skipped: \(installations.map(\.path))")
+        check(installations[0].isRecommended && installations[0].versionString == "codex-cli 0.155.0-alpha.9.2",
+              "recommended badge on the highest version")
+        check(installations.dropFirst().allSatisfy { !$0.isRecommended } && installations[2].version == nil && installations[3].version == nil,
+              "single recommendation; failing and timed-out candidates have no version")
+        let chosen = try await CodexExecutableDiscovery.resolveAutomatic(
+            environment: ["PATH": searchPath(["older", "broken", "newer"])], searchesStandardLocations: false
+        )
+        check(chosen.path == newer, "automatic detection launches the newest installation")
+        let fixtureInstallations = await CodexExecutableDiscovery.installations(
+            environment: ["CODEX_EXECUTABLE": fixturePath, "PATH": "/usr/bin:/bin"], searchesStandardLocations: false
+        )
+        check(fixtureInstallations.map(\.version) == [CodexVersion(major: 9, minor: 9, patch: 9)],
+              "CODEX_EXECUTABLE candidate answers --version: \(fixtureInstallations)")
+        let redacted = CodexDirectorService.redactedDiagnostic(
+            "token sk-ABC123 Bearer FAKE \"apiKey\": \"FAKE-VALUE\" key=FAKE-K " + String(repeating: "x", count: 400)
+        )
+        check(!redacted.contains("ABC123") && !redacted.contains("FAKE") && redacted.count == 301,
+              "stderr redaction and truncation: \(redacted)")
+
         let configuration = CodexDirectorConfiguration(
             executableURL: URL(fileURLWithPath: fixturePath), workingDirectoryURL: testDirectory,
             requestTimeout: 2, accountDirectoryURL: testDirectory.appendingPathComponent("Account")
@@ -128,7 +186,22 @@ struct CodexConnectionTests {
         cancelledLogin.disconnect()
         await signingIn.value
         check(cancelledLogin.connectionState == .disconnected, "disconnect cancels pending authentication")
-        print("CodexConnectionTests: PASS (setup, auth, cancellation, models, privacy, planning)")
+
+        setenv("FOCUS_STUDIO_CODEX_FIXTURE", "config-error", 1)
+        let brokenConfig = makeService()
+        await brokenConfig.connect()
+        guard case .failed = brokenConfig.connectionState else {
+            fatalError("FAIL: a server that dies during setup must fail the connection: \(brokenConfig.connectionState)")
+        }
+        let exitMessage = brokenConfig.lastErrorMessage ?? ""
+        check(exitMessage.contains("exited with status 1") && exitMessage.contains("unknown variant"),
+              "exit diagnostics surface stderr: \(exitMessage)")
+        check(exitMessage.contains("config.toml"), "configuration error hint: \(exitMessage)")
+        check(!exitMessage.contains("FAKE") && exitMessage.contains("[redacted]"), "stderr secrets are redacted: \(exitMessage)")
+        check(!exitMessage.contains("older diagnostic"), "only the last three stderr lines are shown: \(exitMessage)")
+        check(brokenConfig.resolvedExecutablePath == fixturePath, "the launched executable is reported")
+        brokenConfig.disconnect()
+        print("CodexConnectionTests: PASS (discovery, setup, auth, cancellation, models, privacy, planning, exit diagnostics)")
     }
 
     static func check(_ condition: @autoclosure () -> Bool, _ message: String) {
