@@ -1,0 +1,170 @@
+# Focus Studio
+
+Focus Studio 是一个原生 macOS 产品 Demo 录制与编辑器，核心工作流参考 Screen Studio：录制时保存原始画面、鼠标轨迹和点击坐标；录制后根据点击自动生成可编辑的缩放区块；预览与导出共享同一条 Core Image 与 AVFoundation 渲染管线。
+
+所有录屏、截图、音频和项目元数据默认只保存在本机。
+
+## 已实现
+
+### 录制与控制
+
+- 整屏或单窗口录制（ScreenCaptureKit）
+- 固定区域录制：选择显示器后拖拽框选，`Esc` 取消、`Return`/双击确认；视频、截图与鼠标坐标共用同一范围
+- 点击 **Start recording** 后先显示可取消的 3 秒倒计时，倒计时结束前不会启动录制或计时
+- 跨显示器、跨 Space/全屏的悬浮录制控制条，包含计时、截图、完成和取消
+- 录制中截图并保存到 `~/Pictures/Focus Studio Screenshots/`
+- 系统音频和麦克风开关
+- 独立采集鼠标轨迹与点击，不把低分辨率系统光标烘焙进原片
+- Chrome、Edge、Brave、Chromium、Firefox、Safari 网页内容预设与可调四边裁剪，可隐藏标签栏、地址栏和书签栏；书签栏可单独关闭以避免裁掉未启用书签栏时的网页顶部，窗口模式不会录入 macOS 菜单栏，原始录制保持不变
+
+### Demo 编辑与导出
+
+- 点击自动缩放、连续点击焦点交接，以及 Focused / Smooth / Gentle / Snappy 四种动画节奏
+- 新录制持续输入时保持焦点放大，输入结束后按可调等待时间平滑缩回；仅记录活动时间与位置，不保存按键或文字
+- 紫色 Zoom 时间线：新增、选择、移动、拉伸、禁用和删除
+- Auto / Manual Zoom、焦点、倍率、起止时间、Instant 参数
+- 光标大小、平滑档位、闲置隐藏，以及 System / High Contrast / Dot 三种外观；可编辑文本区域自动记录为 I-beam
+- 点击反馈可选择 Ripple / Halo / Pulse，调整颜色、大小、强度、时长与光标按压回弹；连续点击的动画独立淡出，预览和导出一致
+- 画布比例、8 组渐变预设、自定义颜色、macOS 系统壁纸/自定义背景图片、模糊度、亮度、内边距、圆角和阴影
+- 24/30/60 fps 与 1280/1920/2560/3840 宽度导出参数
+- 带源音频和产品 Demo 混音的 H.264 MP4 导出
+- 项目自动保存与本地项目库
+- 返回项目库时安全释放预览，不再因旧编辑器读取空项目而崩溃；按编辑顺序保存，防止旧回调覆盖新项目
+- 导入现有 MP4/MOV 并手动添加缩放
+- 从 PNG/JPEG 截图直接创建可编辑的 12 秒 Demo，并预置三段镜头移动
+
+### 产品 Demo 音频 finishing
+
+新录制、导入视频和截图 Demo **不会自动添加任何音乐或音效**。只有用户在 Audio 面板点击 **Add music or effects** 并明确选择后，才会启用非破坏式混音；预览与最终导出使用相同的音频配置：
+
+- 单独调整原始录制音量
+- 从 6 首内置 BGM 中手动选择，或导入自己的音频文件
+- BGM 自动循环或裁切至视频时长，并支持音量、淡入和淡出
+- 根据点击事件自动加入克制的确认音效
+- 在每段 Zoom 的进入和退出点自动加入柔和的 whoosh
+- 从 4 种音效中选择，并可分别开关点击/缩放音效和调整音量
+
+4 首原创 BGM 和 4 种原创音效由 [`scripts/generate-audio-assets.swift`](scripts/generate-audio-assets.swift) 程序化生成；另外收录了作者页面明确标记为 CC0 的 `City Loop` 与 `Overworld (BGM)`。完整作者、来源、许可、SHA-256 与编码信息见 [`Resources/Audio/README.md`](Resources/Audio/README.md)。构建脚本会生成原创资源、验证网络资源哈希并打包完整目录。
+
+## 截图转 Demo
+
+在项目库点击 **Screenshot demo** 或 **Animate screenshot**，选择本机 PNG/JPEG 后，Focus Studio 会：
+
+1. 保留图片完整比例并编码为 H.264 MP4；
+2. 创建 12 秒、30 fps 的可编辑项目；
+3. 添加三段 Manual Zoom 作为初始镜头；
+4. 不自动添加音乐或音效；
+5. 进入普通编辑器，由用户继续调整背景、裁剪、镜头、光标、音频与导出参数。
+
+源截图不会被修改或覆盖。
+
+## Codex Director
+
+Codex Director 让用户用聊天描述想要的 Demo，例如：
+
+> 打开产品 Dashboard，等待页面加载，点击 Analytics，向下滚动图表，然后停留在总结卡片。
+
+Focus Studio 会通过本机 [`codex app-server`](https://developers.openai.com/codex/app-server) 请求一个符合 JSON Schema 的结构化录制计划。当前原生 Swift 客户端使用 app-server，是为了获得适合产品内深度集成的对话、结构化输出和事件流；并没有把 TypeScript `@openai/codex-sdk` 嵌入 macOS 可执行文件。需要在 Node.js/CI 中做无界面自动化时，可使用官方 [`Codex SDK`](https://developers.openai.com/codex/sdk)。
+
+### 使用方式
+
+1. 在项目库打开 **Codex Director**，进入 **Connection**，选择或自动查找本机 Codex 可执行文件。
+2. 点击 **Save & test connection**，使用 Focus Studio 独立登录或明确选择已有 Codex 登录；连接后选择账户可用模型，再用自然语言说明目标 URL、窗口或截图以及展示步骤。
+3. 等待 Codex 生成计划，并在右侧检查目标和每一步动作。
+4. 点击 **Run plan** 后，Focus Studio 才会打开目标、开始录制并执行计划。
+5. 录制结束后进入编辑器，继续微调 Zoom、背景、音效和导出参数。
+
+支持的捕获模式：
+
+- `url`：打开并录制一个 HTTP/HTTPS 网页；浏览器窗口默认使用内容区域裁剪
+- `window`：按应用或窗口标题选择一个现有窗口
+- `screenshot`：从本机 PNG/JPEG 创建镜头化 Demo
+
+### 安全边界
+
+- Codex 线程运行在 `read-only` sandbox，且只负责生成计划，不直接操控电脑或开始录制
+- 必须先看到并确认计划，Focus Studio 才会执行
+- 执行器只接受 `wait`、HTTP/HTTPS `navigate`、归一化坐标 `click` 和有限幅度 `scroll`
+- 不支持键盘输入、表单提交、账号修改、购买、下载、Shell 命令或破坏性动作
+- 点击和滚动被限制在选中的录制窗口；无效坐标和非 HTTP/HTTPS URL 会被拒绝
+- 自动点击和滚动需要单独授予 macOS Accessibility 权限
+
+新用户可在应用里手动选取可执行文件，无需通过终端传递环境变量。自动查找支持 PATH、Codex/ChatGPT 应用内置文件和常用安装目录。路径与模型偏好保存在本机，认证由官方 Codex 处理；账号、API Key 和项目不会包含在分发包里。录制和编辑不依赖 Codex，只有 AI Director 需要单独安装和登录。
+
+## 安装到其他 Mac
+
+使用 `dist/releases/` 中的 DMG 或 ZIP。DMG 中将 **Focus Studio.app** 拖入 **Applications**，然后从应用程序启动。支持 macOS 15+ 的 Apple 芯片和 Intel Mac；录屏、编辑、导出不要求安装 Swift、Node.js、Homebrew 或 FFmpeg。
+
+每台机器分别授予录屏权限；需要外部应用点击跟踪时授予输入监控。完整步骤见 [安装与首次使用](docs/INSTALL.md)。当前没有 Developer ID 证书，生成的是标记为 `local` 的本地签名包，尚未 Apple 公证；正式签名、公证命令见 [发布指南](docs/RELEASE.md)。
+
+## 构建与运行
+
+要求：
+
+- macOS 15 或更高版本
+- Xcode Command Line Tools / Swift 5.10 或更新版本
+- Codex Director 为可选功能；使用时需要本机 Codex CLI 或 ChatGPT macOS 应用内置 Codex
+
+```bash
+chmod +x scripts/build-app.sh scripts/test.sh
+./scripts/build-app.sh
+open "dist/Focus Studio.app"
+```
+
+`build-app.sh` 默认构建 arm64 + x86_64 通用应用、打包音频并验证动态依赖、最低系统版本与签名；输出 `dist/Focus Studio.app`。本机快速构建可设置 `FOCUS_STUDIO_ARCHS=native`。如果机器上没有签名证书，脚本使用绑定 `com.local.focusstudio` 的 ad-hoc 签名；重新构建后 macOS 可能再次要求授权。正式发布需要 `FOCUS_STUDIO_SIGNING_IDENTITY`，使用 Developer ID 签名。
+
+```bash
+./scripts/package-release.sh
+```
+
+该命令构建通用应用并生成 DMG、ZIP、SHA-256 校验文件。只打包应用及静态素材，不复制个人项目或登录凭据。
+
+## macOS 权限
+
+| 权限 | 何时需要 | 未授权时的影响 |
+| --- | --- | --- |
+| Screen Recording | 录制画面、枚举屏幕与窗口 | 无法开始录制或选择目标 |
+| System Audio | 仅在手动开启 System audio 时；默认关闭 | 视频仍可录制，但不包含应用声音 |
+| Input Monitoring | 采集其他应用中的鼠标轨迹与点击 | 视频仍可录制，但自动 Zoom 的点击元数据可能缺失 |
+| Microphone | 仅在启用麦克风录音时 | 不会录入旁白 |
+| Accessibility | 输入时保持缩放、识别输入光标，以及 Codex Director 点击/滚动计划 | 视频仍能录制；外部输入活动、I-beam 检测和自动操作不可用 |
+
+进入录制页和点击 Start 不会主动请求可选权限。System audio 默认关闭；只有用户手动开启它时，macOS 才可能显示系统音频提示。Input Monitoring 未授权时只显示非阻断警告，不会自动打开系统设置。
+
+首次授权 Screen Recording、Input Monitoring 或 Accessibility 后，macOS 可能要求重启应用。请完全退出 Focus Studio，再重新打开 `dist/Focus Studio.app`。如果 Screen Recording 已显示开启但应用仍提示无权限，可将对应开关关闭再打开一次，然后重启应用。
+
+## 测试
+
+```bash
+./scripts/test.sh
+```
+
+测试会：
+
+- 构建所有 Swift targets；
+- 运行权限状态分类测试；
+- 检查时间线、动画、六种浏览器内容裁剪、区域坐标换算与旧项目兼容性；
+- 生成一段确定性合成网格视频、点击事件和对应自动 Zoom；
+- 通过正式渲染管线验证预览/导出一致性；
+- 验证源音频、循环 BGM、淡入淡出、点击音效和 Zoom 音效可进入最终 MP4；
+- 验证新项目不自动配置 BGM/点击音/Zoom 音，并验证 6 首 BGM、4 种 SFX 的 catalog 完整性；
+- 检查输出尺寸、时长、缩放帧差异、裁剪区域与音视频可读性。
+- 用隔离的临时项目库反复测试打开、编辑、返回、旧绑定读取与过期回调，验证最新修改落盘。
+
+端到端产物位于 `.artifacts/e2e/`。
+
+## 项目与文件位置
+
+实际项目保存在：
+
+```text
+~/Library/Application Support/FocusStudio/Projects/
+```
+
+每个项目包含原始 `raw.mp4`、非破坏式 `project.json`，以及项目使用的本地音频副本。所有视觉和音频调整只修改项目元数据或项目资源，原始录制不会被覆盖。
+
+录制中保存的截图位于：
+
+```text
+~/Pictures/Focus Studio Screenshots/
+```

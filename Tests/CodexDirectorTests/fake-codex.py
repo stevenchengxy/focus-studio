@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+"""Local JSONL protocol fixture. No network and no credential files are touched."""
+import json
+import os
+import sys
+import time
+
+scenario = os.environ.get("FOCUS_STUDIO_CODEX_FIXTURE", "new-user")
+authenticated = scenario in ("existing", "stale-model")
+
+
+def send(value):
+    print(json.dumps(value), flush=True)
+
+
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request.get("method")
+    request_id = request.get("id")
+    params = request.get("params", {})
+    if request_id is None:
+        continue
+    result = {}
+    if method == "initialize":
+        if scenario == "slow-connect":
+            time.sleep(0.35)
+        if scenario not in ("existing", "stale-model"):
+            assert 'cli_auth_credentials_store="keyring"' in sys.argv
+            assert "CodexDirectorTests-" in os.environ.get("CODEX_HOME", "")
+        result = {"userAgent": "fixture"}
+    elif method == "account/read":
+        assert params.get("refreshToken") is False
+        result = {"requiresOpenaiAuth": True,
+                  "account": {"type": "chatgpt", "email": None, "planType": "test"} if authenticated else None}
+    elif method == "model/list":
+        assert authenticated
+        if params.get("cursor") is None:
+            result = {"data": [{"id": "model-first", "model": "model-first", "displayName": "First",
+                                 "isDefault": False, "defaultReasoningEffort": "high", "inputModalities": ["text"]}],
+                      "nextCursor": "page-two"}
+        else:
+            assert params["cursor"] == "page-two"
+            result = {"data": [{"id": "model-default", "model": "model-default", "displayName": "Default",
+                                 "isDefault": True, "defaultReasoningEffort": "medium", "inputModalities": ["text", "image"]}],
+                      "nextCursor": None}
+    elif method == "account/login/start":
+        assert scenario not in ("existing", "stale-model")
+        if scenario == "slow-login":
+            time.sleep(0.35)
+        if params["type"] == "apiKey":
+            assert params.get("apiKey") == "FAKE-TEST-SECRET-NOT-A-REAL-KEY"
+            authenticated = True
+            result = {"type": "apiKey"}
+        else:
+            result = {"type": "chatgpt", "loginId": "fixture-login", "authUrl": "https://auth.openai.com/fixture-only"}
+            if scenario == "instant-browser-login":
+                authenticated = True
+                print(json.dumps({"id": request_id, "result": result}) + "\n" + json.dumps({
+                    "method": "account/login/completed", "params": {
+                        "loginId": "fixture-login", "success": True, "error": None}}), flush=True)
+                continue
+    elif method == "account/login/cancel":
+        assert params["loginId"] == "fixture-login"
+    elif method == "account/logout":
+        assert scenario not in ("existing", "stale-model")
+        authenticated = False
+    elif method == "thread/start":
+        assert authenticated
+        assert params["model"] == "model-default"
+        assert params["sandbox"] == "read-only"
+        result = {"thread": {"id": "fixture-thread"}}
+    elif method == "turn/start":
+        assert params["effort"] == "medium"
+        assert "outputSchema" in params
+        if scenario == "slow-turn":
+            time.sleep(0.35)
+        plan = {"title": "Fixture demo", "summary": "Protocol validated", "capture": {
+            "mode": "url", "url": "https://example.com", "windowTitle": None, "screenshotPath": None},
+            "actions": [{"type": "wait", "seconds": 1, "x": None, "y": None,
+                         "deltaX": None, "deltaY": None, "url": None, "label": None}]}
+        completion = {"method": "turn/completed", "params": {"threadId": "fixture-thread", "turn": {
+            "id": "fixture-turn", "status": "completed", "items": [{"type": "agentMessage",
+            "phase": "final_answer", "text": json.dumps(plan)}]}}}
+        print(json.dumps({"id": request_id, "result": {"turn": {"id": "fixture-turn"}}})
+              + "\n" + json.dumps(completion), flush=True)
+        continue
+    else:
+        raise AssertionError("Unexpected protocol method: " + str(method))
+    send({"id": request_id, "result": result})

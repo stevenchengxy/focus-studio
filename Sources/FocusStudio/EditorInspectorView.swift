@@ -1,0 +1,1172 @@
+import AppKit
+import FocusStudioCore
+import ImageIO
+import SwiftUI
+
+enum EditorTool: String, CaseIterable, Identifiable {
+    case zoom
+    case design
+    case cursor
+    case audio
+    case animation
+    case export
+
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
+    var icon: String {
+        switch self {
+        case .zoom: return "plus.magnifyingglass"
+        case .design: return "paintpalette"
+        case .cursor: return "cursorarrow"
+        case .audio: return "waveform"
+        case .animation: return "sparkles"
+        case .export: return "slider.horizontal.3"
+        }
+    }
+}
+
+struct EditorInspectorView: View {
+    @EnvironmentObject private var model: StudioModel
+    @Binding var project: RecordingProject
+    @Binding var selectedZoomID: UUID?
+    let tool: EditorTool
+    private let systemWallpapers = SystemWallpaperCatalog.installed
+
+    private var selectedZoomIndex: Int? {
+        guard let selectedZoomID else { return nil }
+        return project.zoomSegments.firstIndex { $0.id == selectedZoomID }
+    }
+
+    private var hasMissingInteractionTrace: Bool {
+        project.settings.autoZoomEnabled
+            && project.clickEvents.isEmpty
+            && (project.typingActivity ?? []).isEmpty
+            && project.cursorSamples.count <= 1
+    }
+
+    private var missingInteractionWarning: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("No interaction events captured", systemImage: "exclamationmark.triangle.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(StudioTheme.yellow)
+            Text("This recording has video, but no captured clicks or typing to create automatic zooms. Check Focus Studio’s Accessibility permission, then make a new recording.")
+                .font(.system(size: 10))
+                .foregroundStyle(StudioTheme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Granting permission now cannot add events to this saved video. You can still double-click the Zoom lane to add zooms manually.")
+                .font(.system(size: 10))
+                .foregroundStyle(StudioTheme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .lineSpacing(2)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("editor.missingInteractionEvents")
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack {
+                    Image(systemName: tool.icon)
+                        .foregroundStyle(StudioTheme.purple)
+                    Text(LocalizedStringKey(tool.title))
+                        .font(.system(size: 15, weight: .semibold))
+                    Spacer()
+                }
+
+                Divider().overlay(StudioTheme.line)
+
+                switch tool {
+                case .zoom:
+                    if !project.zoomSegments.isEmpty {
+                        Picker("Selected zoom", selection: $selectedZoomID) {
+                            Text("Select a zoom").tag(Optional<UUID>.none)
+                            ForEach(project.zoomSegments) { segment in
+                                let number = (project.zoomSegments.firstIndex { $0.id == segment.id } ?? 0) + 1
+                                Text("Zoom \(number) · \(segment.start, specifier: "%.2f")–\(segment.end, specifier: "%.2f")s")
+                                    .tag(Optional(segment.id))
+                            }
+                        }
+                        .font(.system(size: 11))
+                        .accessibilityIdentifier("editor.selectedZoom")
+                    }
+                    zoomInspector
+                case .design:
+                    designInspector
+                case .cursor:
+                    cursorInspector
+                case .audio:
+                    audioInspector
+                case .animation:
+                    animationInspector
+                case .export:
+                    exportInspector
+                }
+            }
+            .padding(18)
+        }
+        .background(StudioTheme.panel)
+    }
+
+    @ViewBuilder
+    private var zoomInspector: some View {
+        if let index = selectedZoomIndex {
+            let selected = project.zoomSegments[index]
+            let zoom = Binding<ZoomSegment>(
+                get: { project.zoomSegments.first { $0.id == selected.id } ?? selected },
+                set: { updated in
+                    guard let liveIndex = project.zoomSegments.firstIndex(where: { $0.id == selected.id }) else { return }
+                    let previous = project.zoomSegments[liveIndex]
+                    guard updated != previous else { return }
+                    var authored = updated
+                    if previous.kind == .automatic, updated.kind == .automatic {
+                        // Focus, scale, enabled and instant edits are authored
+                        // choices too. Preserve their captured-event ownership.
+                        let takeover = ZoomTiming.applying(.move(previous.start), to: previous, projectDuration: project.duration, settings: project.settings)
+                        authored.kind = .manual
+                        authored.automaticSource = takeover.automaticSource
+                    }
+                    project.zoomSegments[liveIndex] = authored
+                }
+            )
+            let timing = ZoomTiming.resolve(zoom.wrappedValue, settings: project.settings)
+            InspectorSection("Zoom type") {
+                HStack {
+                    Text("Zoom \(index + 1)")
+                        .font(.system(size: 11, weight: .semibold))
+                    Spacer()
+                    Text(LocalizedStringKey(zoom.wrappedValue.kind == .automatic ? "Automatic cue" : "Manually edited"))
+                        .font(.system(size: 10))
+                        .foregroundStyle(StudioTheme.secondaryText)
+                }
+            }
+            InspectorSection("Scale") {
+                LabeledSlider(value: zoom.scale, range: 1.1...3, suffix: "×", decimals: 2)
+            }
+            InspectorSection("Timing") {
+                NumberField(title: "Start", value: segmentTimingBinding(zoom, value: \.start, edit: ZoomTimingEdit.start), range: 0...max(0, project.duration), suffix: "s")
+                NumberField(title: "End", value: segmentTimingBinding(zoom, value: \.end, edit: ZoomTimingEdit.end), range: 0...max(0, project.duration), suffix: "s")
+                NumberField(title: "Total duration", value: segmentTimingBinding(zoom, value: \.duration, edit: ZoomTimingEdit.duration), range: 0...max(0, project.duration), suffix: "s")
+                NumberField(title: "Hold at full zoom", value: segmentTimingBinding(zoom, value: \.hold, edit: ZoomTimingEdit.hold), range: 0...max(0, project.duration), suffix: "s")
+                Text("Timing edits stay manual and are not replaced by automatic zoom settings.")
+                    .font(.system(size: 9))
+                    .foregroundStyle(StudioTheme.secondaryText)
+                Toggle("Instant animation", isOn: zoom.isInstant)
+                    .font(.system(size: 11))
+                Toggle("Enabled", isOn: zoom.isEnabled)
+                    .font(.system(size: 11))
+            }
+            .id(selected.id)
+            InspectorSection("Speed for this zoom") {
+                Picker("Project curve", selection: $project.settings.screenAnimation) {
+                    ForEach(ScreenAnimationStyle.allCases, id: \.self) { style in
+                        Text(LocalizedStringKey(style.title)).tag(style)
+                    }
+                }
+                LabeledSlider(
+                    value: segmentTimingBinding(zoom, value: \.easeIn, edit: ZoomTimingEdit.easeIn),
+                    range: 0...3,
+                    label: "Zoom in",
+                    suffix: "s",
+                    decimals: 2
+                )
+                LabeledSlider(
+                    value: segmentTimingBinding(zoom, value: \.easeOut, edit: ZoomTimingEdit.easeOut),
+                    range: 0...3,
+                    label: "Zoom out",
+                    suffix: "s",
+                    decimals: 2
+                )
+                HStack(spacing: 8) {
+                    transitionPreset("Fast", incoming: 0.18, outgoing: 0.22, zoom: zoom)
+                    transitionPreset("Natural", incoming: 0.36, outgoing: 0.52, zoom: zoom)
+                    transitionPreset("Gentle", incoming: 0.8, outgoing: 1.0, zoom: zoom)
+                }
+                .controlSize(.small)
+                .disabled(zoom.wrappedValue.isInstant)
+                Text("Smaller seconds = faster. These speeds affect only the selected zoom. Short blocks fit transitions proportionally.")
+                    .font(.system(size: 9))
+                    .foregroundStyle(StudioTheme.secondaryText)
+                    .lineSpacing(2)
+                Text("In \(timing.easeIn, specifier: "%.2f")s · Hold \(timing.hold, specifier: "%.2f")s · Out \(timing.easeOut, specifier: "%.2f")s")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(StudioTheme.secondaryText)
+                Button("Use project speeds") {
+                    zoom.wrappedValue = ZoomTiming.applying(.resetTransitions, to: zoom.wrappedValue, projectDuration: project.duration, settings: project.settings)
+                }
+                .font(.system(size: 10))
+                Text("Drag the center of a block to move it. Drag its left or right handle to change its start or end.")
+                    .font(.system(size: 9))
+                    .foregroundStyle(StudioTheme.secondaryText)
+                    .lineSpacing(2)
+            }
+            InspectorSection("Focus point") {
+                LabeledSlider(value: zoom.targetX, range: 0...1, label: "Horizontal", suffix: "%", multiplier: 100, decimals: 0)
+                LabeledSlider(value: zoom.targetY, range: 0...1, label: "Vertical", suffix: "%", multiplier: 100, decimals: 0)
+            }
+            Button(role: .destructive) {
+                let id = project.zoomSegments[index].id
+                project.zoomSegments.removeAll { $0.id == id }
+                selectedZoomID = nil
+            } label: {
+                Label("Remove zoom", systemImage: "trash")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(StudioTheme.red)
+        } else {
+            if hasMissingInteractionTrace {
+                missingInteractionWarning
+            }
+            VStack(spacing: 11) {
+                Image(systemName: "plus.magnifyingglass")
+                    .font(.system(size: 28, weight: .light))
+                    .foregroundStyle(StudioTheme.secondaryText)
+                Text(LocalizedStringKey(project.zoomSegments.isEmpty ? "Add a zoom manually" : "Select a purple zoom block"))
+                    .font(.system(size: 12, weight: .medium))
+                Text("Or double-click the Zoom lane to add a manual camera move.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(StudioTheme.secondaryText)
+                    .multilineTextAlignment(.center)
+                Text("Drag the edges to change the zoom interval. Select a block to edit its duration and transition speeds here.")
+                    .font(.system(size: 9))
+                    .foregroundStyle(StudioTheme.secondaryText.opacity(0.8))
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 28)
+        }
+    }
+
+    private func segmentTimingBinding(
+        _ zoom: Binding<ZoomSegment>,
+        value: KeyPath<ResolvedZoomTiming, Double>,
+        edit: @escaping (Double) -> ZoomTimingEdit
+    ) -> Binding<Double> {
+        Binding(
+            get: { ZoomTiming.resolve(zoom.wrappedValue, settings: project.settings)[keyPath: value] },
+            set: { requested in
+                zoom.wrappedValue = ZoomTiming.applying(edit(requested), to: zoom.wrappedValue, projectDuration: project.duration, settings: project.settings)
+            }
+        )
+    }
+
+    private func transitionPreset(_ title: String, incoming: Double, outgoing: Double, zoom: Binding<ZoomSegment>) -> some View {
+        Button(LocalizedStringKey(title)) {
+            var segment = zoom.wrappedValue
+            segment = ZoomTiming.applying(.easeIn(incoming), to: segment, projectDuration: project.duration, settings: project.settings)
+            segment = ZoomTiming.applying(.easeOut(outgoing), to: segment, projectDuration: project.duration, settings: project.settings)
+            zoom.wrappedValue = segment
+        }
+    }
+
+    private var designInspector: some View {
+        Group {
+            InspectorSection("Canvas") {
+                Picker("Aspect ratio", selection: $project.settings.aspectRatio) {
+                    ForEach(CanvasAspectRatio.allCases, id: \.self) { ratio in
+                        Text(LocalizedStringKey(ratio.title)).tag(ratio)
+                    }
+                }
+                LabeledSlider(value: $project.settings.padding, range: 0...160, label: "Padding", suffix: "px", decimals: 0)
+                LabeledSlider(value: $project.settings.cornerRadius, range: 0...52, label: "Corners", suffix: "px", decimals: 0)
+                LabeledSlider(value: $project.settings.shadow, range: 0...0.8, label: "Shadow", suffix: "%", multiplier: 100, decimals: 0)
+            }
+            InspectorSection("Content crop") {
+                Picker("Preset", selection: cropPresetBinding) {
+                    ForEach(ContentCropPreset.allCases) { preset in
+                        Text(LocalizedStringKey(preset.title)).tag(preset)
+                    }
+                }
+                LabeledSlider(
+                    value: cropInsetBinding(\.top),
+                    range: 0...0.30,
+                    label: "Top",
+                    suffix: "%",
+                    multiplier: 100,
+                    decimals: 0
+                )
+                DisclosureGroup("More edges") {
+                    VStack(spacing: 9) {
+                        LabeledSlider(
+                            value: cropInsetBinding(\.leading),
+                            range: 0...0.30,
+                            label: "Left",
+                            suffix: "%",
+                            multiplier: 100,
+                            decimals: 0
+                        )
+                        LabeledSlider(
+                            value: cropInsetBinding(\.trailing),
+                            range: 0...0.30,
+                            label: "Right",
+                            suffix: "%",
+                            multiplier: 100,
+                            decimals: 0
+                        )
+                        LabeledSlider(
+                            value: cropInsetBinding(\.bottom),
+                            range: 0...0.30,
+                            label: "Bottom",
+                            suffix: "%",
+                            multiplier: 100,
+                            decimals: 0
+                        )
+                    }
+                    .padding(.top, 8)
+                }
+                .font(.system(size: 10, weight: .medium))
+
+                Text("Browser presets hide tabs and toolbars without changing the original recording.")
+                    .font(.system(size: 9))
+                    .foregroundStyle(StudioTheme.secondaryText)
+                    .lineSpacing(2)
+            }
+            InspectorSection("Background") {
+                LazyVGrid(
+                    columns: Array(repeating: GridItem(.flexible(), spacing: 7), count: 4),
+                    spacing: 8
+                ) {
+                    ForEach(BackgroundPreset.allCases) { preset in
+                        Button {
+                            project.settings.backgroundStyle = .gradient
+                            project.settings.backgroundColor = preset.primaryHex
+                            project.settings.secondaryBackgroundColor = preset.secondaryHex
+                        } label: {
+                            BackgroundPresetSwatch(
+                                preset: preset,
+                                isSelected: project.settings.backgroundStyle == .gradient
+                                    && preset.matches(
+                                        primary: project.settings.backgroundColor,
+                                        secondary: project.settings.secondaryBackgroundColor
+                                    )
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .help(preset.title)
+                        .accessibilityLabel("\(preset.title) background")
+                    }
+                }
+                Picker("Style", selection: $project.settings.backgroundStyle) {
+                    Text("Solid").tag(BackgroundStyle.solid)
+                    Text("Gradient").tag(BackgroundStyle.gradient)
+                    Text("Image").tag(BackgroundStyle.image)
+                }
+                if project.settings.backgroundStyle == .image {
+                    if systemWallpapers.isEmpty {
+                        Text("No readable macOS wallpapers were found on this Mac.")
+                            .font(.system(size: 9))
+                            .foregroundStyle(StudioTheme.secondaryText)
+                    } else {
+                        Text("MACOS WALLPAPERS")
+                            .font(.system(size: 8, weight: .bold))
+                            .tracking(0.55)
+                            .foregroundStyle(StudioTheme.secondaryText)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(Array(systemWallpapers.prefix(16))) { wallpaper in
+                                    Button {
+                                        project.settings.backgroundStyle = .image
+                                        project.settings.backgroundImagePath = wallpaper.path
+                                    } label: {
+                                        WallpaperSwatch(
+                                            wallpaper: wallpaper,
+                                            isSelected: project.settings.backgroundImagePath == wallpaper.path
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help(wallpaper.displayName)
+                                }
+                            }
+                        }
+                    }
+
+                    HStack(spacing: 8) {
+                        Button("Import image…") {
+                            Task {
+                                if let path = await model.importBackgroundImage(for: project) {
+                                    project.settings.backgroundStyle = .image
+                                    project.settings.backgroundImagePath = path
+                                }
+                            }
+                        }
+                        if project.settings.backgroundImagePath != nil {
+                            Button {
+                                project.settings.backgroundImagePath = nil
+                            } label: {
+                                Image(systemName: "xmark")
+                            }
+                            .help("Remove background image")
+                        }
+                    }
+                    .font(.system(size: 9, weight: .medium))
+
+                    if let path = project.settings.backgroundImagePath {
+                        Text(URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent)
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(StudioTheme.secondaryText)
+                            .lineLimit(1)
+                        LabeledSlider(
+                            value: backgroundBlurBinding,
+                            range: 0...60,
+                            label: "Blur",
+                            suffix: "px",
+                            decimals: 0
+                        )
+                        LabeledSlider(
+                            value: backgroundBrightnessBinding,
+                            range: -0.5...0.35,
+                            label: "Brightness",
+                            suffix: "%",
+                            multiplier: 100,
+                            decimals: 0
+                        )
+                    }
+                } else {
+                    ColorPicker("Primary", selection: hexColorBinding($project.settings.backgroundColor))
+                        .font(.system(size: 11))
+                    if project.settings.backgroundStyle == .gradient {
+                        ColorPicker("Secondary", selection: hexColorBinding($project.settings.secondaryBackgroundColor))
+                            .font(.system(size: 11))
+                    }
+                }
+            }
+        }
+    }
+
+    private var cursorInspector: some View {
+        Group {
+            InspectorSection("Appearance") {
+                Picker("Style", selection: cursorAppearanceBinding) {
+                    ForEach(CursorAppearance.allCases, id: \.self) { appearance in
+                        Text(LocalizedStringKey(appearance.title)).tag(appearance)
+                    }
+                }
+                LabeledSlider(value: $project.settings.cursorScale, range: 0.5...3, label: "Size", suffix: "×", decimals: 2)
+                Toggle("Hide cursor while idle", isOn: $project.settings.hideIdleCursor)
+                    .font(.system(size: 11))
+            }
+            InspectorSection("Click feedback") {
+                Toggle("Animate clicks", isOn: $project.settings.showClickRing)
+                    .font(.system(size: 11))
+                    .accessibilityIdentifier("cursor.animateClicks")
+                if project.settings.showClickRing {
+                    Picker("Effect", selection: clickAnimationBinding(\.style)) {
+                        ForEach(ClickAnimationStyle.allCases, id: \.self) { style in
+                            Text(LocalizedStringKey(style.title)).tag(style)
+                        }
+                    }
+                    .accessibilityIdentifier("cursor.clickEffect")
+                    ColorPicker("Color", selection: hexColorBinding(clickAnimationBinding(\.colorHex)), supportsOpacity: false)
+                        .font(.system(size: 11))
+                    LabeledSlider(value: clickAnimationBinding(\.size), range: 0.4...2.5, label: "Effect size", suffix: "×", decimals: 2)
+                    LabeledSlider(value: clickAnimationBinding(\.duration), range: 0.25...1.5, label: "Duration", suffix: "s", decimals: 2)
+                    LabeledSlider(value: clickAnimationBinding(\.intensity), range: 0...1, label: "Intensity", suffix: "%", multiplier: 100, decimals: 0)
+                    Toggle("Press and release cursor", isOn: clickAnimationBinding(\.pressCursor))
+                        .font(.system(size: 11))
+                }
+                Text(LocalizedStringKey(project.clickEvents.isEmpty
+                     ? "This recording has no captured clicks. Enable Input Monitoring before recording to capture clicks in other apps."
+                     : "Feedback stays at each click location. Play or scrub to a click to preview your changes."))
+                    .font(.system(size: 9))
+                    .foregroundStyle(StudioTheme.secondaryText)
+                    .lineSpacing(2)
+            }
+            InspectorSection("Movement") {
+                Picker("Smoothing", selection: $project.settings.cursorAnimation) {
+                    ForEach(CursorAnimationStyle.allCases, id: \.self) { style in
+                        Text(LocalizedStringKey(style.rawValue.capitalized)).tag(style)
+                    }
+                }
+                Text("The cursor automatically changes to an I-beam over editable text fields when macOS exposes that information.")
+                    .font(.system(size: 9))
+                    .foregroundStyle(StudioTheme.secondaryText)
+                    .lineSpacing(2)
+            }
+        }
+    }
+
+    private var audioInspector: some View {
+        Group {
+            InspectorSection("Product demo mix") {
+                if project.settings.productDemoAudio == nil {
+                    Label("Nothing has been added", systemImage: "checkmark.shield")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(StudioTheme.secondaryText)
+                    Button {
+                        project.settings.productDemoAudio = ProductDemoAudioSettings()
+                    } label: {
+                        Label("Add music or effects", systemImage: "plus")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else {
+                    Button(role: .destructive) {
+                        project.settings.productDemoAudio = nil
+                    } label: {
+                        Label("Remove added audio", systemImage: "trash")
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10, weight: .medium))
+                }
+                Text("New recordings stay untouched. Music and effects are only mixed after you choose them here; the raw recording is never changed.")
+                    .font(.system(size: 9))
+                    .foregroundStyle(StudioTheme.secondaryText)
+                    .lineSpacing(2)
+            }
+
+            if project.settings.productDemoAudio != nil {
+                InspectorSection("Captured audio") {
+                    LabeledSlider(
+                        value: audioBinding(\.sourceAudioVolume),
+                        range: 0...1,
+                        label: "Original",
+                        suffix: "%",
+                        multiplier: 100,
+                        decimals: 0
+                    )
+                }
+
+                InspectorSection("Background music") {
+                    HStack(spacing: 7) {
+                        Image(systemName: "music.note")
+                            .foregroundStyle(StudioTheme.purple)
+                        Text(backgroundMusicName)
+                            .font(.system(size: 10, weight: .medium))
+                            .lineLimit(1)
+                        Spacer()
+                    }
+
+                    VStack(spacing: 6) {
+                        ForEach(model.bundledMusicAssets) { asset in
+                            Button {
+                                selectBackgroundMusic(asset)
+                            } label: {
+                                HStack(spacing: 7) {
+                                    Image(systemName: isSelectedMusic(asset) ? "checkmark.circle.fill" : "circle")
+                                        .foregroundStyle(isSelectedMusic(asset) ? StudioTheme.purple : StudioTheme.secondaryText)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(LocalizedStringKey(asset.title))
+                                            .font(.system(size: 9, weight: .semibold))
+                                        Text(LocalizedStringKey(asset.mood))
+                                            .font(.system(size: 8))
+                                            .foregroundStyle(StudioTheme.secondaryText)
+                                            .lineLimit(1)
+                                    }
+                                    Spacer()
+                                    Text(asset.durationSeconds.formatted(.number.precision(.fractionLength(0))) + "s")
+                                        .font(.system(size: 8, design: .monospaced))
+                                        .foregroundStyle(StudioTheme.secondaryText)
+                                }
+                                .padding(.horizontal, 8)
+                                .frame(height: 38)
+                                .background(Color.white.opacity(isSelectedMusic(asset) ? 0.07 : 0.025))
+                                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+
+                    HStack(spacing: 8) {
+                        Button("Import…") {
+                            Task {
+                                if let path = await model.importBackgroundMusic(for: project) {
+                                    var audio = project.settings.resolvedProductDemoAudio
+                                    audio.backgroundMusicPath = path
+                                    project.settings.productDemoAudio = audio
+                                }
+                            }
+                        }
+                        if project.settings.resolvedProductDemoAudio.backgroundMusicPath != nil {
+                            Button {
+                                var audio = project.settings.resolvedProductDemoAudio
+                                audio.backgroundMusicPath = nil
+                                project.settings.productDemoAudio = audio
+                            } label: {
+                                Image(systemName: "xmark")
+                            }
+                            .help("Remove background music")
+                        }
+                    }
+                    .font(.system(size: 9, weight: .medium))
+
+                    LabeledSlider(
+                        value: audioBinding(\.backgroundMusicVolume),
+                        range: 0...0.65,
+                        label: "Music",
+                        suffix: "%",
+                        multiplier: 100,
+                        decimals: 0
+                    )
+                    LabeledSlider(
+                        value: audioBinding(\.backgroundMusicFadeIn),
+                        range: 0...4,
+                        label: "Fade in",
+                        suffix: "s",
+                        decimals: 1
+                    )
+                    LabeledSlider(
+                        value: audioBinding(\.backgroundMusicFadeOut),
+                        range: 0...5,
+                        label: "Fade out",
+                        suffix: "s",
+                        decimals: 1
+                    )
+                }
+
+                InspectorSection("Sound effects") {
+                    Toggle("Click confirmation", isOn: audioBinding(\.clickSoundEnabled))
+                        .font(.system(size: 11))
+                    if project.settings.resolvedProductDemoAudio.clickSoundEnabled {
+                        Picker("Sound", selection: clickSoundAssetBinding) {
+                            ForEach(clickSoundAssets) { asset in
+                                Text(LocalizedStringKey(asset.title)).tag(asset.id)
+                            }
+                        }
+                        LabeledSlider(
+                            value: audioBinding(\.clickSoundVolume),
+                            range: 0...1,
+                            label: "Click",
+                            suffix: "%",
+                            multiplier: 100,
+                            decimals: 0
+                        )
+                    }
+                    Toggle("Zoom whoosh", isOn: audioBinding(\.zoomTransitionSoundEnabled))
+                        .font(.system(size: 11))
+                    if project.settings.resolvedProductDemoAudio.zoomTransitionSoundEnabled {
+                        if let asset = zoomSoundAsset {
+                            HStack(spacing: 6) {
+                                Image(systemName: "waveform")
+                                Text(LocalizedStringKey(asset.title))
+                                Spacer()
+                                Text(LocalizedStringKey(asset.mood))
+                                    .foregroundStyle(StudioTheme.secondaryText)
+                            }
+                            .font(.system(size: 9))
+                        }
+                        LabeledSlider(
+                            value: audioBinding(\.zoomTransitionSoundVolume),
+                            range: 0...1,
+                            label: "Whoosh",
+                            suffix: "%",
+                            multiplier: 100,
+                            decimals: 0
+                        )
+                    }
+                    Text("Use effects on meaningful selections and camera moves; restrained cues keep short demos polished.")
+                        .font(.system(size: 9))
+                        .foregroundStyle(StudioTheme.secondaryText)
+                        .lineSpacing(2)
+                }
+            }
+        }
+    }
+
+    private var animationInspector: some View {
+        Group {
+            InspectorSection("Screen animation") {
+                Picker("Style", selection: $project.settings.screenAnimation) {
+                    ForEach(ScreenAnimationStyle.allCases, id: \.self) { style in
+                        Text(LocalizedStringKey(style.title)).tag(style)
+                    }
+                }
+                LabeledSlider(value: zoomTimingBinding(\.zoomEaseIn), range: 0.05...1, label: "Zoom in", suffix: "s", decimals: 2)
+                LabeledSlider(value: zoomHoldBinding, range: 0.2...3, label: "Click hold", suffix: "s", decimals: 2)
+                LabeledSlider(value: zoomTimingBinding(\.zoomEaseOut), range: 0.05...1.4, label: "Zoom out", suffix: "s", decimals: 2)
+            }
+            InspectorSection("Typing focus") {
+                Toggle("Hold zoom while typing", isOn: typingZoomBinding(\.enabled))
+                    .font(.system(size: 11))
+                    .accessibilityIdentifier("animation.holdWhileTyping")
+                if project.settings.resolvedTypingZoom.enabled {
+                    LabeledSlider(value: typingZoomBinding(\.idleDelay), range: 0.4...5, label: "Wait after typing", suffix: "s", decimals: 1)
+                }
+                if hasMissingInteractionTrace {
+                    missingInteractionWarning
+                } else {
+                    Text(LocalizedStringKey((project.typingActivity ?? []).isEmpty
+                         ? "No typing activity was captured in this recording. You can extend a zoom block manually on the timeline; new recordings capture typing timing with Accessibility enabled."
+                         : "Keep the input in focus until typing pauses, then ease back out. Changes rebuild automatic zooms and preserve your manual blocks."))
+                        .font(.system(size: 9))
+                        .foregroundStyle(StudioTheme.secondaryText)
+                        .lineSpacing(2)
+                }
+            }
+            InspectorSection("Motion") {
+                LabeledSlider(value: $project.settings.motionBlur, range: 0...1, label: "Motion blur", suffix: "%", multiplier: 100, decimals: 0)
+            }
+        }
+    }
+
+    private var exportInspector: some View {
+        Group {
+            InspectorSection("Video") {
+                Picker("Resolution", selection: $project.settings.exportWidth) {
+                    Text("1280p").tag(1280)
+                    Text("1920p").tag(1920)
+                    Text("2560p").tag(2560)
+                    Text("3840p").tag(3840)
+                }
+                Picker("Frame rate", selection: $project.settings.frameRate) {
+                    Text("24 fps").tag(24)
+                    Text("30 fps").tag(30)
+                    Text("60 fps").tag(60)
+                }
+            }
+            Text("Exports H.264 MP4 with the current music, effects, source-audio mix, zooms, and design. All processing happens locally.")
+                .font(.system(size: 10))
+                .foregroundStyle(StudioTheme.secondaryText)
+                .lineSpacing(2)
+        }
+    }
+
+    private func audioBinding<Value>(
+        _ keyPath: WritableKeyPath<ProductDemoAudioSettings, Value>
+    ) -> Binding<Value> {
+        Binding(
+            get: { project.settings.resolvedProductDemoAudio[keyPath: keyPath] },
+            set: { newValue in
+                var audio = project.settings.resolvedProductDemoAudio
+                audio[keyPath: keyPath] = newValue
+                project.settings.productDemoAudio = audio
+            }
+        )
+    }
+
+    private var backgroundMusicName: String {
+        guard let path = project.settings.resolvedProductDemoAudio.backgroundMusicPath else {
+            return "No music selected"
+        }
+        return URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+    }
+
+    private var backgroundBlurBinding: Binding<Double> {
+        Binding(
+            get: { project.settings.resolvedBackgroundBlur },
+            set: { project.settings.backgroundBlur = $0 }
+        )
+    }
+
+    private var backgroundBrightnessBinding: Binding<Double> {
+        Binding(
+            get: { project.settings.resolvedBackgroundBrightness },
+            set: { project.settings.backgroundBrightness = $0 }
+        )
+    }
+
+    private var cursorAppearanceBinding: Binding<CursorAppearance> {
+        Binding(
+            get: { project.settings.resolvedCursorAppearance },
+            set: { project.settings.cursorAppearance = $0 }
+        )
+    }
+
+    private func clickAnimationBinding<Value>(
+        _ keyPath: WritableKeyPath<ClickAnimationSettings, Value>
+    ) -> Binding<Value> {
+        Binding(
+            get: { project.settings.resolvedClickAnimation[keyPath: keyPath] },
+            set: { value in
+                var settings = project.settings.resolvedClickAnimation
+                settings[keyPath: keyPath] = value
+                project.settings.clickAnimation = settings
+            }
+        )
+    }
+
+    private var clickSoundAssets: [AudioAssetCatalog.Asset] {
+        let preferred = model.bundledSoundEffectAssets.filter { $0.id != "zoom-whoosh" }
+        return preferred.isEmpty ? model.bundledSoundEffectAssets : preferred
+    }
+
+    private var zoomSoundAsset: AudioAssetCatalog.Asset? {
+        model.bundledSoundEffectAssets.first { $0.id == "zoom-whoosh" }
+    }
+
+    private var clickSoundAssetBinding: Binding<String> {
+        Binding(
+            get: {
+                let current = project.settings.resolvedProductDemoAudio.clickSoundPath
+                return clickSoundAssets.first(where: {
+                    model.bundledAudioPath(for: $0) == current
+                })?.id ?? clickSoundAssets.first?.id ?? ""
+            },
+            set: { id in
+                guard let asset = clickSoundAssets.first(where: { $0.id == id }),
+                      let path = model.bundledAudioPath(for: asset)
+                else { return }
+                var audio = project.settings.resolvedProductDemoAudio
+                audio.clickSoundPath = path
+                audio.clickSoundVolume = asset.suggestedVolume
+                project.settings.productDemoAudio = audio
+            }
+        )
+    }
+
+    private func selectBackgroundMusic(_ asset: AudioAssetCatalog.Asset) {
+        guard let path = model.bundledAudioPath(for: asset) else { return }
+        var audio = project.settings.resolvedProductDemoAudio
+        audio.backgroundMusicPath = path
+        audio.backgroundMusicVolume = asset.suggestedVolume
+        project.settings.productDemoAudio = audio
+    }
+
+    private func isSelectedMusic(_ asset: AudioAssetCatalog.Asset) -> Bool {
+        guard let path = model.bundledAudioPath(for: asset) else { return false }
+        return project.settings.resolvedProductDemoAudio.backgroundMusicPath == path
+    }
+
+    private var zoomHoldBinding: Binding<Double> {
+        Binding(
+            get: { project.settings.zoomHold },
+            set: { newValue in
+                let oldValue = project.settings.zoomHold
+                project.settings.zoomHold = newValue
+                TimelineMath.adjustAutomaticClickHold(in: &project, by: newValue - oldValue)
+            }
+        )
+    }
+
+    private func zoomTimingBinding(_ keyPath: WritableKeyPath<ProjectSettings, Double>) -> Binding<Double> {
+        Binding(
+            get: { project.settings[keyPath: keyPath] },
+            set: { value in
+                let previous = project.settings[keyPath: keyPath]
+                project.settings[keyPath: keyPath] = value
+                if keyPath == \ProjectSettings.zoomEaseOut {
+                    // Keep the hold's release time and the user's retiming intact;
+                    // only the outgoing envelope gains/loses this duration.
+                    TimelineMath.adjustAutomaticHold(
+                        in: &project.zoomSegments,
+                        by: value - previous,
+                        duration: project.duration
+                    )
+                }
+            }
+        )
+    }
+
+    private func typingZoomBinding<Value>(_ keyPath: WritableKeyPath<TypingZoomSettings, Value>) -> Binding<Value> {
+        Binding(
+            get: { project.settings.resolvedTypingZoom[keyPath: keyPath] },
+            set: { value in
+                var settings = project.settings.resolvedTypingZoom
+                settings[keyPath: keyPath] = value
+                project.settings.typingZoom = settings.sanitized
+                if !(project.typingActivity ?? []).isEmpty {
+                    TimelineMath.regenerateAutomaticZoomSegments(in: &project)
+                }
+            }
+        )
+    }
+
+    private var cropPresetBinding: Binding<ContentCropPreset> {
+        Binding(
+            get: {
+                let crop = project.settings.sourceCropInsets?.sanitized ?? SourceCropInsets()
+                if crop.isEffectivelyEmpty { return .fullWindow }
+                if ContentCropPreset.chrome.matches(crop) { return .chrome }
+                if ContentCropPreset.safari.matches(crop) { return .safari }
+                return .custom
+            },
+            set: { preset in
+                switch preset {
+                case .fullWindow:
+                    project.settings.sourceCropInsets = nil
+                case .chrome:
+                    project.settings.sourceCropInsets = .chromeContent
+                case .safari:
+                    project.settings.sourceCropInsets = .safariContent
+                case .custom:
+                    if project.settings.sourceCropInsets?.isEffectivelyEmpty != false {
+                        project.settings.sourceCropInsets = SourceCropInsets(top: 0.08)
+                    }
+                }
+            }
+        )
+    }
+
+    private func cropInsetBinding(
+        _ keyPath: WritableKeyPath<SourceCropInsets, Double>
+    ) -> Binding<Double> {
+        Binding(
+            get: {
+                (project.settings.sourceCropInsets?.sanitized ?? SourceCropInsets())[keyPath: keyPath]
+            },
+            set: { newValue in
+                var crop = project.settings.sourceCropInsets?.sanitized ?? SourceCropInsets()
+                crop[keyPath: keyPath] = newValue
+                crop = crop.sanitized
+                project.settings.sourceCropInsets = crop.isEffectivelyEmpty ? nil : crop
+            }
+        )
+    }
+
+    private func hexColorBinding(_ value: Binding<String>) -> Binding<Color> {
+        Binding(
+            get: { Color(hex: value.wrappedValue) },
+            set: { color in value.wrappedValue = color.hexString ?? value.wrappedValue }
+        )
+    }
+}
+
+private enum ContentCropPreset: String, CaseIterable, Identifiable {
+    case fullWindow
+    case chrome
+    case safari
+    case custom
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .fullWindow: return "Full window"
+        case .chrome: return "Chrome page"
+        case .safari: return "Safari page"
+        case .custom: return "Custom"
+        }
+    }
+
+    func matches(_ crop: SourceCropInsets) -> Bool {
+        let expected: SourceCropInsets
+        switch self {
+        case .chrome: expected = .chromeContent
+        case .safari: expected = .safariContent
+        case .fullWindow: expected = SourceCropInsets()
+        case .custom: return false
+        }
+        let value = crop.sanitized
+        let reference = expected.sanitized
+        return abs(value.top - reference.top) < 0.000_001
+            && abs(value.leading - reference.leading) < 0.000_001
+            && abs(value.bottom - reference.bottom) < 0.000_001
+            && abs(value.trailing - reference.trailing) < 0.000_001
+    }
+}
+
+private struct WallpaperSwatch: View {
+    let wallpaper: SystemWallpaper
+    let isSelected: Bool
+    @State private var thumbnail: NSImage?
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+            if let thumbnail {
+                Image(nsImage: thumbnail)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Image(systemName: "photo")
+                    .foregroundStyle(StudioTheme.secondaryText)
+            }
+        }
+        .frame(width: 82, height: 48)
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(
+                    isSelected ? Color.white : Color.white.opacity(0.13),
+                    lineWidth: isSelected ? 2 : 1
+                )
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if isSelected {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.55), radius: 2, y: 1)
+                    .padding(4)
+            }
+        }
+        .task(id: wallpaper.path) {
+            guard thumbnail == nil else { return }
+            thumbnail = Self.loadThumbnail(from: wallpaper.url)
+        }
+    }
+
+    private static func loadThumbnail(from url: URL) -> NSImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: 240,
+            kCGImageSourceShouldCacheImmediately: true,
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(
+            source,
+            0,
+            options as CFDictionary
+        ) else { return nil }
+        return NSImage(cgImage: image, size: .zero)
+    }
+}
+
+private struct BackgroundPresetSwatch: View {
+    let preset: BackgroundPreset
+    let isSelected: Bool
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 7, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: [Color(hex: preset.primaryHex), Color(hex: preset.secondaryHex)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .frame(height: 34)
+            .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(
+                        isSelected ? Color.white : Color.white.opacity(0.13),
+                        lineWidth: isSelected ? 2 : 1
+                    )
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.45), radius: 2, y: 1)
+                        .padding(4)
+                }
+            }
+    }
+}
+
+private struct InspectorSection<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+
+    init(_ title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            Text(LocalizedStringKey(title))
+                .textCase(.uppercase)
+                .font(.system(size: 9, weight: .bold))
+                .tracking(0.7)
+                .foregroundStyle(StudioTheme.secondaryText)
+            content
+        }
+        .padding(13)
+        .background(Color.white.opacity(0.025))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(StudioTheme.line, lineWidth: 1)
+        )
+    }
+}
+
+private struct LabeledSlider: View {
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    var label: String = "Amount"
+    var suffix: String = ""
+    var multiplier = 1.0
+    var decimals = 1
+
+    var body: some View {
+        VStack(spacing: 6) {
+            HStack {
+                Text(LocalizedStringKey(label))
+                Spacer()
+                Text("\((value * multiplier).formatted(.number.precision(.fractionLength(decimals))))\(suffix)")
+                    .fontDesign(.monospaced)
+                    .foregroundStyle(StudioTheme.secondaryText)
+            }
+            .font(.system(size: 10))
+            Slider(value: $value, in: range)
+                .controlSize(.small)
+                .accessibilityLabel(Text(LocalizedStringKey(label)))
+        }
+    }
+}
+
+private struct NumberField: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let suffix: String
+    @State private var draft = ""
+    @State private var originalDraft = ""
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        HStack {
+            Text(LocalizedStringKey(title)).font(.system(size: 10))
+            Spacer()
+            TextField(LocalizedStringKey(title), text: $draft)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 76)
+                .focused($isFocused)
+                .accessibilityLabel(Text(LocalizedStringKey(title)))
+                .onSubmit { commit() }
+                .onAppear { refresh() }
+                .onChange(of: isFocused) { _, focused in
+                    if !focused { commit() }
+                }
+                .onChange(of: value) { _, newValue in
+                    if !isFocused { refresh() }
+                }
+            Text(suffix)
+                .font(.system(size: 9))
+                .foregroundStyle(StudioTheme.secondaryText)
+        }
+    }
+
+    private func refresh() {
+        draft = value.formatted(.number.precision(.fractionLength(2)).grouping(.never))
+        originalDraft = draft
+    }
+
+    private func commit() {
+        // Merely focusing a rounded display must not rewrite its full-precision
+        // value or silently turn an automatic cue into a manual override.
+        guard draft != originalDraft else { return }
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.locale = .current
+        let number = Double(draft.trimmingCharacters(in: .whitespaces))
+            ?? formatter.number(from: draft)?.doubleValue
+        if let number, number.isFinite {
+            let bounded = number.clamped(to: range)
+            if abs(bounded - value) > 0.000_000_001 { value = bounded }
+        }
+        refresh()
+    }
+}
+
+private extension Color {
+    init(hex: String) {
+        let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var number: UInt64 = 0
+        Scanner(string: cleaned).scanHexInt64(&number)
+        let red, green, blue: Double
+        if cleaned.count == 6 {
+            red = Double((number >> 16) & 0xff) / 255
+            green = Double((number >> 8) & 0xff) / 255
+            blue = Double(number & 0xff) / 255
+        } else {
+            red = 0.42; green = 0.36; blue = 0.96
+        }
+        self.init(red: red, green: green, blue: blue)
+    }
+
+    var hexString: String? {
+        guard let color = NSColor(self).usingColorSpace(.sRGB) else { return nil }
+        return String(
+            format: "#%02X%02X%02X",
+            Int(color.redComponent * 255),
+            Int(color.greenComponent * 255),
+            Int(color.blueComponent * 255)
+        )
+    }
+}

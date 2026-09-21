@@ -1,0 +1,115 @@
+{
+  "schemaVersion": 1,
+  "assets": [
+    {
+      "id": "product-demo",
+      "kind": "music",
+      "title": "Product Demo",
+      "mood": "Polished · Light technology",
+      "relativePath": "product-demo-bed.wav",
+      "durationSeconds": 55.385,
+      "suggestedVolume": 0.16,
+      "license": "Focus Studio Original"
+    },
+    {
+      "id": "calm-gradient",
+      "kind": "music",
+      "title": "Calm Gradient",
+      "mood": "Calm · Spacious · Narration-friendly",
+      "relativePath": "calm-gradient-bed.wav",
+      "durationSeconds": 53.333,
+      "suggestedVolume": 0.17,
+      "license": "Focus Studio Original"
+    },
+    {
+      "id": "bright-launch",
+      "kind": "music",
+      "title": "Bright Launch",
+      "mood": "Upbeat · Optimistic · Feature launch",
+      "relativePath": "bright-launch-bed.wav",
+      "durationSeconds": 30.968,
+      "suggestedVolume": 0.14,
+      "license": "Focus Studio Original"
+    },
+    {
+      "id": "midnight-focus",
+      "kind": "music",
+      "title": "Midnight Focus",
+      "mood": "Minimal · Dark · Analytics",
+      "relativePath": "midnight-focus-bed.wav",
+      "durationSeconds": 43.636,
+      "suggestedVolume": 0.16,
+      "license": "Focus Studio Original"
+    },
+    {
+      "id": "city-loop",
+      "kind": "music",
+      "title": "City Loop",
+      "mood": "Upbeat · Electronic · Night city",
+      "relativePath": "city-loop.mp3",
+      "durationSeconds": 56.4245,
+      "suggestedVolume": 0.08,
+      "license": "CC0 1.0 Universal",
+      "licenseURL": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "author": "wipics",
+      "sourcePage": "https://opengameart.org/content/city-loop-0",
+      "downloadURL": "https://opengameart.org/sites/default/files/city-loop_0.mp3",
+      "sha256": "9349982fb8e365167bc5c89f2ac50d3b5376b9f627d506ba30a9b26c8230597e"
+    },
+    {
+      "id": "overworld-bgm",
+      "kind": "music",
+      "title": "Overworld (BGM)",
+      "mood": "Calm · Minimal · Seamless loop",
+      "relativePath": "overworld.mp3",
+      "durationSeconds": 9.84,
+      "suggestedVolume": 0.26,
+      "license": "CC0 1.0 Universal",
+      "licenseURL": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "author": "IntelligentGene / Another Page Studio",
+      "sourcePage": "https://opengameart.org/content/overworld-bgm",
+      "downloadURL": "https://opengameart.org/sites/default/files/overworld.mp3",
+      "sha256": "d32949f8467ac463a52ca88ed250e505545bc98a46e4e472c1f994bf447a1beb"
+    },
+    {
+      "id": "ui-click",
+      "kind": "soundEffect",
+      "title": "UI Click",
+      "mood": "Crisp · Confirming",
+      "relativePath": "ui-click.wav",
+      "durationSeconds": 0.105,
+      "suggestedVolume": 0.28,
+      "license": "Focus Studio Original"
+    },
+    {
+      "id": "soft-tap",
+      "kind": "soundEffect",
+      "title": "Soft Tap",
+      "mood": "Soft · Friendly",
+      "relativePath": "soft-tap.wav",
+      "durationSeconds": 0.13,
+      "suggestedVolume": 0.3,
+      "license": "Focus Studio Original"
+    },
+    {
+      "id": "typing-key",
+      "kind": "soundEffect",
+      "title": "Typing Key",
+      "mood": "Tactile · Subtle",
+      "relativePath": "typing-key.wav",
+      "durationSeconds": 0.075,
+      "suggestedVolume": 0.2,
+      "license": "Focus Studio Original"
+    },
+    {
+      "id": "zoom-whoosh",
+      "kind": "soundEffect",
+      "title": "Zoom Whoosh",
+      "mood": "Airy · Transition",
+      "relativePath": "zoom-whoosh.wav",
+      "durationSeconds": 0.46,
+      "suggestedVolume": 0.18,
+      "license": "Focus Studio Original"
+    }
+  ]
+}

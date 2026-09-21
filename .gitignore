@@ -1,0 +1,13 @@
+.build/
+.swiftpm/
+dist/
+.artifacts/
+.DS_Store
+*.xcuserstate
+# Local secrets and generated AI assets
+.env
+*.env
+ai-clips/
+__pycache__/
+.venv/
+.claude/settings.local.json

@@ -1,0 +1,691 @@
+import FocusStudioCapture
+import FocusStudioCore
+import SwiftUI
+
+struct RecordingPickerView: View {
+    @EnvironmentObject private var model: StudioModel
+    @ObservedObject private var localization = AppLocalization.shared
+    @State private var kind: CaptureTargetKind = .window
+    @State private var areaDisplayID: String?
+
+    private var filteredTargets: [CaptureTargetInfo] {
+        model.captureEngine.availableTargets.filter { target in
+            switch kind {
+            case .display, .area:
+                return target.kind == .display
+            case .window:
+                return target.kind == .window
+            }
+        }
+    }
+
+    private var displayTargets: [CaptureTargetInfo] {
+        model.captureEngine.availableTargets.filter { $0.kind == .display }
+    }
+
+    private var selectedAreaDisplay: CaptureTargetInfo? {
+        displayTargets.first { $0.id == areaDisplayID } ?? displayTargets.first
+    }
+
+    private var preferredBrowserWindow: CaptureTargetInfo? {
+        model.captureEngine.availableTargets
+            .filter {
+                $0.kind == .window
+                    && BrowserFamily.detect(applicationName: $0.appName) != nil
+            }
+            .max {
+                $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height
+            }
+    }
+
+    private var selectedAreaIsReady: Bool {
+        guard let area = model.selectedAreaTarget,
+              let display = selectedAreaDisplay
+        else { return false }
+        return model.selectedTargetID == area.id && area.nativeID == display.nativeID
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button { model.destination = .library } label: {
+                    Image(systemName: "chevron.left")
+                }
+                .buttonStyle(IconButtonStyle())
+                .accessibilityLabel("Back to library")
+                Spacer()
+                Text("New recording")
+                    .font(.system(size: 14, weight: .semibold))
+                Spacer()
+                Color.clear.frame(width: 32, height: 30)
+            }
+            .padding(.horizontal, 22)
+            .frame(height: 58)
+            .background(StudioTheme.panel)
+            .overlay(alignment: .bottom) { Divider().overlay(StudioTheme.line) }
+
+            HStack(alignment: .top, spacing: 24) {
+                VStack(alignment: .leading, spacing: 18) {
+                    Text("What would you like to record?")
+                        .font(.system(size: 24, weight: .bold, design: .rounded))
+
+                    Picker("Source", selection: $kind) {
+                        Label("Display", systemImage: "display").tag(CaptureTargetKind.display)
+                        Label("Window", systemImage: "macwindow").tag(CaptureTargetKind.window)
+                        Label("Area", systemImage: "rectangle.dashed").tag(CaptureTargetKind.area)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 430)
+
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Image(systemName: sourceHintIcon)
+                            .foregroundStyle(kind == .display ? StudioTheme.yellow : StudioTheme.purple)
+                        Text(LocalizedStringKey(sourceHint))
+                            .font(.system(size: 10))
+                            .foregroundStyle(StudioTheme.secondaryText)
+                            .lineSpacing(2)
+                        Spacer(minLength: 0)
+                        if kind == .display, let browser = preferredBrowserWindow {
+                            Button("Use \(browser.appName ?? L10n.tr("browser")) window") {
+                                kind = .window
+                                model.selectedTargetID = browser.id
+                            }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(StudioTheme.purple)
+                        }
+                    }
+                    .frame(maxWidth: 620, alignment: .leading)
+
+                    ScrollView {
+                        if filteredTargets.isEmpty, model.capturePermissionDenied {
+                            VStack(spacing: 13) {
+                                Image(systemName: "rectangle.inset.filled.badge.record")
+                                    .font(.system(size: 34, weight: .light))
+                                    .foregroundStyle(StudioTheme.yellow)
+                                Text("Screen Recording needs attention")
+                                    .font(.system(size: 15, weight: .semibold))
+                                Text("Enable Focus Studio in System Settings → Privacy & Security → Screen & System Audio Recording. If it is already enabled, toggle it off and on once, then relaunch Focus Studio.")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(StudioTheme.secondaryText)
+                                    .multilineTextAlignment(.center)
+                                    .frame(maxWidth: 430)
+                                if let details = model.captureFailureDetails {
+                                    Text(details)
+                                        .font(.system(size: 9, design: .monospaced))
+                                        .foregroundStyle(StudioTheme.secondaryText.opacity(0.72))
+                                        .multilineTextAlignment(.center)
+                                        .textSelection(.enabled)
+                                        .lineLimit(4)
+                                        .frame(maxWidth: 480)
+                                }
+                                HStack(spacing: 9) {
+                                    Button("Open Settings") {
+                                        model.openScreenRecordingSettings()
+                                    }
+                                    .buttonStyle(PrimaryButtonStyle())
+                                    Button("Relaunch") {
+                                        model.relaunchApplication()
+                                    }
+                                    .buttonStyle(.bordered)
+                                    Button("Retry") {
+                                        Task { await model.showRecorder() }
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 70)
+                            .studioPanel()
+                        } else if filteredTargets.isEmpty {
+                            VStack(spacing: 12) {
+                                Image(systemName: kind == .window ? "macwindow.badge.plus" : "display.trianglebadge.exclamationmark")
+                                    .font(.system(size: 32, weight: .light))
+                                    .foregroundStyle(StudioTheme.secondaryText)
+                                Text(LocalizedStringKey(kind == .window ? "No recordable windows found" : "No display found"))
+                                    .font(.system(size: 14, weight: .semibold))
+                                Text(LocalizedStringKey(kind == .window
+                                    ? "Open the product window you want to demonstrate, then refresh the source list."
+                                    : "Connect or enable a display, then refresh the source list."))
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(StudioTheme.secondaryText)
+                                    .multilineTextAlignment(.center)
+                                    .frame(maxWidth: 380)
+                                Button("Refresh sources") {
+                                    Task { await model.showRecorder() }
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 70)
+                            .studioPanel()
+                        } else {
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 14)], spacing: 14) {
+                                ForEach(filteredTargets) { target in
+                                    TargetCard(
+                                        target: target,
+                                        isSelected: targetIsSelected(target)
+                                    ) {
+                                        selectTargetCard(target)
+                                    }
+                                }
+                            }
+                            .padding(1)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("Recording settings")
+                        .font(.system(size: 14, weight: .semibold))
+                        .padding(.bottom, 16)
+
+                    SettingToggle(
+                        title: "System audio",
+                        subtitle: "Optional; macOS may ask when enabled",
+                        icon: "speaker.wave.2",
+                        isOn: $model.recordSystemAudio
+                    )
+                    Divider().overlay(StudioTheme.line)
+                    SettingToggle(
+                        title: "Microphone",
+                        subtitle: "Record your selected input",
+                        icon: "mic",
+                        isOn: $model.recordMicrophone
+                    )
+                    Divider().overlay(StudioTheme.line)
+                    SettingToggle(
+                        title: "Automatic zooms",
+                        subtitle: "Create a zoom wherever you click",
+                        icon: "plus.magnifyingglass",
+                        isOn: $model.automaticZooms
+                    )
+                    if model.selectedTargetSupportsBrowserContentCrop {
+                        Divider().overlay(StudioTheme.line)
+                        SettingToggle(
+                            title: "Webpage only",
+                            subtitle: "Hide browser tabs and toolbar",
+                            icon: "rectangle.inset.filled",
+                            isOn: $model.browserContentOnly
+                        )
+                        Text("The crop is non-destructive and stays adjustable in the editor.")
+                            .font(.system(size: 9))
+                            .foregroundStyle(StudioTheme.secondaryText)
+                            .padding(.leading, 33)
+                            .padding(.top, -7)
+                            .padding(.bottom, 4)
+                        if model.browserContentOnly {
+                            Divider().overlay(StudioTheme.line)
+                            SettingToggle(
+                                title: "Hide bookmarks bar",
+                                subtitle: "Also remove the saved-links row",
+                                icon: "bookmark",
+                                isOn: $model.hideBrowserBookmarksBar
+                            )
+                        }
+                    }
+
+                    Divider().overlay(StudioTheme.line)
+                        .padding(.vertical, 14)
+
+                    HStack {
+                        Label("Frame rate", systemImage: "speedometer")
+                            .font(.system(size: 12, weight: .medium))
+                        Spacer()
+                        Picker("Frame rate", selection: $model.frameRate) {
+                            Text("30 fps").tag(30)
+                            Text("60 fps").tag(60)
+                        }
+                        .labelsHidden()
+                        .frame(width: 100)
+                    }
+
+                    Spacer()
+
+                    if kind == .area {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label(
+                                selectedAreaIsReady
+                                    ? (model.selectedAreaTarget?.title ?? L10n.tr("Selected area"))
+                                    : L10n.tr("Choose a display, then draw the recording area"),
+                                systemImage: selectedAreaIsReady ? "checkmark.rectangle" : "rectangle.dashed"
+                            )
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(selectedAreaIsReady ? StudioTheme.purple : StudioTheme.secondaryText)
+
+                            if selectedAreaIsReady, let area = model.selectedAreaTarget {
+                                Text("\(Int(area.frame.width.rounded())) × \(Int(area.frame.height.rounded())) points · outside content and the menu bar stay out of the recording")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(StudioTheme.secondaryText)
+                                    .lineSpacing(2)
+                                Button("Reselect area") {
+                                    chooseRecordingArea()
+                                }
+                                .buttonStyle(.plain)
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(StudioTheme.purple)
+                            }
+                        }
+                        .padding(10)
+                        .background(Color.white.opacity(0.025))
+                        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    }
+
+                    VStack(alignment: .leading, spacing: 7) {
+                        Label("Permissions", systemImage: "lock.shield")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("Screen-only recording starts without optional permission prompts. Input Monitoring captures clicks; Accessibility keeps zoom focused while you type and detects text cursors. Enable these in Privacy & Security when needed.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(StudioTheme.secondaryText)
+                            .lineSpacing(2)
+                        if model.automaticZooms {
+                            Label(
+                                LocalizedStringKey(model.interactionTrackingAuthorized
+                                    ? "Interaction permissions allowed — verify by clicking and typing"
+                                    : "Interaction permissions need attention"),
+                                systemImage: model.interactionTrackingAuthorized ? "checkmark.circle" : "exclamationmark.triangle"
+                            )
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(model.interactionTrackingAuthorized ? StudioTheme.secondaryText : StudioTheme.yellow)
+                            HStack {
+                                if !model.accessibilityAuthorized {
+                                    Button("Accessibility") { model.openAccessibilitySettings() }
+                                }
+                                if !model.inputMonitoringAuthorized {
+                                    Button("Input Monitoring") { model.openInputMonitoringSettings() }
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                    }
+
+                    Button {
+                        if kind == .area, !selectedAreaIsReady {
+                            chooseRecordingArea()
+                        } else {
+                            model.startRecordingCountdown()
+                        }
+                    } label: {
+                        Label(LocalizedStringKey(primaryActionTitle), systemImage: primaryActionIcon)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(PrimaryButtonStyle(tint: StudioTheme.red))
+                    .disabled(primaryActionDisabled)
+                    .padding(.top, 18)
+                }
+                .padding(20)
+                .frame(width: 330)
+                .frame(maxHeight: .infinity, alignment: .topLeading)
+                .studioPanel()
+            }
+            .padding(24)
+        }
+        .environment(\.locale, localization.locale)
+        .onChange(of: kind) { _, newKind in
+            switch newKind {
+            case .display:
+                model.selectedTargetID = displayTargets.first?.id
+            case .window:
+                model.selectedTargetID = preferredBrowserWindow?.id
+                    ?? model.captureEngine.availableTargets.first(where: { $0.kind == .window })?.id
+            case .area:
+                if areaDisplayID == nil {
+                    areaDisplayID = displayTargets.first?.id
+                }
+                if let area = model.selectedAreaTarget,
+                   displayTargets.contains(where: { $0.nativeID == area.nativeID }) {
+                    areaDisplayID = displayTargets.first(where: { $0.nativeID == area.nativeID })?.id
+                    model.selectedTargetID = area.id
+                } else {
+                    model.selectedTargetID = selectedAreaDisplay?.id
+                }
+            }
+        }
+        .onAppear {
+            model.refreshInteractionTrackingPermission()
+            areaDisplayID = model.selectedAreaTarget.flatMap { area in
+                displayTargets.first(where: { $0.nativeID == area.nativeID })?.id
+            } ?? displayTargets.first?.id
+            guard let selectedKind = model.selectedTarget?.kind else {
+                model.selectedTargetID = preferredBrowserWindow?.id
+                    ?? model.captureEngine.availableTargets.first(where: { $0.kind == .window })?.id
+                    ?? displayTargets.first?.id
+                kind = model.selectedTarget?.kind ?? .window
+                return
+            }
+            kind = selectedKind
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            model.refreshInteractionTrackingPermission()
+        }
+        .alert("Interaction tracking needs setup", isPresented: $model.isShowingInteractionSetup) {
+            if !model.accessibilityAuthorized {
+                Button("Open Accessibility Settings") { model.openAccessibilitySettings() }
+            }
+            if !model.inputMonitoringAuthorized {
+                Button("Open Input Monitoring Settings") { model.openInputMonitoringSettings() }
+            }
+            Button("Record with limited tracking") {
+                model.startRecordingCountdown(allowUnavailableTracking: true)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Automatic zooms are on, but interaction permissions are incomplete. Enable Accessibility and Input Monitoring for Focus Studio, then return. Otherwise clicks or typing may not generate zooms; granting access later cannot restore missing events in this recording.")
+        }
+    }
+
+    private var sourceHintIcon: String {
+        switch kind {
+        case .display: return "exclamationmark.triangle"
+        case .window: return "macwindow"
+        case .area: return "crop"
+        }
+    }
+
+    private var sourceHint: String {
+        switch kind {
+        case .display:
+            return "Entire display includes the macOS menu bar and Dock. Window or Area is cleaner for a product demo."
+        case .window:
+            return "Recommended for product demos: other apps and the macOS menu bar stay out. Browser controls can be hidden below."
+        case .area:
+            return "Draw an exact fixed region. Only that rectangle is encoded, including screenshots and cursor coordinates."
+        }
+    }
+
+    private var primaryActionTitle: String {
+        if model.isSelectingArea { return "Selecting area…" }
+        if kind == .area, !selectedAreaIsReady { return "Select recording area" }
+        return "Start recording"
+    }
+
+    private var primaryActionIcon: String {
+        kind == .area && !selectedAreaIsReady ? "rectangle.dashed" : "record.circle"
+    }
+
+    private var primaryActionDisabled: Bool {
+        if model.isSelectingArea { return true }
+        switch kind {
+        case .display:
+            return model.selectedTarget?.kind != .display
+        case .window:
+            return model.selectedTarget?.kind != .window
+        case .area:
+            return selectedAreaDisplay == nil
+        }
+    }
+
+    private func targetIsSelected(_ target: CaptureTargetInfo) -> Bool {
+        if kind == .area {
+            return selectedAreaDisplay?.id == target.id
+        }
+        return model.selectedTargetID == target.id
+    }
+
+    private func selectTargetCard(_ target: CaptureTargetInfo) {
+        if kind == .area {
+            areaDisplayID = target.id
+            if let area = model.selectedAreaTarget, area.nativeID == target.nativeID {
+                model.selectedTargetID = area.id
+            } else {
+                model.selectedTargetID = target.id
+            }
+        } else {
+            model.selectedTargetID = target.id
+        }
+    }
+
+    private func chooseRecordingArea() {
+        guard let display = selectedAreaDisplay else { return }
+        Task { await model.selectRecordingArea(on: display) }
+    }
+}
+
+struct RecordingCountdownView: View {
+    @EnvironmentObject private var model: StudioModel
+    @ObservedObject private var localization = AppLocalization.shared
+
+    var body: some View {
+        VStack(spacing: 22) {
+            Text("Get ready")
+                .font(.system(size: 17, weight: .semibold, design: .rounded))
+
+            ZStack {
+                Circle()
+                    .fill(StudioTheme.red.opacity(0.16))
+                    .frame(width: 150, height: 150)
+                Circle()
+                    .stroke(StudioTheme.red.opacity(0.38), lineWidth: 2)
+                    .frame(width: 118, height: 118)
+                Text("\(model.recordingCountdown)")
+                    .font(.system(size: 70, weight: .medium, design: .rounded))
+                    .monospacedDigit()
+            }
+
+            Text("Recording starts after the countdown")
+                .font(.system(size: 12))
+                .foregroundStyle(StudioTheme.secondaryText)
+            Text(model.selectedTarget?.title ?? L10n.tr("Selected source"))
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(StudioTheme.secondaryText)
+
+            Button("Cancel") {
+                model.cancelRecordingCountdown()
+            }
+            .buttonStyle(.bordered)
+            .keyboardShortcut(.cancelAction)
+        }
+        .padding(48)
+        .frame(width: 460)
+        .studioPanel()
+        .environment(\.locale, localization.locale)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Recording countdown")
+    }
+}
+
+private struct TargetCard: View {
+    let target: CaptureTargetInfo
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 11) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(Color.black.opacity(0.45))
+                    Image(systemName: target.kind == .display ? "display" : "macwindow")
+                        .font(.system(size: 38, weight: .light))
+                        .foregroundStyle(.white.opacity(0.52))
+                    if isSelected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(.white, StudioTheme.purple)
+                            .symbolRenderingMode(.palette)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                            .padding(9)
+                    }
+                }
+                .frame(height: 130)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(target.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                    Text(target.appName ?? "\(Int(target.frame.width)) × \(Int(target.frame.height))")
+                        .font(.system(size: 11))
+                        .foregroundStyle(StudioTheme.secondaryText)
+                        .lineLimit(1)
+                }
+            }
+            .padding(9)
+            .background(isSelected ? StudioTheme.purple.opacity(0.17) : StudioTheme.panel)
+            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .stroke(isSelected ? StudioTheme.purple : StudioTheme.line, lineWidth: isSelected ? 2 : 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(
+            "\(target.appName.map { "\($0), " } ?? "")\(target.title), \(Int(target.frame.width)) by \(Int(target.frame.height))"
+        )
+        .accessibilityValue(Text(LocalizedStringKey(isSelected ? "Selected" : "Not selected")))
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+private struct SettingToggle: View {
+    let title: String
+    let subtitle: String
+    let icon: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        HStack(spacing: 11) {
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(StudioTheme.secondaryText)
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(LocalizedStringKey(title)).font(.system(size: 12, weight: .medium))
+                Text(LocalizedStringKey(subtitle))
+                    .font(.system(size: 10))
+                    .foregroundStyle(StudioTheme.secondaryText)
+            }
+            Spacer()
+            Toggle("", isOn: $isOn).labelsHidden().toggleStyle(.switch)
+        }
+        .padding(.vertical, 13)
+    }
+}
+
+struct ActiveRecordingView: View {
+    @EnvironmentObject private var model: StudioModel
+    @ObservedObject private var localization = AppLocalization.shared
+
+    var body: some View {
+        VStack(spacing: 24) {
+            ZStack {
+                Circle()
+                    .fill(StudioTheme.red.opacity(0.15))
+                    .frame(width: 94, height: 94)
+                Circle()
+                    .fill(StudioTheme.red)
+                    .frame(width: 46, height: 46)
+                    .overlay(Circle().stroke(Color.white.opacity(0.65), lineWidth: 3))
+            }
+            RecordingDurationLabel(captureEngine: model.captureEngine)
+            Text("Recording \(model.selectedTarget?.title ?? L10n.tr("screen"))")
+                .font(.system(size: 14))
+                .foregroundStyle(StudioTheme.secondaryText)
+
+            HStack(spacing: 12) {
+                Button {
+                    Task { await model.cancelRecording() }
+                } label: {
+                    Label("Cancel", systemImage: "xmark")
+                        .padding(.horizontal, 16)
+                        .frame(height: 36)
+                }
+                .buttonStyle(.plain)
+                .background(Color.white.opacity(0.07))
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+
+                Button {
+                    Task { await model.takeScreenshot() }
+                } label: {
+                    Label(LocalizedStringKey(model.isTakingScreenshot ? "Capturing…" : "Screenshot"), systemImage: "camera")
+                        .padding(.horizontal, 12)
+                        .frame(height: 36)
+                }
+                .buttonStyle(.plain)
+                .background(Color.white.opacity(0.07))
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .disabled(model.isTakingScreenshot)
+
+                Button {
+                    Task { await model.stopRecording() }
+                } label: {
+                    Label("Finish recording", systemImage: "stop.fill")
+                }
+                .buttonStyle(PrimaryButtonStyle(tint: StudioTheme.red))
+            }
+
+            RecordingInteractionStatusLabel(captureEngine: model.captureEngine)
+
+            if let warning = model.inputWarning {
+                VStack(spacing: 8) {
+                    Label(LocalizedStringKey(warning), systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(StudioTheme.yellow)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 390)
+                    HStack {
+                        if model.needsInputMonitoring {
+                            Button("Input Monitoring") { model.openInputMonitoringSettings() }
+                        }
+                        if model.needsAccessibility {
+                            Button("Accessibility") { model.openAccessibilitySettings() }
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+
+            if let notice = model.screenshotNotice {
+                Button {
+                    model.revealLastScreenshot()
+                } label: {
+                    Label(notice, systemImage: model.lastScreenshotURL == nil ? "exclamationmark.triangle" : "checkmark.circle.fill")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(model.lastScreenshotURL == nil ? StudioTheme.yellow : Color.green)
+            }
+        }
+        .padding(44)
+        .frame(width: 520)
+        .studioPanel()
+        .environment(\.locale, localization.locale)
+    }
+}
+
+/// Observe the capture clock so this reports events actually received, rather
+/// than claiming success just because a system event monitor was registered.
+private struct RecordingInteractionStatusLabel: View {
+    @ObservedObject var captureEngine: CaptureEngine
+
+    var body: some View {
+        let diagnostics = captureEngine.eventMonitor.diagnostics
+        let hasInteractions = diagnostics.storedClicks > 0 || diagnostics.storedTypingActivity > 0
+        Group {
+            if hasInteractions {
+                Text("Captured: \(diagnostics.storedClicks) clicks · \(diagnostics.storedTypingActivity) input updates")
+            } else {
+                Text("Waiting for interactions. Click or type inside the recorded source to verify tracking.")
+            }
+        }
+            .font(.system(size: 11))
+            .foregroundStyle(!hasInteractions && captureEngine.duration > 5 ? StudioTheme.yellow : StudioTheme.secondaryText)
+            .multilineTextAlignment(.center)
+            .accessibilityIdentifier("recording.interactionStatus")
+    }
+}
+
+/// `StudioModel` owns the engine, but ObservableObject does not automatically
+/// forward changes from nested objects. Observe the engine directly so the
+/// large in-window timer advances alongside the floating controller.
+private struct RecordingDurationLabel: View {
+    @ObservedObject var captureEngine: CaptureEngine
+
+    var body: some View {
+        Text(captureEngine.duration.formattedDuration)
+            .font(.system(size: 52, weight: .medium, design: .monospaced))
+            .monospacedDigit()
+    }
+}
