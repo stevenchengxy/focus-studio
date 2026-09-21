@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "title": "Insight Cloud 数据看板 · 春季发布",
+  "language": "zh",
+  "product": "Insight Cloud，一款面向运营团队的实时数据看板 SaaS",
+  "output": {
+    "path": "renders/insight-cloud-launch.mp4",
+    "width": 1920, "height": 1080, "fps": 30,
+    "background": "#0B0A1F", "font": null,
+    "codec": "libx264", "crf": 18, "preset": "medium",
+    "fade_in": 0.4, "fade_out": 0.8,
+    "logo": {"path": "assets/logo-white.png", "position": "top-right", "width": 150, "margin": 48, "opacity": 0.85}
+  },
+  "style": {
+    "accent": "#5B8CFF",
+    "title": {"size": 100, "subtitle_size": 42, "color": "#FFFFFF", "subtitle_color": "#CFE0FF"},
+    "caption": {"size": 44, "color": "#FFFFFF", "box": true, "box_color": "#000000@0.45", "margin": 96, "kicker_size": 26},
+    "text_fade": 0.35
+  },
+  "audio": {
+    "bgm": {
+      "path": "audio/corporate-uplift.mp3", "volume": 0.16, "fade_in": 1.5, "fade_out": 2.5, "loop": true,
+      "duck": {"mode": "sidechain", "level": 0.3, "threshold": 0.02, "ratio": 8, "attack": 30, "release": 600}
+    },
+    "loudnorm": true,
+    "master_volume": 1.0
+  },
+  "generation": {
+    "enabled": false,
+    "assets_dir": "assets",
+    "video": {"model": "doubao-seedance-2-0-mini-260615", "resolution": "720p", "ratio": "16:9", "generate_audio": false},
+    "image": {"model": "doubao-seedream-4-5-251128", "size": "2K"}
+  },
+  "segments": [
+    {
+      "id": "hero", "type": "ai_clip", "duration": 5,
+      "prompt": "Cinematic abstract hero shot for a real-time analytics SaaS: translucent glass dashboard panels with glowing blue line charts floating in a deep navy gradient space, soft volumetric light, slow camera push-in, subtle particles, premium enterprise mood, photorealistic 3D render. No text, no letters, no numbers, no logos, no people.",
+      "model": "doubao-seedance-2-0-mini-260615", "resolution": "720p", "ratio": "16:9", "seed": 4101,
+      "asset": "assets/hero.mp4",
+      "title": {"text": "Insight Cloud", "subtitle": "实时看板，一眼看懂业务", "start": 0.8},
+      "notes": "片头。字幕是价值主张，一句话。"
+    },
+    {
+      "id": "chapter-01", "type": "demo", "source": "exports/dashboard-demo.mp4",
+      "trim": {"start": 0.0, "end": 11.5},
+      "caption": {"kicker": "01", "text": "连接数据源，3 分钟完成首个看板", "start": 0.5},
+      "audio": true,
+      "transition": {"type": "fade", "duration": 0.6},
+      "notes": "Focus Studio 导出的第一章：新建看板向导。"
+    },
+    {
+      "id": "chapter-02", "type": "demo", "source": "exports/dashboard-demo.mp4",
+      "trim": {"start": 11.5, "end": 24.0},
+      "caption": {"kicker": "02", "text": "拖拽指标卡，实时刷新无需重载", "start": 0.4},
+      "audio": true,
+      "transition": {"type": "slideleft", "duration": 0.5}
+    },
+    {
+      "id": "stat-card", "type": "still", "duration": 4,
+      "prompt": "Elegant dark title card background, deep navy to blue gradient, soft light streaks, faint grid, darker center for text, no text, no logos, no people",
+      "model": "doubao-seedream-4-5-251128", "size": "2K", "ratio": "16:9", "seed": 4102,
+      "asset": "assets/stat-card.png", "motion": "zoom_in", "motion_amount": 0.06,
+      "title": {"text": "查询延迟降低 70%", "subtitle": "基于 2026 Q2 客户样本"},
+      "transition": {"type": "fadeblack", "duration": 0.7},
+      "notes": "静态数据卡：数字来自市场部核实的口径。"
+    },
+    {
+      "id": "chapter-03", "type": "demo", "source": "exports/dashboard-demo.mp4",
+      "trim": {"start": 24.0, "end": 38.0}, "speed": 1.25,
+      "caption": {"kicker": "03", "text": "一键分享到飞书 / 企业微信，权限自动同步", "start": 0.4},
+      "audio": true,
+      "transition": {"type": "fade", "duration": 0.6}
+    },
+    {
+      "id": "cta", "type": "title", "duration": 4, "background": "#0B0A1F",
+      "title": {"text": "立即免费试用", "subtitle": "insight.example.com · 14 天全功能试用"},
+      "transition": {"type": "fade", "duration": 0.8}
+    }
+  ]
+}

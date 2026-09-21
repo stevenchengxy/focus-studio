@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "title": "Forge CLI 2.4 - Remote Cache",
+  "language": "en",
+  "product": "Forge CLI, a build tool for monorepos",
+  "output": {
+    "path": "renders/forge-2.4-remote-cache.mp4",
+    "width": 1920, "height": 1080, "fps": 60,
+    "background": "#101418",
+    "codec": "libx264", "crf": 18, "preset": "slow",
+    "fade_in": 0.3, "fade_out": 0.6
+  },
+  "style": {
+    "accent": "#3DDC97",
+    "title": {"size": 92, "subtitle_size": 38, "color": "#F5F7FA", "subtitle_color": "#B9F5DC"},
+    "caption": {"size": 40, "color": "#F5F7FA", "box": true, "box_color": "#000000@0.5", "margin": 88, "kicker_size": 24},
+    "text_fade": 0.3
+  },
+  "audio": {
+    "bgm": {
+      "path": "audio/minimal-synth-loop.wav", "volume": 0.14, "fade_in": 1.0, "fade_out": 2.0, "loop": true,
+      "duck": {"mode": "segments", "level": 0.35}
+    },
+    "loudnorm": false
+  },
+  "generation": {
+    "enabled": false,
+    "assets_dir": "assets",
+    "video": {"model": "doubao-seedance-2-0-mini-260615", "resolution": "720p", "ratio": "16:9", "generate_audio": false},
+    "image": {"model": "doubao-seedream-4-5-251128", "size": "2K"}
+  },
+  "segments": [
+    {
+      "id": "hero", "type": "still", "duration": 4,
+      "prompt": "Dark terminal-inspired hero background: matte graphite surface, thin emerald light lines converging toward the center like a build graph, soft glow, shallow depth of field, no text, no letters, no logos",
+      "model": "doubao-seedream-4-5-251128", "size": "2K", "ratio": "16:9", "seed": 2401,
+      "asset": "assets/hero.png", "motion": "zoom_in", "motion_amount": 0.08,
+      "title": {"text": "Forge CLI 2.4", "subtitle": "Remote cache: builds that finish before your coffee", "start": 0.5},
+      "notes": "A still + Ken Burns keeps the opener cheap (one image instead of a clip)."
+    },
+    {
+      "id": "chapter-01", "type": "demo", "source": "exports/forge-remote-cache.mp4",
+      "trim": {"start": 0.0, "end": 9.0},
+      "caption": {"kicker": "01", "text": "forge cache login - one command, zero config", "start": 0.4},
+      "audio": false,
+      "transition": {"type": "fade", "duration": 0.5},
+      "notes": "Terminal recording from Focus Studio. Mute the source: keystrokes are distracting under music."
+    },
+    {
+      "id": "chapter-02", "type": "demo", "source": "exports/forge-remote-cache.mp4",
+      "trim": {"start": 9.0, "end": 21.0}, "speed": 1.5,
+      "caption": {"kicker": "02", "text": "Cold build 48 s -> warm build 3 s", "start": 0.4},
+      "audio": false,
+      "transition": {"type": "cut"},
+      "notes": "Sped up 1.5x; the cut keeps the terminal timeline honest."
+    },
+    {
+      "id": "b-roll", "type": "ai_clip", "duration": 4,
+      "prompt": "Abstract product b-roll: dozens of small translucent cubes assembling into a larger structure on a dark graphite plane, emerald accent light, slow orbiting camera, clean minimal 3D render. No text, no logos, no people.",
+      "model": "doubao-seedance-2-0-mini-260615", "resolution": "720p", "ratio": "16:9", "seed": 2402,
+      "asset": "assets/b-roll.mp4",
+      "caption": {"text": "Artifacts are content-addressed and shared across the whole team", "start": 0.3},
+      "transition": {"type": "smoothleft", "duration": 0.5}
+    },
+    {
+      "id": "chapter-03", "type": "demo", "source": "exports/forge-remote-cache.mp4",
+      "trim": {"start": 21.0, "end": 33.5},
+      "caption": {"kicker": "03", "text": "CI reuses local artifacts - no more duplicate builds", "start": 0.4},
+      "audio": false,
+      "transition": {"type": "fade", "duration": 0.5}
+    },
+    {
+      "id": "cta", "type": "title", "duration": 3.5, "background": "#101418",
+      "title": {"text": "npm i -g forge-cli@2.4", "subtitle": "Changelog and docs at forge.example.dev"},
+      "transition": {"type": "fadeblack", "duration": 0.7}
+    }
+  ]
+}
