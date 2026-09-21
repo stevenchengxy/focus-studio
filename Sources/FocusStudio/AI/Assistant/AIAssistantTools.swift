@@ -8,13 +8,30 @@ import UniformTypeIdentifiers
 enum AIAssistantToolCatalog {
     static var standard: [any AIAssistantTool] {
         [
+            // Pacing for multi-step flows ("record for 8 seconds").
+            WaitTool(),
+            // Recording and library (the app itself).
+            ListRecordingSourcesTool(),
+            StartRecordingTool(),
+            StopRecordingTool(),
+            ListProjectsTool(),
+            OpenProjectTool(),
+            CloseEditorTool(),
+            // Editing the open project.
+            AddZoomTool(),
+            RemoveZoomTool(),
+            SetZoomStyleTool(),
+            UpdateSettingsTool(),
+            SetChaptersTool(),
+            SetBackgroundImageTool(),
+            SetBackgroundMusicTool(),
+            SetSoundEffectsTool(),
+            // Generated media and output.
             GenerateImageTool(),
             GenerateVideoTool(),
             CaptureFrameTool(),
-            SetBackgroundImageTool(),
-            UpdateSettingsTool(),
-            SetChaptersTool(),
             ListAssetsTool(),
+            ExportProjectTool(),
             ExportDemoTool(),
             AssembleVideoTool(),
             RevealInFinderTool(),
@@ -179,8 +196,9 @@ enum AIToolPaths {
 // MARK: - Shared helpers
 
 enum AIToolSupport {
-    static func requireArkClient(_ context: AIAssistantContext) throws -> ArkMediaClient {
-        guard let key = context.arkAPIKey()?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty else {
+    static func requireArkClient(_ context: AIAssistantContext) async throws -> ArkMediaClient {
+        let stored = await MainActor.run { context.arkAPIKey() }
+        guard let key = stored?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty else {
             throw AIToolError.failed(L10n.tr("Add a Volcengine Ark API key in Settings to generate media."))
         }
         return ArkMediaClient(apiKey: key, baseURL: context.arkBaseURL)
@@ -275,7 +293,7 @@ struct GenerateImageTool: AIAssistantTool {
         let model = arguments.string("model") ?? ArkMediaClient.defaultImageModel
         let references = arguments.stringList("reference_images")
         guard references.count <= 3 else { throw AIToolError.invalidArgument("reference_images accepts at most 3 images.") }
-        let client = try AIToolSupport.requireArkClient(context)
+        let client = try await AIToolSupport.requireArkClient(context)
         let referenceURLs = try references.map { try AIToolPaths.mediaURL($0, kind: .image, context: context) }
         let size = ArkMediaClient.defaultImageSize(ratio: ratio)
 
@@ -389,7 +407,7 @@ struct GenerateVideoTool: AIAssistantTool {
         let plan = try plan(arguments, strict: true)
         let referenceImages = arguments.stringList("reference_images")
         guard referenceImages.count <= 4 else { throw AIToolError.invalidArgument("reference_images accepts at most 4 images.") }
-        let client = try AIToolSupport.requireArkClient(context)
+        let client = try await AIToolSupport.requireArkClient(context)
 
         var request = ArkMediaClient.VideoTaskRequest(model: plan.model, prompt: prompt)
         if let firstFrame = arguments.string("first_frame") {
@@ -589,6 +607,13 @@ struct UpdateSettingsTool: AIAssistantTool {
         context: AIAssistantContext,
         progress: @escaping @Sendable (String) -> Void
     ) async throws -> AIToolResult {
+        let changes = try await Self.apply(arguments: raw, context: context)
+        return AIToolResult(text: L10n.format("Updated %@", changes.joined(separator: ", ")))
+    }
+
+    /// Validates and applies the settings, returning one "key = value" note per
+    /// change. Shared with set_zoom_style for the keys both tools accept.
+    static func apply(arguments raw: [String: Any], context: AIAssistantContext) async throws -> [String] {
         let arguments = AIToolArguments(raw)
         let requested = raw.keys.filter { !(raw[$0] is NSNull) }
         let unknown = requested.filter { !Self.allowedKeys.contains($0) }
@@ -698,7 +723,7 @@ struct UpdateSettingsTool: AIAssistantTool {
         await MainActor.run {
             context.updateProject { $0.settings = updated }
         }
-        return AIToolResult(text: L10n.format("Updated %@", changes.joined(separator: ", ")))
+        return changes
     }
 
     static func number(_ value: Double) -> String {
@@ -824,25 +849,24 @@ struct ListAssetsTool: AIAssistantTool {
 
 // MARK: - export_demo
 
+/// Older prompts and transcripts call the export `export_demo`; it is the same
+/// tool as `export_project` (same arguments and output location).
 struct ExportDemoTool: AIAssistantTool {
-    let name = "export_demo"
-    let summary = "Render the current recording with its look, zooms, captions and audio to an MP4 in the assets folder (needed before assemble_video can combine it with intro/outro clips)."
+    private let tool = ExportProjectTool(
+        name: "export_demo",
+        summary: "Alias of export_project: render the open project to an MP4 (default export-<timestamp>.mp4 in the assets folder)."
+    )
 
-    var parametersSchema: [String: Any] {
-        ["type": "object", "properties": [String: Any]()]
-    }
+    var name: String { tool.name }
+    var summary: String { tool.summary }
+    var parametersSchema: [String: Any] { tool.parametersSchema }
 
     func run(
         arguments raw: [String: Any],
         context: AIAssistantContext,
         progress: @escaping @Sendable (String) -> Void
     ) async throws -> AIToolResult {
-        let project = try await AIToolSupport.requireProject(context)
-        let output = try context.newAssetURL(prefix: "demo-export", fileExtension: "mp4")
-        progress(L10n.tr("Exporting…"))
-        let result = try await ProjectVideoRenderer.export(project: project, to: output)
-        let text = L10n.format("Exported %@ (%@ s, %lld × %lld)", output.lastPathComponent, AIToolSupport.seconds(result.duration), result.width, result.height)
-        return AIToolResult(text: text + "\n" + output.path, attachments: [output])
+        try await tool.run(arguments: raw, context: context, progress: progress)
     }
 }
 
@@ -1095,5 +1119,47 @@ struct RevealInFinderTool: AIAssistantTool {
             NSWorkspace.shared.activateFileViewerSelecting([url])
         }
         return AIToolResult(text: L10n.format("Revealed %@ in Finder", url.lastPathComponent))
+    }
+}
+
+// MARK: - Wait
+
+/// Lets multi-step flows pause, for example between start_recording and
+/// stop_recording, or while a page settles. Cancellable; capped at two minutes.
+struct WaitTool: AIAssistantTool {
+    let name = "wait"
+    let summary = "Pause for a number of seconds (1-120) before the next step, e.g. to let a recording run for the requested time or a page load. Reports progress every 5 seconds."
+
+    var parametersSchema: [String: Any] {
+        ["type": "object",
+         "properties": ["seconds": ["type": "number", "description": "Seconds to wait, 1-120"]],
+         "required": ["seconds"]]
+    }
+
+    func run(
+        arguments: [String: Any],
+        context: AIAssistantContext,
+        progress: @escaping @Sendable (String) -> Void
+    ) async throws -> AIToolResult {
+        let seconds: Double
+        switch arguments["seconds"] {
+        case let value as Double: seconds = value
+        case let value as Int: seconds = Double(value)
+        case let value as String: seconds = Double(value.trimmingCharacters(in: .whitespaces)) ?? .nan
+        default: seconds = .nan
+        }
+        guard seconds.isFinite, seconds >= 1, seconds <= 120 else {
+            throw AIToolError.invalidArgument("seconds must be a number between 1 and 120")
+        }
+        let start = Date()
+        while true {
+            try Task.checkCancellation()
+            let remaining = seconds - Date().timeIntervalSince(start)
+            guard remaining > 0 else { break }
+            try await Task.sleep(nanoseconds: UInt64(min(5, remaining) * 1_000_000_000))
+            let left = seconds - Date().timeIntervalSince(start)
+            if left > 0.5 { progress(L10n.format("Waiting… %lld s left", Int(left.rounded(.up)))) }
+        }
+        return AIToolResult(text: "Waited \(Int(seconds.rounded())) s.")
     }
 }

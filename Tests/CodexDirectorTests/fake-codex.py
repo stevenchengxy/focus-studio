@@ -6,7 +6,12 @@ import sys
 import time
 
 scenario = os.environ.get("FOCUS_STUDIO_CODEX_FIXTURE", "new-user")
-authenticated = scenario in ("existing", "stale-model")
+authenticated = scenario in ("existing", "stale-model", "assistant-turn")
+# assistant-turn: one-shot completions on dedicated threads (see completeText).
+assistant_threads = 0
+assistant_turns = 0
+assistant_instructions = {}
+pending_interrupt = None
 
 if len(sys.argv) > 1 and sys.argv[1] == "--version":
     # Version probing happens before any protocol traffic and never reads stdin.
@@ -39,7 +44,7 @@ for line in sys.stdin:
             sys.exit(1)
         if scenario == "slow-connect":
             time.sleep(0.35)
-        if scenario not in ("existing", "stale-model"):
+        if scenario not in ("existing", "stale-model", "assistant-turn"):
             assert 'cli_auth_credentials_store="keyring"' in sys.argv
             assert "CodexDirectorTests-" in os.environ.get("CODEX_HOME", "")
         result = {"userAgent": "fixture"}
@@ -83,7 +88,51 @@ for line in sys.stdin:
         assert authenticated
         assert params["model"] == "model-default"
         assert params["sandbox"] == "read-only"
-        result = {"thread": {"id": "fixture-thread"}}
+        if scenario == "assistant-turn":
+            assert params["approvalPolicy"] == "never" and params["ephemeral"] is True
+            assistant_threads += 1
+            thread_id = "assistant-thread-%d" % assistant_threads
+            assistant_instructions[thread_id] = params["developerInstructions"]
+            result = {"thread": {"id": thread_id}}
+        else:
+            result = {"thread": {"id": "fixture-thread"}}
+    elif method == "turn/start" and scenario == "assistant-turn":
+        assert params["effort"] == "medium"
+        assistant_turns += 1
+        thread_id = params["threadId"]
+        turn_id = "assistant-turn-%d" % assistant_turns
+        prompt = params["input"][0]["text"]
+        response = {"id": request_id, "result": {"turn": {"id": turn_id}}}
+        if "slow" in prompt:
+            # Answer only after turn/interrupt, with an interrupted turn.
+            pending_interrupt = (thread_id, turn_id)
+            send(response)
+            continue
+        if "fail" in prompt:
+            turn = {"id": turn_id, "status": "failed", "error": {"message": "fixture failure"}}
+        else:
+            text = json.dumps({"reply": "echo: " + prompt, "schema": "outputSchema" in params,
+                               "instructions": assistant_instructions[thread_id], "thread": thread_id})
+            turn = {"id": turn_id, "status": "completed", "items": [
+                {"type": "agentMessage", "phase": "commentary", "text": "thinking"},
+                {"type": "agentMessage", "phase": "final_answer", "text": text}]}
+        completion = {"method": "turn/completed", "params": {"threadId": thread_id, "turn": turn}}
+        if assistant_turns % 2 == 1:
+            # Both lines land in one read: the completion is processed before the
+            # awaiting caller learns its turn id and must not be lost.
+            print(json.dumps(completion) + "\n" + json.dumps(response), flush=True)
+        else:
+            print(json.dumps(response) + "\n" + json.dumps(completion), flush=True)
+        continue
+    elif method == "turn/interrupt":
+        assert scenario == "assistant-turn" and pending_interrupt is not None
+        thread_id, turn_id = pending_interrupt
+        assert params["threadId"] == thread_id and params["turnId"] == turn_id
+        pending_interrupt = None
+        print(json.dumps({"id": request_id, "result": {}}) + "\n" + json.dumps({
+            "method": "turn/completed", "params": {"threadId": thread_id, "turn": {
+                "id": turn_id, "status": "interrupted"}}}), flush=True)
+        continue
     elif method == "turn/start":
         assert params["effort"] == "medium"
         assert "outputSchema" in params

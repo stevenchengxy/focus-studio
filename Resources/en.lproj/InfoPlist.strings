@@ -1,3 +1,4 @@
 "NSScreenCaptureUsageDescription" = "Focus Studio records the screen or window you select to create your video.";
 "NSMicrophoneUsageDescription" = "Focus Studio records your microphone when you enable narration.";
 "NSAudioCaptureUsageDescription" = "Focus Studio records system audio when you enable app sound.";
+"NSSpeechRecognitionUsageDescription" = "Focus Studio transcribes your voice so you can talk to the AI assistant.";

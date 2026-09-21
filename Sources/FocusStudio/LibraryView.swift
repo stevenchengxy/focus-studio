@@ -8,9 +8,7 @@ struct LibraryView: View {
     @State private var pendingDeletion: [RecordingProject] = []
     @State private var confirmsDeletion = false
     @State private var trashedCount: Int?
-    @State private var showsAssistant = false
-    @State private var assistantSession: AIAssistantSession?
-    @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
 
     private var orderedIDs: [UUID] { model.projects.map(\.id) }
     private var selectedProjects: [RecordingProject] {
@@ -34,8 +32,7 @@ struct LibraryView: View {
                 AppLanguageMenu()
                     .foregroundStyle(StudioTheme.secondaryText)
                 Button {
-                    if assistantSession == nil { assistantSession = model.makeAssistantSession(projectID: nil) }
-                    showsAssistant = true
+                    openWindow(id: AssistantWindow.id)
                 } label: {
                     Label("AI Assistant", systemImage: "sparkles")
                 }
@@ -222,19 +219,6 @@ struct LibraryView: View {
         }
         .disabled(model.isManagingProjects)
         .onChange(of: orderedIDs) { _, ids in selection.retainExisting(ids) }
-        .sheet(isPresented: $showsAssistant) {
-            if let assistantSession {
-                AIAssistantPanel(
-                    session: assistantSession,
-                    modelLabel: model.assistantModelLabel,
-                    onClose: { showsAssistant = false },
-                    openSettings: { openSettings() }
-                )
-                .frame(width: 540, height: 660)
-                .background(StudioTheme.window)
-                .preferredColorScheme(.dark)
-            }
-        }
         .sheet(item: $renamingProject) { project in
             RenameRecordingSheet(project: project, failureMessage: { model.errorMessage }) { name in
                 let succeeded = await model.renameProject(id: project.id, to: name)

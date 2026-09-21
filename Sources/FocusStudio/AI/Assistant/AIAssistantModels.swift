@@ -63,33 +63,71 @@ struct AIToolResult: Equatable, Sendable {
     }
 }
 
-/// Everything a tool may touch. The integrator builds one per editor session;
-/// tools never reach into app state any other way, which keeps them testable.
+/// Everything a tool may touch. The integrator builds one for the app; tools
+/// never reach into app state any other way, which keeps them testable.
+/// The project, the assets folder and the language are resolved on every
+/// access so one long-lived session follows whatever the user has open.
 struct AIAssistantContext: Sendable {
-    /// Where generated files land. Created on first use via ``ensuredAssetsDirectory()``.
-    var assetsDirectory: URL
+    /// Where generated files land right now: the open project's `ai/` folder or
+    /// the shared AI Assets folder. Created on first use via ``ensuredAssetsDirectory()``.
+    var assetsDirectory: URL {
+        get { assetsDirectoryProvider() }
+        set { let fixed = newValue; assetsDirectoryProvider = { fixed } }
+    }
     /// "zh-Hans" or "en": the language the model should answer in.
-    var uiLanguage: String
+    var uiLanguage: String {
+        get { uiLanguageProvider() }
+        set { let fixed = newValue; uiLanguageProvider = { fixed } }
+    }
     var readProject: @MainActor @Sendable () -> RecordingProject?
     var updateProject: @MainActor @Sendable ((inout RecordingProject) -> Void) -> Void
-    /// Read lazily so the Keychain is only touched when a paid tool runs.
-    var arkAPIKey: @Sendable () -> String?
+    /// Read on the main actor when a paid tool runs, so a key added in Settings
+    /// after the session was created is picked up.
+    var arkAPIKey: @MainActor @Sendable () -> String?
     var arkBaseURL: URL
+    /// The app itself (recording, library, editor). Nil in unit tests that only
+    /// exercise project tools; app tools then report that control is unavailable.
+    var app: (any AppControlling)?
+
+    private var assetsDirectoryProvider: @Sendable () -> URL
+    private var uiLanguageProvider: @Sendable () -> String
 
     init(
         assetsDirectory: URL,
         uiLanguage: String,
         readProject: @escaping @MainActor @Sendable () -> RecordingProject?,
         updateProject: @escaping @MainActor @Sendable ((inout RecordingProject) -> Void) -> Void,
-        arkAPIKey: @escaping @Sendable () -> String?,
-        arkBaseURL: URL = URL(string: "https://ark.cn-beijing.volces.com/api/v3")!
+        arkAPIKey: @escaping @MainActor @Sendable () -> String?,
+        arkBaseURL: URL = URL(string: "https://ark.cn-beijing.volces.com/api/v3")!,
+        app: (any AppControlling)? = nil
     ) {
-        self.assetsDirectory = assetsDirectory
-        self.uiLanguage = uiLanguage
+        self.init(
+            assetsDirectoryProvider: { assetsDirectory },
+            uiLanguageProvider: { uiLanguage },
+            readProject: readProject,
+            updateProject: updateProject,
+            arkAPIKey: arkAPIKey,
+            arkBaseURL: arkBaseURL,
+            app: app
+        )
+    }
+
+    init(
+        assetsDirectoryProvider: @escaping @Sendable () -> URL,
+        uiLanguageProvider: @escaping @Sendable () -> String,
+        readProject: @escaping @MainActor @Sendable () -> RecordingProject?,
+        updateProject: @escaping @MainActor @Sendable ((inout RecordingProject) -> Void) -> Void,
+        arkAPIKey: @escaping @MainActor @Sendable () -> String?,
+        arkBaseURL: URL = URL(string: "https://ark.cn-beijing.volces.com/api/v3")!,
+        app: (any AppControlling)? = nil
+    ) {
+        self.assetsDirectoryProvider = assetsDirectoryProvider
+        self.uiLanguageProvider = uiLanguageProvider
         self.readProject = readProject
         self.updateProject = updateProject
         self.arkAPIKey = arkAPIKey
         self.arkBaseURL = arkBaseURL
+        self.app = app
     }
 
     var isChinese: Bool { uiLanguage.lowercased().hasPrefix("zh") }
@@ -148,13 +186,19 @@ enum AIToolError: LocalizedError, Equatable {
     case fileNotFound(String)
     case noProject
     case failed(String)
+    /// The context has no app controller (unit tests) so app tools cannot run.
+    case appUnavailable
+    /// A wait for the app (countdown, stop, export) exceeded its time limit.
+    case timedOut(String)
 
     var errorDescription: String? {
         switch self {
         case let .invalidArgument(message): return message
         case let .fileNotFound(path): return "File not found: \(path)"
-        case .noProject: return "No recording is open."
+        case .noProject: return "No recording is open. Open a project from the library (open_project) or record one first."
         case let .failed(message): return message
+        case .appUnavailable: return "App control is not available in this context."
+        case let .timedOut(message): return message
         }
     }
 }

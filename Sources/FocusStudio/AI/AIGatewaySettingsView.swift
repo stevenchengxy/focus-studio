@@ -8,9 +8,12 @@ struct AIGatewaySettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            defaultModelBar
-                .padding(.horizontal, 18)
-                .padding(.vertical, 12)
+            VStack(spacing: 10) {
+                defaultModelBar
+                assistantBrainBar
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
             Divider()
             HStack(spacing: 0) {
                 providerList
@@ -20,10 +23,29 @@ struct AIGatewaySettingsView: View {
                     .id(selectedKind)
             }
         }
-        .frame(width: 620, height: 560)
+        .frame(width: 620, height: 600)
         .background(StudioTheme.panel)
         .foregroundStyle(StudioTheme.text)
         .onAppear { store.refreshKeyPresence() }
+    }
+
+    /// Which brain the conversational assistant uses; the default model keeps
+    /// serving the editor's own AI buttons either way.
+    private var assistantBrainBar: some View {
+        HStack(spacing: 12) {
+            Text("Assistant brain")
+                .font(.system(size: 13, weight: .semibold))
+            Spacer()
+            Picker("Assistant brain", selection: $store.assistantBrain) {
+                ForEach(AssistantBrain.allCases) { brain in
+                    Text(LocalizedStringKey(brain.title)).tag(brain)
+                }
+            }
+            .labelsHidden()
+            .frame(maxWidth: 330)
+            .help("Answers the AI Assistant window. Codex uses the sign-in from the Codex tab.")
+            .accessibilityIdentifier("ai.assistantBrain")
+        }
     }
 
     private var defaultModelBar: some View {
@@ -110,6 +132,9 @@ private struct AIProviderDetailView: View {
     @State private var baseURLDraft: String
     @State private var showsAdvanced: Bool
     @State private var keychainMessage: String?
+    @State private var arkImportMessage: String?
+    @State private var isImportingArkEnvironment = false
+    private let hasArkEnvironmentFile = AIGatewayStore.arkEnvironmentFileExists
 
     init(store: AIGatewayStore, kind: AIProviderKind) {
         self.store = store
@@ -147,6 +172,12 @@ private struct AIProviderDetailView: View {
                 GridRow {
                     label("Status")
                     statusRow
+                }
+                if kind == .volcengineArk, hasArkEnvironmentFile {
+                    GridRow {
+                        label("ark.env")
+                        arkEnvironmentRow
+                    }
                 }
             }
             DisclosureGroup("Advanced", isExpanded: $showsAdvanced) {
@@ -248,6 +279,52 @@ private struct AIProviderDetailView: View {
                 .font(.system(size: 12))
                 .lineLimit(2)
                 .textSelection(.enabled)
+        }
+    }
+
+    /// Shown only when ~/.config/focus-studio/ark.env exists: one click copies
+    /// its ARK_API_KEY into the Keychain and tests the provider.
+    private var arkEnvironmentRow: some View {
+        HStack(spacing: 8) {
+            Button("Import from ark.env") { importArkEnvironment() }
+                .disabled(isImportingArkEnvironment || isTesting)
+                .help("Copy ARK_API_KEY from ~/.config/focus-studio/ark.env into the Keychain and test it")
+                .accessibilityIdentifier("ai.importArkEnv")
+            if isImportingArkEnvironment {
+                ProgressView().controlSize(.small)
+                Text("Importing…")
+                    .font(.system(size: 12))
+                    .foregroundStyle(StudioTheme.secondaryText)
+            } else if let arkImportMessage {
+                Text(verbatim: arkImportMessage)
+                    .font(.system(size: 12))
+                    .foregroundStyle(StudioTheme.secondaryText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
+    private func importArkEnvironment() {
+        guard !isImportingArkEnvironment else { return }
+        isImportingArkEnvironment = true
+        apiKeyDraft = ""
+        Task {
+            let outcome = await store.importArkEnvironmentKey()
+            switch outcome {
+            case .fileMissing:
+                arkImportMessage = L10n.tr("ark.env was not found")
+            case .keyMissing:
+                arkImportMessage = L10n.tr("No ARK_API_KEY found in ark.env")
+            case let .keychainFailed(message):
+                arkImportMessage = message
+            case let .imported(connected, summary):
+                arkImportMessage = connected
+                    ? L10n.tr("Key imported from ark.env and tested")
+                    : L10n.format("Key imported from ark.env, but the test failed: %@", L10n.tr(summary ?? ""))
+            }
+            isImportingArkEnvironment = false
         }
     }
 

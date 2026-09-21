@@ -2,7 +2,11 @@ import Combine
 import Foundation
 import Security
 
-/// Secret storage. The app uses the macOS Keychain; tests keep values in memory.
+/// Secret storage. The app keeps keys in a 0600 file under Application Support
+/// (see `FileSecretStore`); tests keep values in memory. `SecurityKeychainStore`
+/// remains available but is not the default: an ad-hoc-signed build is a new
+/// app to the Keychain after every rebuild, and the resulting access prompt
+/// blocks the main thread inside SecItemCopyMatching.
 protocol KeychainStore {
     func read(account: String) throws -> String?
     func write(_ value: String, account: String) throws
@@ -16,6 +20,64 @@ struct KeychainError: Error, LocalizedError, Equatable {
     var errorDescription: String? {
         let message = (SecCopyErrorMessageString(status, nil) as String?) ?? "OSStatus \(status)"
         return "Keychain: \(message)"
+    }
+}
+
+/// Provider keys in `~/Library/Application Support/FocusStudio/secrets.json`,
+/// directory 0700 and file 0600, written atomically. The same model as Codex's
+/// own `auth.json`: readable only by this user, never prompting, never bundled.
+final class FileSecretStore: KeychainStore {
+    static let defaultURL: URL = FileManager.default
+        .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("FocusStudio", isDirectory: true)
+        .appendingPathComponent("secrets.json")
+
+    private let url: URL
+    private let lock = NSLock()
+
+    init(url: URL = FileSecretStore.defaultURL) {
+        self.url = url
+    }
+
+    func read(account: String) throws -> String? {
+        lock.lock(); defer { lock.unlock() }
+        return try load()[account]
+    }
+
+    func write(_ value: String, account: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        var values = try load()
+        values[account] = value
+        try save(values)
+    }
+
+    func delete(account: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        var values = try load()
+        guard values.removeValue(forKey: account) != nil else { return }
+        try save(values)
+    }
+
+    func contains(account: String) -> Bool {
+        (try? read(account: account)).flatMap { $0 } != nil
+    }
+
+    private func load() throws -> [String: String] {
+        guard FileManager.default.fileExists(atPath: url.path) else { return [:] }
+        let data = try Data(contentsOf: url)
+        guard !data.isEmpty else { return [:] }
+        return try JSONDecoder().decode([String: String].self, from: data)
+    }
+
+    private func save(_ values: [String: String]) throws {
+        let directory = url.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(values)
+        try data.write(to: url, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 }
 
@@ -90,6 +152,35 @@ final class InMemoryKeychainStore: KeychainStore {
     func contains(account: String) -> Bool { values[account] != nil }
 }
 
+/// Which model answers the conversational assistant.
+enum AssistantBrain: String, CaseIterable, Codable, Identifiable, Sendable {
+    /// The app-wide default text model from the gateway.
+    case gatewayModel
+    /// A Codex app-server thread using the Codex Director sign-in.
+    case codex
+
+    nonisolated static let defaultsKey = "assistant.brain"
+
+    var id: String { rawValue }
+
+    /// Localizable key.
+    var title: String {
+        switch self {
+        case .gatewayModel: return "Default text model"
+        case .codex: return "Codex (ChatGPT sign-in)"
+        }
+    }
+}
+
+/// Outcome of copying `ARK_API_KEY` from `~/.config/focus-studio/ark.env`.
+enum ArkEnvironmentImport: Equatable, Sendable {
+    case fileMissing
+    case keyMissing
+    case keychainFailed(String)
+    /// The key was stored; `connected` is the result of the provider test.
+    case imported(connected: Bool, summary: String?)
+}
+
 /// The UserDefaults payload. It never carries a secret.
 struct AIGatewayPreferences: Codable, Equatable {
     var providers: [AIProviderConfiguration] = []
@@ -118,6 +209,10 @@ final class AIGatewayStore: ObservableObject {
     @Published var defaultTextModel: AITextModelSelection? {
         didSet { persist() }
     }
+    /// Persisted separately under `assistant.brain`; read by the assistant on every send.
+    @Published var assistantBrain: AssistantBrain {
+        didSet { defaults.set(assistantBrain.rawValue, forKey: AssistantBrain.defaultsKey) }
+    }
     @Published private(set) var providersWithKeys: Set<AIProviderKind> = []
     @Published private(set) var testingProviders: Set<AIProviderKind> = []
 
@@ -126,7 +221,7 @@ final class AIGatewayStore: ObservableObject {
     private let session: URLSession
 
     init(defaults: UserDefaults = .standard,
-         keychain: any KeychainStore = SecurityKeychainStore(),
+         keychain: any KeychainStore = FileSecretStore(),
          session: URLSession = .shared) {
         self.defaults = defaults
         self.keychain = keychain
@@ -134,7 +229,53 @@ final class AIGatewayStore: ObservableObject {
         let saved = Self.load(from: defaults)
         providers = Self.completeProviderList(saved.providers)
         defaultTextModel = saved.defaultTextModel
+        assistantBrain = AssistantBrain(rawValue: defaults.string(forKey: AssistantBrain.defaultsKey) ?? "") ?? .gatewayModel
         refreshKeyPresence()
+    }
+
+    // MARK: - ark.env
+
+    /// `~/.config/focus-studio/ark.env`, the file the Claude Code skills read.
+    /// The app only ever reads it.
+    nonisolated static var arkEnvironmentFileURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/focus-studio/ark.env")
+    }
+
+    nonisolated static var arkEnvironmentFileExists: Bool {
+        FileManager.default.fileExists(atPath: arkEnvironmentFileURL.path)
+    }
+
+    /// `ARK_API_KEY=…` from the env file (quotes and `export` tolerated).
+    nonisolated static func arkEnvironmentKey(from url: URL = arkEnvironmentFileURL) -> String? {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        for rawLine in text.split(whereSeparator: \.isNewline) {
+            var line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("export ") { line = String(line.dropFirst("export ".count)).trimmingCharacters(in: .whitespaces) }
+            guard line.hasPrefix("ARK_API_KEY=") else { continue }
+            var value = String(line.dropFirst("ARK_API_KEY=".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            if value.count >= 2, let first = value.first, let last = value.last, first == last, first == "\"" || first == "'" {
+                value = String(value.dropFirst().dropLast())
+            }
+            return value.isEmpty ? nil : value
+        }
+        return nil
+    }
+
+    /// Copies the env file's key into the Keychain, tests Volcengine Ark and,
+    /// when no default text model exists, lets the test pick the recommended
+    /// Doubao model. Safe to call at every launch: nothing happens without a file.
+    func importArkEnvironmentKey(from url: URL = arkEnvironmentFileURL) async -> ArkEnvironmentImport {
+        guard FileManager.default.fileExists(atPath: url.path) else { return .fileMissing }
+        guard let key = Self.arkEnvironmentKey(from: url) else { return .keyMissing }
+        do {
+            try setAPIKey(key, for: .volcengineArk)
+        } catch {
+            return .keychainFailed(error.localizedDescription)
+        }
+        await test(.volcengineArk)
+        let configuration = configuration(for: .volcengineArk)
+        return .imported(connected: configuration.lastTestSucceeded == true, summary: configuration.lastTestSummary)
     }
 
     // MARK: - Configuration

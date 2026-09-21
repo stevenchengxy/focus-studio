@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import AVFoundation
+import Combine
 import CoreImage
 import FocusStudioCapture
 import FocusStudioCore
@@ -22,7 +23,9 @@ final class StudioModel: ObservableObject {
 
     @Published var destination: Destination = .library
     @Published var projects: [RecordingProject] = []
-    @Published var activeProject: RecordingProject?
+    @Published var activeProject: RecordingProject? {
+        didSet { assistantAssetsLocator.update(sourceVideoPath: activeProject?.sourceVideoPath) }
+    }
     @Published var selectedTargetID: String?
     @Published private(set) var selectedAreaTarget: CaptureTargetInfo?
     @Published private(set) var isSelectingArea = false
@@ -57,8 +60,18 @@ final class StudioModel: ObservableObject {
 
     let captureEngine = CaptureEngine()
     let codexDirector = CodexDirectorService()
+    /// A second app-server connection for the AI assistant when its brain is
+    /// Codex. It shares the Director's preferences (executable, model, account)
+    /// but keeps its own thread so planning and chatting never interleave.
+    let codexAssistant = CodexDirectorService()
     /// LLM provider keys and the default text model for every AI feature.
     let aiGateway = AIGatewayStore()
+    /// The one assistant conversation for the whole app, created on first use.
+    /// Its context follows whatever project is open; see ``AIAssistantContext``.
+    private(set) lazy var assistantSession: AIAssistantSession = makeAssistantSession()
+    private let assistantAssetsLocator = AssistantAssetsLocator()
+    private var assistantObservers: Set<AnyCancellable> = []
+    private var didCreateAssistantSession = false
     private let store: ProjectStore
     private let interactionTrackingAccess: @MainActor () -> Bool
     private let inputMonitoringAccess: @MainActor () -> Bool
@@ -104,15 +117,18 @@ final class StudioModel: ObservableObject {
         guard !didBootstrap else { return }
         didBootstrap = true
         await reloadProjects()
+        // A key in ~/.config/focus-studio/ark.env (the file the Claude Code
+        // skills use) is imported silently whenever the Keychain has none, so
+        // the assistant works on a fresh Mac without a visit to Settings. The QA
+        // hook FOCUS_STUDIO_IMPORT_ARK_ENV=1 forces a re-import.
+        let arkImport = Task { [weak self] in
+            await self?.importArkEnvironmentKeyIfNeeded(
+                force: ProcessInfo.processInfo.environment["FOCUS_STUDIO_IMPORT_ARK_ENV"] == "1"
+            )
+        }
         // QA hook: `open -n "Focus Studio.app" --env FOCUS_STUDIO_START_DESTINATION=recorder`
         // lands on the recording picker so screenshots of live previews can be
         // taken without scripted clicks. Ignored for any other value.
-        // QA / convenience hook: FOCUS_STUDIO_IMPORT_ARK_ENV=1 copies ARK_API_KEY from
-        // ~/.config/focus-studio/ark.env into the Keychain-backed gateway, tests the
-        // provider and, when nothing else is configured, makes it the default text model.
-        if ProcessInfo.processInfo.environment["FOCUS_STUDIO_IMPORT_ARK_ENV"] == "1" {
-            await importArkEnvironmentKey()
-        }
         switch ProcessInfo.processInfo.environment["FOCUS_STUDIO_START_DESTINATION"] {
         case "recorder":
             await showRecorder()
@@ -122,78 +138,119 @@ final class StudioModel: ObservableObject {
         default:
             break
         }
+        // A scripted prompt (FOCUS_STUDIO_ASSISTANT_PROMPT) needs the imported
+        // model to exist first; otherwise the test finishes in the background
+        // and the assistant picks the model up through its availability refresh.
+        if ProcessInfo.processInfo.environment["FOCUS_STUDIO_ASSISTANT_PROMPT"] != nil {
+            await arkImport.value
+        }
     }
 
     /// ARK_API_KEY from ~/.config/focus-studio/ark.env, the same file the
     /// Claude Code skills read. Never written anywhere by the app.
     nonisolated static func arkEnvironmentKey() -> String? {
-        let envURL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/focus-studio/ark.env")
-        guard let text = try? String(contentsOf: envURL, encoding: .utf8) else { return nil }
-        let key = text.split(separator: "\n")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .first { $0.hasPrefix("ARK_API_KEY=") }?
-            .dropFirst("ARK_API_KEY=".count)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let key, !key.isEmpty else { return nil }
-        return key
+        AIGatewayStore.arkEnvironmentKey()
     }
 
-    private func importArkEnvironmentKey() async {
-        guard let key = Self.arkEnvironmentKey() else { return }
-        do {
-            try aiGateway.setAPIKey(key, for: .volcengineArk)
-        } catch {
-            return
+    /// Imports the env file's key when the gateway has no Ark key (or always,
+    /// when forced), tests the provider and lets the store pick the
+    /// recommended Doubao model if no default text model exists. A stored key
+    /// that never passed its test is re-tested so a first launch without
+    /// network still ends up with a working default later.
+    func importArkEnvironmentKeyIfNeeded(force: Bool = false) async {
+        if force || !aiGateway.isConfigured(.volcengineArk) {
+            _ = await aiGateway.importArkEnvironmentKey()
+        } else if aiGateway.defaultTextModel == nil,
+                  aiGateway.configuration(for: .volcengineArk).lastTestSucceeded != true,
+                  aiGateway.configuration(for: .volcengineArk).isEnabled {
+            await aiGateway.test(.volcengineArk)
         }
-        await aiGateway.test(.volcengineArk)
+        assistantSessionIfLoaded?.refreshModelAvailability()
     }
 
-    /// A conversational assistant bound to the active project, or to the shared
-    /// AI Assets folder when no project is open. Generated media lands in the
-    /// project's `ai/` folder so it travels with the project.
-    func makeAssistantSession(projectID: UUID?) -> AIAssistantSession {
-        let assetsDirectory: URL
-        // Loaded projects carry an absolute raw.mp4 path inside their own folder,
-        // so the folder is known without awaiting the store actor.
-        let project = projects.first { $0.id == projectID } ?? (activeProject?.id == projectID ? activeProject : nil)
-        if let project, project.sourceVideoPath.hasPrefix("/") {
-            assetsDirectory = URL(fileURLWithPath: project.sourceVideoPath)
-                .deletingLastPathComponent()
-                .appendingPathComponent("ai", isDirectory: true)
-        } else {
-            assetsDirectory = FileManager.default
-                .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("FocusStudio/AI Assets", isDirectory: true)
-        }
-        // Snapshot the Ark key: tools run off the main actor. The env file is a
-        // fallback so the skills' key works in-app without re-entering it.
-        let arkKey = aiGateway.apiKey(for: .volcengineArk) ?? Self.arkEnvironmentKey()
+    /// Nil until something asked for the session; avoids creating it just to refresh it.
+    private var assistantSessionIfLoaded: AIAssistantSession? {
+        didCreateAssistantSession ? assistantSession : nil
+    }
+
+    /// Builds the app-wide assistant: tools read the current project and the
+    /// app through `self`, generated media lands in the open project's `ai/`
+    /// folder (else the shared AI Assets folder), and the brain is resolved on
+    /// every send from Settings.
+    private func makeAssistantSession() -> AIAssistantSession {
+        didCreateAssistantSession = true
+        assistantAssetsLocator.update(sourceVideoPath: activeProject?.sourceVideoPath)
+        let locator = assistantAssetsLocator
         let arkBase = URL(string: aiGateway.configuration(for: .volcengineArk).effectiveBaseURL)
             ?? URL(string: "https://ark.cn-beijing.volces.com/api/v3")!
         let context = AIAssistantContext(
-            assetsDirectory: assetsDirectory,
-            uiLanguage: AppLocalization.shared.language.localeIdentifier,
-            readProject: { [weak self] in
-                guard let self, let projectID, let project = self.activeProject, project.id == projectID else { return nil }
-                return project
-            },
+            assetsDirectoryProvider: { locator.directory },
+            uiLanguageProvider: { Self.assistantLanguage() },
+            readProject: { [weak self] in self?.activeProject },
             updateProject: { [weak self] mutate in
-                guard let self, let projectID, var project = self.activeProject, project.id == projectID else { return }
+                guard let self, var project = self.activeProject else { return }
                 mutate(&project)
                 self.updateActiveProject(project)
             },
-            arkAPIKey: { arkKey },
-            arkBaseURL: arkBase
+            // The env file is a fallback so the skills' key works in-app without re-entering it.
+            arkAPIKey: { [weak self] in self?.aiGateway.apiKey(for: .volcengineArk) ?? Self.arkEnvironmentKey() },
+            arkBaseURL: arkBase,
+            app: self
         )
-        let completion: (any TextCompletionProviding)? = aiGateway.defaultTextModel == nil
-            ? nil
-            : AIGatewayTextCompletion(store: aiGateway)
-        return AIAssistantSession(context: context, completion: completion)
+        let session = AIAssistantSession(
+            context: context,
+            completionResolver: { [weak self] in self?.assistantCompletion() }
+        )
+        // `@Published` emits before the value changes; deliver on the next
+        // run-loop pass so the resolver sees the new setting.
+        let refresh: () -> Void = { [weak session] in session?.refreshModelAvailability() }
+        aiGateway.$defaultTextModel.receive(on: RunLoop.main).sink { _ in refresh() }.store(in: &assistantObservers)
+        aiGateway.$assistantBrain.receive(on: RunLoop.main).sink { [weak self] brain in
+            self?.resetCodexAssistantIfStuck(brain: brain)
+            refresh()
+        }.store(in: &assistantObservers)
+        codexAssistant.$connectionState.receive(on: RunLoop.main).sink { _ in refresh() }.store(in: &assistantObservers)
+        codexDirector.$connectionState.receive(on: RunLoop.main).sink { [weak self] state in
+            // A sign-in completed in Settings › Codex: let the assistant retry.
+            if state == .ready { self?.resetCodexAssistantIfStuck(brain: self?.aiGateway.assistantBrain ?? .gatewayModel) }
+            refresh()
+        }.store(in: &assistantObservers)
+        return session
+    }
+
+    /// The provider for the next assistant message, per the Settings brain.
+    func assistantCompletion() -> (any TextCompletionProviding)? {
+        switch aiGateway.assistantBrain {
+        case .gatewayModel:
+            return aiGateway.defaultTextModel == nil ? nil : AIGatewayTextCompletion(store: aiGateway)
+        case .codex:
+            return codexAssistant.isAvailableForCompletion ? CodexTextCompletion(service: codexAssistant) : nil
+        }
+    }
+
+    /// A failed or signed-out assistant connection is dropped so the next send
+    /// reconnects with whatever Settings › Codex now provides.
+    private func resetCodexAssistantIfStuck(brain: AssistantBrain) {
+        guard brain == .codex, !codexAssistant.isAvailableForCompletion,
+              codexAssistant.connectionState != .signingIn else { return }
+        codexAssistant.disconnect()
     }
 
     var assistantModelLabel: String {
-        aiGateway.defaultTextModel?.modelID ?? L10n.tr("No model")
+        switch aiGateway.assistantBrain {
+        case .gatewayModel:
+            return aiGateway.defaultTextModel?.modelID ?? L10n.tr("No model")
+        case .codex:
+            let model = codexDirector.preferences.modelID
+            return model.isEmpty ? "Codex" : "Codex · \(model)"
+        }
+    }
+
+    /// The UI language for the assistant, readable off the main actor (same
+    /// preference key as `AppLocalization`).
+    nonisolated static func assistantLanguage() -> String {
+        let saved = UserDefaults.standard.string(forKey: "focusStudio.language") ?? ""
+        return (AppLanguage(rawValue: saved) ?? .system).localeIdentifier
     }
 
     func reloadProjects() async {

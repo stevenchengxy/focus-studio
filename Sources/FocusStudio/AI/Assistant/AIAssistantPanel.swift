@@ -3,9 +3,10 @@ import AVFoundation
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The assistant conversation: transcript, confirmation card for paid calls,
-/// follow-up chips and the composer. Sized for ~360 pt beside the editor and
-/// works as a sheet from the library.
+/// The assistant conversation: an animated character above the transcript,
+/// the confirmation card for paid calls, follow-up chips and a composer with
+/// voice input. Sized for ~360 pt beside the editor and works as a sheet from
+/// the library.
 struct AIAssistantPanel: View {
     @ObservedObject var session: AIAssistantSession
     let modelLabel: String
@@ -14,6 +15,13 @@ struct AIAssistantPanel: View {
 
     @State private var draft = ""
     @State private var pendingAttachments: [URL] = []
+    /// What was typed before the mic started; partial transcripts append to it.
+    @State private var draftBeforeRecording = ""
+    /// Newest non-status message the avatar already reacted to.
+    @State private var lastReactedTimestamp = Date()
+    @StateObject private var speechInput = SpeechInputController()
+    @StateObject private var speechOutput = SpeechOutputController()
+    @StateObject private var avatar = AssistantAvatarDirector()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Localizable keys; shown as chips and sent verbatim (translated) on click.
@@ -22,6 +30,11 @@ struct AIAssistantPanel: View {
         "Make a 5-second intro clip from the current look",
         "Create chapters and captions from my clicks",
     ]
+
+    static let expandedAvatarHeight: CGFloat = 150
+    static let compactAvatarHeight: CGFloat = 90
+    /// The avatar shrinks once the transcript has more rows than this.
+    static let compactTranscriptThreshold = 3
 
     init(
         session: AIAssistantSession,
@@ -40,6 +53,28 @@ struct AIAssistantPanel: View {
             && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingAttachments.isEmpty)
     }
 
+    private var canRecord: Bool {
+        session.hasModel && session.pendingConfirmation == nil
+    }
+
+    private var isCompact: Bool {
+        session.messages.count > Self.compactTranscriptThreshold
+    }
+
+    private var avatarAudioLevel: Double {
+        if speechInput.isRecording { return speechInput.audioLevel }
+        if speechOutput.isSpeaking { return speechOutput.activityLevel }
+        return 0
+    }
+
+    private var rowTransition: AnyTransition {
+        reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity)
+    }
+
+    private var cardTransition: AnyTransition {
+        reduceMotion ? .opacity : .scale(scale: 0.94, anchor: .topLeading).combined(with: .opacity)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -48,10 +83,14 @@ struct AIAssistantPanel: View {
             transcript
             if let pending = session.pendingConfirmation {
                 confirmationCard(pending)
-                    .transition(.opacity)
+                    .transition(rowTransition)
             }
             if !session.suggestions.isEmpty, !session.isRunning, session.pendingConfirmation == nil {
                 suggestionChips
+                    .transition(.opacity)
+            }
+            if let issue = speechInput.issue {
+                SpeechPermissionNotice(issue: issue) { speechInput.issue = nil }
                     .transition(.opacity)
             }
             Divider().overlay(StudioTheme.line)
@@ -59,49 +98,135 @@ struct AIAssistantPanel: View {
         }
         .background(StudioTheme.panel)
         .foregroundStyle(StudioTheme.text)
-        .animation(reduceMotion ? nil : StudioMotion.fade, value: session.pendingConfirmation?.id)
-        .animation(reduceMotion ? nil : StudioMotion.fade, value: session.suggestions)
+        .animation(reduceMotion ? nil : StudioMotion.selection, value: session.pendingConfirmation?.id)
+        .animation(reduceMotion ? nil : StudioMotion.selection, value: session.suggestions)
+        .animation(reduceMotion ? nil : StudioMotion.fade, value: speechInput.issue)
+        .animation(reduceMotion ? nil : StudioMotion.selection, value: isCompact)
+        .onAppear {
+            lastReactedTimestamp = Date()
+            updateAvatarBase()
+        }
+        .onDisappear {
+            speechInput.cancel()
+            speechOutput.stop()
+        }
+        .onChange(of: session.isRunning) { _, _ in updateAvatarBase() }
+        .onChange(of: session.pendingConfirmation?.id) { _, id in
+            if id != nil, speechInput.isActive { speechInput.stop() }
+            updateAvatarBase()
+        }
+        .onChange(of: speechInput.isRecording) { _, _ in updateAvatarBase() }
+        .onChange(of: speechInput.isPreparing) { _, _ in updateAvatarBase() }
+        .onChange(of: speechInput.transcript) { _, transcript in
+            draft = Self.join(draftBeforeRecording, transcript)
+        }
+        .onChange(of: speechOutput.isSpeaking) { _, speaking in avatar.setSpeakingAloud(speaking) }
+        .onChange(of: speechOutput.isEnabled) { _, enabled in
+            if !enabled { speechOutput.stop() }
+        }
+        .onChange(of: session.messages.last?.id) { _, _ in reactToNewMessages() }
+    }
+
+    // MARK: - Avatar
+
+    private func updateAvatarBase() {
+        let base: AvatarState
+        if speechInput.isActive || session.pendingConfirmation != nil {
+            base = .listening
+        } else if session.isRunning {
+            base = .thinking
+        } else {
+            base = .idle
+        }
+        avatar.setBase(base)
+    }
+
+    /// Reacts to the newest message the avatar has not seen. Status rows are
+    /// skipped so a tool result followed at once by "Thinking…" still counts.
+    private func reactToNewMessages() {
+        let fresh = session.messages.filter { $0.role != .status && $0.timestamp > lastReactedTimestamp }
+        guard let latest = fresh.last else { return }
+        lastReactedTimestamp = latest.timestamp
+        switch latest.role {
+        case .assistant:
+            if speechOutput.isEnabled {
+                speechOutput.speak(latest.text)
+            } else {
+                avatar.react(.speaking, for: .seconds(2))
+            }
+        case .error:
+            speechOutput.stop()
+            avatar.react(.error, for: .seconds(2.5))
+        case .tool:
+            if latest.text != L10n.tr("Cancelled — nothing was generated.") {
+                avatar.react(.happy, for: .seconds(1.4))
+            }
+        case .user:
+            speechOutput.stop()
+        case .status:
+            break
+        }
     }
 
     // MARK: - Header
 
     private var header: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "sparkles")
-                .foregroundStyle(StudioTheme.purple)
-            Text("AI Assistant")
-                .font(.system(size: 13, weight: .semibold))
-            if !modelLabel.isEmpty {
-                Text(verbatim: modelLabel)
-                    .font(.system(size: 11))
-                    .foregroundStyle(StudioTheme.secondaryText)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            Spacer(minLength: 8)
-            if session.isRunning {
-                Button {
-                    session.stop()
-                } label: {
-                    Label("Stop", systemImage: "stop.fill")
-                        .labelStyle(.iconOnly)
+        ZStack(alignment: .topTrailing) {
+            VStack(spacing: 2) {
+                AssistantAvatarView(state: avatar.state, audioLevel: avatarAudioLevel)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: isCompact ? Self.compactAvatarHeight : Self.expandedAvatarHeight)
+                    .accessibilityHidden(true)
+                HStack(spacing: 6) {
+                    Text("AI Assistant")
+                        .font(.system(size: 13, weight: .semibold))
+                    if !modelLabel.isEmpty {
+                        Text(verbatim: modelLabel)
+                            .font(.system(size: 11))
+                            .foregroundStyle(StudioTheme.secondaryText)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
                 }
-                .buttonStyle(IconButtonStyle())
-                .help("Stop")
-                .accessibilityIdentifier("assistant.stop")
+                .padding(.horizontal, 12)
             }
-            if let onClose {
-                Button(action: onClose) {
-                    Label("Close", systemImage: "xmark")
-                        .labelStyle(.iconOnly)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 6)
+            .padding(.bottom, 10)
+
+            HStack(spacing: 6) {
+                Toggle(isOn: $speechOutput.isEnabled) {
+                    Label("Voice replies", systemImage: speechOutput.isEnabled ? "speaker.wave.2.fill" : "speaker.slash")
                 }
-                .buttonStyle(IconButtonStyle())
-                .help("Close")
-                .accessibilityIdentifier("assistant.close")
+                .toggleStyle(IconToggleStyle())
+                .help("Voice replies")
+                .accessibilityIdentifier("assistant.voiceReplies")
+                if session.isRunning {
+                    Button {
+                        speechOutput.stop()
+                        session.stop()
+                    } label: {
+                        Label("Stop", systemImage: "stop.fill")
+                            .labelStyle(.iconOnly)
+                    }
+                    .buttonStyle(IconButtonStyle())
+                    .help("Stop")
+                    .accessibilityIdentifier("assistant.stop")
+                    .transition(.opacity)
+                }
+                if let onClose {
+                    Button(action: onClose) {
+                        Label("Close", systemImage: "xmark")
+                            .labelStyle(.iconOnly)
+                    }
+                    .buttonStyle(IconButtonStyle())
+                    .help("Close")
+                    .accessibilityIdentifier("assistant.close")
+                }
             }
+            .padding(8)
+            .animation(reduceMotion ? nil : StudioMotion.fade, value: session.isRunning)
         }
-        .padding(.horizontal, 12)
-        .frame(height: 44)
     }
 
     private var modelNotice: some View {
@@ -136,9 +261,15 @@ struct AIAssistantPanel: View {
                         row(for: message)
                             .id(message.id)
                     }
+                    if session.isRunning, session.pendingConfirmation == nil, session.messages.last?.role != .status {
+                        typingRow(text: nil)
+                            .id("assistant.typing")
+                            .transition(rowTransition)
+                    }
                 }
                 .padding(12)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
+                .animation(reduceMotion ? nil : StudioMotion.selection, value: session.messages.map(\.id))
             }
             .onChange(of: session.messages.last?.id) { _, id in
                 guard let id else { return }
@@ -154,11 +285,7 @@ struct AIAssistantPanel: View {
 
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 22))
-                .foregroundStyle(StudioTheme.purple)
-                .padding(.bottom, 4)
-            ForEach(Self.exampleRequests, id: \.self) { request in
+            ForEach(Array(Self.exampleRequests.enumerated()), id: \.element) { index, request in
                 Button {
                     session.send(L10n.tr(request))
                 } label: {
@@ -180,9 +307,10 @@ struct AIAssistantPanel: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!session.hasModel)
+                .staggeredAppearance(index: index)
             }
         }
-        .padding(.top, 8)
+        .padding(.top, 4)
     }
 
     @ViewBuilder
@@ -206,6 +334,7 @@ struct AIAssistantPanel: View {
                 .background(StudioTheme.purpleSoft)
                 .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
             }
+            .transition(rowTransition)
         case .assistant:
             HStack {
                 Text(verbatim: message.text)
@@ -217,23 +346,27 @@ struct AIAssistantPanel: View {
                     .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
                 Spacer(minLength: 40)
             }
+            .transition(rowTransition)
         case .tool:
             toolCard(message)
+                .transition(cardTransition)
         case .status:
-            HStack(spacing: 8) {
-                if session.isRunning {
-                    ProgressView().controlSize(.small)
-                } else {
+            if session.isRunning {
+                typingRow(text: message.text)
+                    .transition(rowTransition)
+            } else {
+                HStack(spacing: 8) {
                     Image(systemName: "stop.circle")
                         .foregroundStyle(StudioTheme.secondaryText)
+                    Text(verbatim: message.text)
+                        .font(.system(size: 11))
+                        .foregroundStyle(StudioTheme.secondaryText)
+                        .lineLimit(2)
+                    Spacer(minLength: 0)
                 }
-                Text(verbatim: message.text)
-                    .font(.system(size: 11))
-                    .foregroundStyle(StudioTheme.secondaryText)
-                    .lineLimit(2)
-                Spacer(minLength: 0)
+                .padding(.horizontal, 4)
+                .transition(rowTransition)
             }
-            .padding(.horizontal, 4)
         case .error:
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "exclamationmark.triangle.fill")
@@ -254,6 +387,25 @@ struct AIAssistantPanel: View {
             .padding(10)
             .background(StudioTheme.yellow.opacity(0.08))
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .transition(rowTransition)
+        }
+    }
+
+    /// Three bouncing dots plus the optional progress text from the session.
+    private func typingRow(text: String?) -> some View {
+        HStack(spacing: 8) {
+            TypingIndicatorView()
+                .padding(.horizontal, 10)
+                .padding(.vertical, 9)
+                .background(StudioTheme.panelRaised)
+                .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+            if let text, !text.isEmpty {
+                Text(verbatim: text)
+                    .font(.system(size: 11))
+                    .foregroundStyle(StudioTheme.secondaryText)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 0)
         }
     }
 
@@ -328,11 +480,8 @@ struct AIAssistantPanel: View {
         }
         .padding(12)
         .background(StudioTheme.panelRaised)
-        .overlay(
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .stroke(StudioTheme.purple.opacity(0.55), lineWidth: 1)
-        )
         .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .pulsingBorder(StudioTheme.purple, cornerRadius: 11)
         .padding(.horizontal, 12)
         .padding(.bottom, 10)
     }
@@ -342,7 +491,7 @@ struct AIAssistantPanel: View {
     private var suggestionChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ForEach(session.suggestions, id: \.self) { suggestion in
+                ForEach(Array(session.suggestions.enumerated()), id: \.element) { index, suggestion in
                     Button {
                         session.send(suggestion)
                     } label: {
@@ -358,6 +507,7 @@ struct AIAssistantPanel: View {
                             .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
+                    .staggeredAppearance(index: index)
                 }
             }
             .padding(.horizontal, 12)
@@ -408,20 +558,16 @@ struct AIAssistantPanel: View {
                 .disabled(!session.hasModel)
                 .accessibilityIdentifier("assistant.attach")
 
-                TextField("Ask the assistant…", text: $draft, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...5)
-                    .font(.system(size: 12))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(StudioTheme.panelRaised)
-                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .stroke(StudioTheme.line, lineWidth: 1)
-                    )
-                    .disabled(!session.hasModel)
-                    .accessibilityIdentifier("assistant.composer")
+                composerField
+
+                let microphoneHelp: LocalizedStringKey = speechInput.isRecording ? "Stop recording (Esc)" : "Voice input"
+                MicrophoneButton(isRecording: speechInput.isRecording, isPreparing: speechInput.isPreparing) {
+                    toggleRecording()
+                }
+                .keyboardShortcut(speechInput.isRecording ? KeyboardShortcut(.escape, modifiers: []) : nil)
+                .help(microphoneHelp)
+                .disabled(!canRecord)
+                .accessibilityIdentifier("assistant.mic")
 
                 Button(action: sendDraft) {
                     Label("Send", systemImage: "arrow.up")
@@ -442,8 +588,49 @@ struct AIAssistantPanel: View {
         .padding(10)
     }
 
+    private var composerField: some View {
+        let placeholder: LocalizedStringKey = speechInput.isRecording && draft.isEmpty ? "Listening…" : "Ask the assistant…"
+        return TextField(placeholder, text: $draft, axis: .vertical)
+            .textFieldStyle(.plain)
+            .lineLimit(1...5)
+            .font(.system(size: 12))
+            .padding(.leading, 10)
+            .padding(.trailing, speechInput.isRecording ? 34 : 10)
+            .padding(.vertical, 7)
+            .background(StudioTheme.panelRaised)
+            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .stroke(speechInput.isRecording ? StudioTheme.red.opacity(0.55) : StudioTheme.line, lineWidth: 1)
+            )
+            .overlay(alignment: .bottomTrailing) {
+                if speechInput.isRecording {
+                    AudioLevelMeterView(level: speechInput.audioLevel)
+                        .padding(.trailing, 10)
+                        .padding(.bottom, 8)
+                        .transition(.opacity)
+                }
+            }
+            .animation(reduceMotion ? nil : StudioMotion.fade, value: speechInput.isRecording)
+            .disabled(!session.hasModel)
+            .accessibilityIdentifier("assistant.composer")
+    }
+
+    private func toggleRecording() {
+        if speechInput.isRecording {
+            speechInput.stop()
+            return
+        }
+        speechOutput.stop()
+        draftBeforeRecording = draft
+        speechInput.start()
+    }
+
     private func sendDraft() {
         guard canSend else { return }
+        // Discard any transcript still in flight so it cannot land in the empty field.
+        speechInput.cancel()
+        draftBeforeRecording = ""
         let text = draft
         let attachments = pendingAttachments
         draft = ""
@@ -461,6 +648,14 @@ struct AIAssistantPanel: View {
         for url in panel.urls where !pendingAttachments.contains(url) {
             pendingAttachments.append(url)
         }
+    }
+
+    /// Appends a transcript to what was typed before recording started.
+    static func join(_ base: String, _ transcript: String) -> String {
+        guard !base.isEmpty else { return transcript }
+        guard !transcript.isEmpty else { return base }
+        let needsSpace = base.last.map { !$0.isWhitespace } ?? false
+        return base + (needsSpace ? " " : "") + transcript
     }
 
     // MARK: - Naming

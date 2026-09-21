@@ -1,7 +1,8 @@
 #!/bin/zsh
 # Offline coverage for the AI assistant: protocol parsing, the agent loop with
-# a scripted model, the confirmation gate, tool validation, AVFoundation clip
-# assembly and the Ark client against a local Python fixture server.
+# a scripted model, the confirmation gate, tool validation, the app-control
+# tools against a fake app (record/stop/library/zooms/music/export paths),
+# AVFoundation clip assembly and the Ark client against a local Python fixture server.
 set -euo pipefail
 SCRIPT_DIR="${0:A:h}"
 PROJECT_DIR="${SCRIPT_DIR:h}"
@@ -20,6 +21,7 @@ swiftc -parse-as-library -g \
   Sources/FocusStudio/AI/Assistant/AIAssistantModels.swift \
   Sources/FocusStudio/AI/Assistant/ArkMediaClient.swift \
   Sources/FocusStudio/AI/Assistant/AIAssistantTools.swift \
+  Sources/FocusStudio/AI/Assistant/AIAssistantAppControl.swift \
   Sources/FocusStudio/AI/Assistant/AIAssistantSession.swift \
   Tests/AIAssistantTests/main.swift \
   "${CORE_OBJECTS[@]}" \

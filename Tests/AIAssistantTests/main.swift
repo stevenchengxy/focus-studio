@@ -5,9 +5,10 @@ import Foundation
 
 /// Offline coverage for the AI assistant module: the strict JSON protocol,
 /// the agent loop driven by a scripted model, the confirmation gate for paid
-/// tools, tool argument validation, AVFoundation clip assembly and the Ark
-/// client (request bodies plus a generate → poll → download round trip
-/// against the local Python fixture in fake-ark.py).
+/// tools, tool argument validation, the app-control tools against a fake app
+/// (record → stop → library → zooms → music → export paths), AVFoundation clip
+/// assembly and the Ark client (request bodies plus a generate → poll →
+/// download round trip against the local Python fixture in fake-ark.py).
 @main
 struct AIAssistantTests {
     @MainActor
@@ -21,12 +22,18 @@ struct AIAssistantTests {
         step("scripted agent loop"); try await scriptedAgentLoop(root: root)
         step("confirmation flow"); try await confirmationFlow(root: root)
         step("stop while thinking"); try await stopWhileThinking(root: root)
+        step("model resolver"); try await modelResolver(root: root)
         step("update_settings"); try await updateSettingsValidation(root: root)
         step("set_chapters"); try await setChaptersSanitization(root: root)
+        step("app control: recording"); try await recordingControl(root: root)
+        step("app control: library"); try await libraryControl(root: root)
+        step("zoom tools"); try await zoomTools(root: root)
+        step("audio tools"); try await audioTools(root: root)
+        step("export paths"); try exportPaths(root: root)
         step("assemble_video"); try await assembleVideo(root: root)
         step("Ark request bodies"); try arkRequestBodies()
         step("Ark fixture round trip"); try await arkFixtureRoundTrip(root: root)
-        print("AIAssistantTests: PASS (protocol parsing, scripted agent loop, confirmation gate, stop, update_settings, set_chapters, assemble_video, Ark request bodies, Ark fixture round trip incl. tools)")
+        print("AIAssistantTests: PASS (protocol parsing, scripted agent loop, confirmation gate, stop, model resolver, update_settings, set_chapters, app control (sources/start/stop/library), zoom tools, audio tools, export paths, assemble_video, Ark request bodies, Ark fixture round trip incl. tools)")
     }
 
     // MARK: - Helpers
@@ -376,6 +383,474 @@ struct AIAssistantTests {
         check(box.project!.chapters?.count == 3, "failed calls change nothing")
     }
 
+    // MARK: - Model resolver
+
+    @MainActor
+    final class ProviderBox {
+        var provider: (any TextCompletionProviding)?
+    }
+
+    @MainActor
+    static func modelResolver(root: URL) async throws {
+        let box = ProjectBox(nil)
+        let context = makeContext(root: root, box: box)
+        let providers = ProviderBox()
+        let session = AIAssistantSession(context: context, completionResolver: { providers.provider }, tools: [])
+        check(!session.hasModel, "no provider → no model")
+        session.send("hi")
+        check(session.messages.last?.role == .error && !session.isRunning, "sending without a provider reports the setup problem")
+
+        // The resolver is consulted on every send, so Settings changes apply without a new session.
+        providers.provider = ScriptedCompletion([reply("now")])
+        check(!session.hasModel, "hasModel is a published snapshot until refreshed")
+        session.refreshModelAvailability()
+        check(session.hasModel, "refresh picks up the new provider")
+        session.send("hello")
+        try await waitUntil("resolved turn") { !session.isRunning }
+        check(session.messages.last?.text == "now", "the resolved provider answered: \(session.messages.map(\.text))")
+        providers.provider = nil
+        session.send("again")
+        check(!session.hasModel && session.messages.last?.role == .error, "send refreshes availability before running")
+
+        let names = AIAssistantToolCatalog.standard.map(\.name)
+        for expected in ["list_recording_sources", "start_recording", "stop_recording", "list_projects", "open_project", "close_editor",
+                         "add_zoom", "remove_zoom", "set_zoom_style", "set_background_music", "set_sound_effects", "export_project", "export_demo",
+                         "generate_image", "generate_video", "capture_frame", "set_background_image", "update_settings", "set_chapters",
+                         "list_assets", "assemble_video", "reveal_in_finder"] {
+            check(names.contains(expected), "standard catalog lists \(expected): \(names)")
+        }
+        check(Set(names).count == names.count, "tool names are unique")
+
+        // With an app the model sees the app state and the bundled music.
+        var appContext = context
+        let app = FakeApp(box: box)
+        app.tracks = [AIMusicTrack(id: "calm-gradient", title: "Calm Gradient", path: "/bundle/calm.m4a")]
+        appContext.app = app
+        let appSession = AIAssistantSession(context: appContext, completion: nil, tools: [])
+        let content = appSession.userContent()
+        check(content.contains("[App]") && content.contains("Recording: idle") && content.contains("Bundled music: Calm Gradient (calm-gradient)") && content.contains("[Project]"), "app summary precedes the project: \(content.prefix(300))")
+        check(!session.userContent().contains("[App]"), "no app → no app section")
+        check(appSession.systemPrompt().contains("list_recording_sources → start_recording") && appSession.systemPrompt().contains("step by step"), "system prompt teaches the workflow")
+    }
+
+    // MARK: - App control (fake app)
+
+    /// Stands in for StudioModel: a source list, a scripted countdown and stop,
+    /// and a library whose open project is shared with the tool context.
+    @MainActor
+    final class FakeApp: AppControlling {
+        enum StartBehaviour {
+            case succeed(after: TimeInterval)
+            case fail(String, after: TimeInterval)
+            case cancel(after: TimeInterval)
+            case hang
+        }
+
+        enum StopBehaviour {
+            case succeed(after: TimeInterval)
+            case fail(String, after: TimeInterval)
+            case hang
+        }
+
+        let box: ProjectBox
+        var sources: [AIRecordingSource] = []
+        var refreshCount = 0
+        var refreshError: Error?
+        var recordingPhase: AIRecordingPhase = .idle
+        var lastReportedError: String?
+        var startedSourceIDs: [String] = []
+        var startedOptions: [AIRecordingOptions] = []
+        var startBehaviour: StartBehaviour = .succeed(after: 0.05)
+        var stopBehaviour: StopBehaviour = .succeed(after: 0.05)
+        var projects: [RecordingProject] = []
+        var openID: UUID?
+        var closeCount = 0
+        var tracks: [AIMusicTrack] = []
+
+        init(box: ProjectBox) { self.box = box }
+
+        var recordingSources: [AIRecordingSource] { sources }
+
+        func refreshRecordingSources() async throws -> [AIRecordingSource] {
+            refreshCount += 1
+            if let refreshError { throw refreshError }
+            return sources
+        }
+
+        func startRecording(sourceID: String, options: AIRecordingOptions) throws {
+            guard recordingPhase == .idle else { throw AIToolError.failed("A recording is already in progress.") }
+            guard sources.contains(where: { $0.id == sourceID }) else { throw AIToolError.invalidArgument("Unknown source \(sourceID).") }
+            startedSourceIDs.append(sourceID)
+            startedOptions.append(options)
+            lastReportedError = nil
+            recordingPhase = .countdown
+            switch startBehaviour {
+            case let .succeed(delay):
+                Task { try? await Task.sleep(for: .seconds(delay)); self.recordingPhase = .recording }
+            case let .fail(message, delay):
+                Task { try? await Task.sleep(for: .seconds(delay)); self.recordingPhase = .failed(message) }
+            case let .cancel(delay):
+                Task {
+                    try? await Task.sleep(for: .seconds(delay))
+                    self.lastReportedError = "The selected screen or window is no longer available."
+                    self.recordingPhase = .idle
+                }
+            case .hang:
+                break
+            }
+        }
+
+        func stopRecording() async {
+            recordingPhase = .stopping
+            switch stopBehaviour {
+            case let .succeed(delay):
+                try? await Task.sleep(for: .seconds(delay))
+                var project = makeProject(sourceVideoPath: "/nonexistent.mp4", duration: 12)
+                project.title = "Recording \(projects.count + 1)"
+                projects.insert(project, at: 0)
+                openID = project.id
+                box.project = project
+                recordingPhase = .idle
+            case let .fail(message, delay):
+                try? await Task.sleep(for: .seconds(delay))
+                lastReportedError = message
+                recordingPhase = .idle
+            case .hang:
+                try? await Task.sleep(for: .seconds(1_000))
+            }
+        }
+
+        var projectSummaries: [AIProjectSummary] { projects.map(AIProjectSummary.init) }
+        var openProjectID: UUID? { openID }
+
+        func openProject(id: UUID) throws {
+            guard let project = projects.first(where: { $0.id == id }) else { throw AIToolError.invalidArgument("No project \(id).") }
+            openID = id
+            box.project = project
+        }
+
+        func closeEditor() {
+            closeCount += 1
+            openID = nil
+            box.project = nil
+        }
+
+        var bundledMusicTracks: [AIMusicTrack] { tracks }
+    }
+
+    @MainActor
+    static func makeFakeApp(root: URL) -> (context: AIAssistantContext, app: FakeApp, box: ProjectBox) {
+        let box = ProjectBox(nil)
+        var context = makeContext(root: root, box: box)
+        let app = FakeApp(box: box)
+        app.sources = [
+            AIRecordingSource(id: "display-1", kind: .display, title: "Built-in Display", width: 2_560, height: 1_440),
+            AIRecordingSource(id: "display-2", kind: .display, title: "External", width: 1_920, height: 1_080),
+            AIRecordingSource(id: "win-1", kind: .window, appName: "Safari", title: "Focus Studio — Docs", width: 1_440, height: 900),
+            AIRecordingSource(id: "win-2", kind: .window, appName: "Safari", title: "Apple", width: 800, height: 600),
+            AIRecordingSource(id: "win-3", kind: .window, appName: "Xcode", title: "FocusStudio.swift", width: 1_600, height: 1_000),
+        ]
+        context.app = app
+        return (context, app, box)
+    }
+
+    static func expectToolError(_ message: String, _ body: () async throws -> Void, _ verify: (AIToolError) -> Bool) async {
+        do {
+            try await body()
+            fatalError("FAIL: expected an error: \(message)")
+        } catch let error as AIToolError {
+            check(verify(error), "\(message): unexpected error \(error)")
+        } catch {
+            fatalError("FAIL: \(message): expected AIToolError, got \(error)")
+        }
+    }
+
+    @MainActor
+    static func recordingControl(root: URL) async throws {
+        let (context, app, _) = makeFakeApp(root: root)
+
+        // list_recording_sources refreshes and lists id, kind, app, title and size.
+        let listed = try await ListRecordingSourcesTool().run(arguments: [:], context: context, progress: { _ in })
+        check(app.refreshCount == 1 && listed.text.hasPrefix("2 displays, 3 windows"), "sources are refreshed and counted: \(listed.text)")
+        check(listed.text.contains("- id display-1 · display · Built-in Display · 2560×1440") && listed.text.contains("- id win-1 · window · Safari — Focus Studio — Docs · 1440×900"), "source lines carry id, kind, app, title and size: \(listed.text)")
+        check(listed.text.range(of: "win-3")!.lowerBound < listed.text.range(of: "win-2")!.lowerBound, "windows are listed largest first")
+
+        // Source resolution: id, display words, app names, titles, tokens.
+        func resolved(_ query: String) -> String {
+            do { return try StartRecordingTool.resolveSource(query, in: app.sources).id } catch { return "error: \(error)" }
+        }
+        check(resolved("WIN-2") == "win-2", "exact id, case-insensitive")
+        check(resolved("display") == "display-1", "\"display\" is the main display")
+        check(resolved("屏幕") == "display-1", "Chinese display word")
+        check(resolved("display 2") == "display-2", "numbered display")
+        check(resolved("safari") == "win-1", "app name → its largest window")
+        check(resolved("docs") == "win-1", "title substring")
+        check(resolved("Xcode FocusStudio") == "win-3", "token match")
+        check(resolved("external") == "display-2", "display title substring")
+        await expectToolError("missing display number", { _ = try StartRecordingTool.resolveSource("display 3", in: app.sources) }) {
+            if case let .invalidArgument(message) = $0 { return message.contains("2 displays") } else { return false }
+        }
+        await expectToolError("unknown source lists what exists", { _ = try StartRecordingTool.resolveSource("Figma", in: app.sources) }) {
+            if case let .invalidArgument(message) = $0 { return message.contains("No source matches \"Figma\"") && message.contains("display-1") } else { return false }
+        }
+
+        // start_recording selects, applies options and waits for the recording state.
+        let start = StartRecordingTool(startTimeout: 2)
+        let started = try await start.run(arguments: ["source": "Safari", "system_audio": true, "frame_rate": 60, "automatic_zooms": "false"], context: context, progress: { _ in })
+        check(app.startedSourceIDs == ["win-1"], "the resolved source was started: \(app.startedSourceIDs)")
+        let options = app.startedOptions.last!
+        check(options.systemAudio == true && options.frameRate == 60 && options.automaticZooms == false && options.microphone == nil && options.browserContentOnly == nil, "only the given options are set: \(options)")
+        check(app.recordingPhase == .recording && started.text.contains("Recording started (3-second countdown elapsed)") && started.text.contains("win-1") && started.text.contains("60 fps"), "start reports after the countdown: \(started.text)")
+        await expectToolError("second start while recording", { _ = try await start.run(arguments: ["source": "display"], context: context, progress: { _ in }) }) {
+            if case let .failed(message) = $0 { return message.contains("already recording") } else { return false }
+        }
+        await expectThrows("bad frame rate") { _ = try await start.run(arguments: ["source": "display", "frame_rate": 45], context: context, progress: { _ in }) }
+        await expectThrows("bad boolean") { _ = try await start.run(arguments: ["source": "display", "microphone": "maybe"], context: context, progress: { _ in }) }
+        check(app.startedSourceIDs.count == 1, "rejected calls never reach the app")
+
+        // stop_recording waits for the editor to show the new project.
+        let stop = StopRecordingTool(stopTimeout: 2)
+        let stopped = try await stop.run(arguments: [:], context: context, progress: { _ in })
+        let recorded = app.projects[0]
+        check(app.recordingPhase == .idle && app.projects.count == 1 && app.openID == recorded.id, "stop produced and opened a project")
+        check(stopped.text.contains("Recording saved as project \"Recording 1\"") && stopped.text.contains(recorded.id.uuidString) && stopped.text.contains("12.0 s"), "stop returns id, title and duration: \(stopped.text)")
+        await expectToolError("nothing to stop", { _ = try await stop.run(arguments: [:], context: context, progress: { _ in }) }) {
+            if case let .failed(message) = $0 { return message.contains("No recording is in progress") } else { return false }
+        }
+
+        // A cancelled countdown, a failed capture and a hang are all reported.
+        app.startBehaviour = .cancel(after: 0.05)
+        await expectToolError("cancelled countdown", { _ = try await start.run(arguments: ["source": "display"], context: context, progress: { _ in }) }) {
+            if case let .failed(message) = $0 { return message.contains("no longer available") } else { return false }
+        }
+        app.startBehaviour = .fail("The stream stopped", after: 0.05)
+        await expectToolError("capture failure", { _ = try await start.run(arguments: ["source": "display"], context: context, progress: { _ in }) }) {
+            if case let .failed(message) = $0 { return message.contains("The stream stopped") } else { return false }
+        }
+        app.recordingPhase = .idle
+        app.startBehaviour = .hang
+        await expectToolError("start timeout", { _ = try await StartRecordingTool(startTimeout: 0.3).run(arguments: ["source": "display"], context: context, progress: { _ in }) }) {
+            if case .timedOut = $0 { return true } else { return false }
+        }
+        app.recordingPhase = .idle
+
+        // stop failures: the app's error and a timeout.
+        app.startBehaviour = .succeed(after: 0.02)
+        _ = try await start.run(arguments: ["source": "display 2"], context: context, progress: { _ in })
+        check(app.startedSourceIDs.last == "display-2", "numbered display started")
+        app.stopBehaviour = .fail("Disk full", after: 0.05)
+        await expectToolError("stop failure", { _ = try await stop.run(arguments: [:], context: context, progress: { _ in }) }) {
+            if case let .failed(message) = $0 { return message.contains("Disk full") } else { return false }
+        }
+        check(app.projects.count == 1, "a failed stop adds no project")
+        app.recordingPhase = .recording
+        app.stopBehaviour = .hang
+        await expectToolError("stop timeout", { _ = try await StopRecordingTool(stopTimeout: 0.3).run(arguments: [:], context: context, progress: { _ in }) }) {
+            if case .timedOut = $0 { return true } else { return false }
+        }
+        app.recordingPhase = .idle
+
+        // A countdown in progress is waited out by stop_recording.
+        app.startBehaviour = .succeed(after: 0.15)
+        app.stopBehaviour = .succeed(after: 0.02)
+        try app.startRecording(sourceID: "win-3", options: AIRecordingOptions())
+        check(app.recordingPhase == .countdown, "countdown started directly")
+        let afterCountdown = try await stop.run(arguments: [:], context: context, progress: { _ in })
+        check(app.projects.count == 2 && afterCountdown.text.contains("Recording 2"), "stop waited for the countdown, then saved: \(afterCountdown.text)")
+
+        // Without an app the tools fail clearly instead of crashing.
+        let bare = makeContext(root: root, box: ProjectBox(nil))
+        await expectToolError("no app", { _ = try await ListRecordingSourcesTool().run(arguments: [:], context: bare, progress: { _ in }) }) { $0 == .appUnavailable }
+        await expectToolError("no app for start", { _ = try await start.run(arguments: ["source": "display"], context: bare, progress: { _ in }) }) { $0 == .appUnavailable }
+        app.refreshError = AIToolError.failed("Screen Recording permission is required.")
+        await expectToolError("refresh failure surfaces", { _ = try await ListRecordingSourcesTool().run(arguments: [:], context: context, progress: { _ in }) }) {
+            if case let .failed(message) = $0 { return message.contains("Screen Recording") } else { return false }
+        }
+    }
+
+    @MainActor
+    static func libraryControl(root: URL) async throws {
+        let (context, app, box) = makeFakeApp(root: root)
+        let empty = try await ListProjectsTool().run(arguments: [:], context: context, progress: { _ in })
+        check(empty.text.contains("The library is empty"), "empty library: \(empty.text)")
+
+        var first = makeProject(sourceVideoPath: "/nonexistent.mp4", duration: 12)
+        first.title = "Onboarding walkthrough"
+        var second = makeProject(sourceVideoPath: "/nonexistent.mp4", duration: 8)
+        second.title = "Second take"
+        app.projects = [second, first]
+        try app.openProject(id: first.id)
+
+        let listed = try await ListProjectsTool().run(arguments: [:], context: context, progress: { _ in })
+        check(listed.text.hasPrefix("2 projects (newest first)") && listed.text.contains("1. Second take · 8.0 s") && listed.text.contains("2. Onboarding walkthrough · 12.0 s") && listed.text.contains(first.id.uuidString), "projects are numbered newest first with ids: \(listed.text)")
+        check(listed.text.contains("Onboarding walkthrough · 12.0 s · 640×360") && listed.text.contains("open in the editor"), "the open project is marked: \(listed.text)")
+
+        let opened = try await OpenProjectTool().run(arguments: ["project": "second"], context: context, progress: { _ in })
+        check(app.openID == second.id && box.project?.id == second.id && opened.text.contains("Opened \"Second take\" in the editor (8.0 s"), "open by title substring: \(opened.text)")
+        _ = try await OpenProjectTool().run(arguments: ["project": first.id.uuidString], context: context, progress: { _ in })
+        check(app.openID == first.id, "open by id")
+        await expectToolError("unknown project", { _ = try await OpenProjectTool().run(arguments: ["project": "nope"], context: context, progress: { _ in }) }) {
+            if case let .invalidArgument(message) = $0 { return message.contains("No project matches \"nope\"") && message.contains("Second take") } else { return false }
+        }
+        await expectToolError("unknown id", { _ = try await OpenProjectTool().run(arguments: ["project": UUID().uuidString], context: context, progress: { _ in }) }) {
+            if case .invalidArgument = $0 { return true } else { return false }
+        }
+        await expectThrows("missing argument") { _ = try await OpenProjectTool().run(arguments: [:], context: context, progress: { _ in }) }
+
+        let closed = try await CloseEditorTool().run(arguments: [:], context: context, progress: { _ in })
+        check(app.openID == nil && app.closeCount == 1 && box.project == nil && closed.text.contains("Saved and closed \"Onboarding walkthrough\""), "close saves and names the project: \(closed.text)")
+        let closedAgain = try await CloseEditorTool().run(arguments: [:], context: context, progress: { _ in })
+        check(app.closeCount == 1 && closedAgain.text.contains("not open"), "closing twice is a no-op: \(closedAgain.text)")
+        await expectToolError("editing needs an open project", { _ = try await AddZoomTool().run(arguments: ["start": 1, "end": 2, "x": 0.5, "y": 0.5], context: context, progress: { _ in }) }) { $0 == .noProject }
+    }
+
+    @MainActor
+    static func zoomTools(root: URL) async throws {
+        let (context, app, box) = makeFakeApp(root: root)
+        var project = makeProject(sourceVideoPath: "/nonexistent.mp4", duration: 8)
+        project.title = "Zoom fixture"
+        app.projects = [project]
+        try app.openProject(id: project.id)
+
+        let added = try await AddZoomTool().run(arguments: ["start": 3, "end": "5.5", "x": 0.25, "y": 0.75, "scale": 9], context: context, progress: { _ in })
+        var zooms = box.project!.zoomSegments
+        check(zooms.count == 2 && zooms[1].kind == .manual && zooms[1].start == 3 && zooms[1].end == 5.5 && zooms[1].targetX == 0.25 && zooms[1].targetY == 0.75, "a manual zoom is appended: \(zooms)")
+        check(zooms[1].scale == 3 && added.text.contains("Added zoom #2") && added.text.contains("clamped") && added.text.contains("2 zooms"), "scale is clamped and the time-ordered number reported: \(added.text)")
+        let defaultScale = try await AddZoomTool().run(arguments: ["start": 6, "end": 7, "x": 0.5, "y": 0.5], context: context, progress: { _ in })
+        check(box.project!.zoomSegments.last?.scale == project.settings.zoomScale && defaultScale.text.contains("#3"), "scale defaults to the project's zoom scale: \(defaultScale.text)")
+        for (name, arguments) in [
+            ("too short", ["start": 5, "end": 5.1, "x": 0.5, "y": 0.5] as [String: Any]),
+            ("beyond duration", ["start": 7, "end": 9, "x": 0.5, "y": 0.5]),
+            ("negative start", ["start": -1, "end": 2, "x": 0.5, "y": 0.5]),
+            ("x out of range", ["start": 1, "end": 2, "x": 1.5, "y": 0.5]),
+            ("missing y", ["start": 1, "end": 2, "x": 0.5]),
+            ("non-numeric", ["start": "one", "end": 2, "x": 0.5, "y": 0.5]),
+        ] {
+            await expectToolError(name, { _ = try await AddZoomTool().run(arguments: arguments, context: context, progress: { _ in }) }) {
+                if case .invalidArgument = $0 { return true } else { return false }
+            }
+        }
+        check(box.project!.zoomSegments.count == 3, "rejected zooms change nothing")
+
+        let removed = try await RemoveZoomTool().run(arguments: ["index": 1], context: context, progress: { _ in })
+        zooms = box.project!.zoomSegments
+        check(zooms.count == 2 && zooms.allSatisfy { $0.kind == .manual } && removed.text.contains("Removed zoom #1 (0.2–1.2 s") && removed.text.contains("2 zooms remain"), "remove by time-ordered number: \(removed.text)")
+        await expectToolError("index past the end", { _ = try await RemoveZoomTool().run(arguments: ["index": 5], context: context, progress: { _ in }) }) {
+            if case let .invalidArgument(message) = $0 { return message.contains("1–2") } else { return false }
+        }
+        await expectThrows("non-numeric index") { _ = try await RemoveZoomTool().run(arguments: ["index": "second"], context: context, progress: { _ in }) }
+        await expectThrows("missing index") { _ = try await RemoveZoomTool().run(arguments: [:], context: context, progress: { _ in }) }
+        let removedAll = try await RemoveZoomTool().run(arguments: ["index": "all"], context: context, progress: { _ in })
+        check(box.project!.zoomSegments.isEmpty && removedAll.text.contains("Removed all 2 zooms"), "remove all: \(removedAll.text)")
+        let nothing = try await RemoveZoomTool().run(arguments: ["index": "all"], context: context, progress: { _ in })
+        check(nothing.text.contains("no zooms"), "removing from an empty project is reported, not an error: \(nothing.text)")
+
+        // set_zoom_style clamps, reuses update_settings for shared keys and regenerates automatic zooms.
+        let styled = try await SetZoomStyleTool().run(arguments: ["zoomHold": 10, "zoomEaseIn": 0.3, "zoomEaseOut": "0.6s", "zoomChainGap": 1.5, "zoomScale": 2.5, "screenAnimation": "Smooth", "autoZoomEnabled": true], context: context, progress: { _ in })
+        let settings = box.project!.settings
+        check(settings.zoomHold == 3 && settings.zoomEaseIn == 0.3 && settings.zoomEaseOut == 0.6 && settings.zoomChainGap == 1.5 && settings.zoomScale == 2.5 && settings.screenAnimation == .smooth && settings.autoZoomEnabled, "zoom style keys apply with clamping: \(settings)")
+        check(styled.text.contains("zoomHold = 3 (clamped)") && styled.text.contains("zoomScale = 2.5") && styled.text.contains("screenAnimation = smooth"), "changes are reported: \(styled.text)")
+        check(box.project!.zoomSegments.contains { $0.kind == .automatic }, "enabling automatic zooms regenerates them from the recorded click")
+        await expectToolError("unknown key", { _ = try await SetZoomStyleTool().run(arguments: ["zoomLeadIn": 1], context: context, progress: { _ in }) }) {
+            if case let .invalidArgument(message) = $0 { return message.contains("zoomLeadIn") } else { return false }
+        }
+        await expectThrows("non-numeric hold") { _ = try await SetZoomStyleTool().run(arguments: ["zoomHold": "long"], context: context, progress: { _ in }) }
+        await expectThrows("bad animation") { _ = try await SetZoomStyleTool().run(arguments: ["screenAnimation": "wobbly"], context: context, progress: { _ in }) }
+        await expectThrows("empty") { _ = try await SetZoomStyleTool().run(arguments: [:], context: context, progress: { _ in }) }
+        check(box.project!.settings == settings, "failed calls change nothing")
+        _ = try await SetZoomStyleTool().run(arguments: ["autoZoomEnabled": "no"], context: context, progress: { _ in })
+        check(!box.project!.settings.autoZoomEnabled, "automatic zooms can be turned off")
+    }
+
+    @MainActor
+    static func audioTools(root: URL) async throws {
+        let (context, app, box) = makeFakeApp(root: root)
+        let project = makeProject(sourceVideoPath: "/nonexistent.mp4", duration: 8)
+        app.projects = [project]
+        try app.openProject(id: project.id)
+        app.tracks = [
+            AIMusicTrack(id: "calm-gradient", title: "Calm Gradient", mood: "Soft, airy pads", durationSeconds: 60, suggestedVolume: 0.17, path: "/bundle/calm.m4a"),
+            AIMusicTrack(id: "bright-launch", title: "Bright Launch", mood: "Upbeat keys", durationSeconds: 45, suggestedVolume: 0.14, path: "/bundle/bright.m4a"),
+        ]
+
+        let byTitle = try await SetBackgroundMusicTool().run(arguments: ["track": "calm gradient"], context: context, progress: { _ in })
+        var audio = box.project!.settings.resolvedProductDemoAudio
+        check(audio.backgroundMusicPath == "/bundle/calm.m4a" && audio.backgroundMusicVolume == 0.17 && byTitle.text.contains("Calm Gradient") && byTitle.text.contains("0.17"), "bundled track by title with its suggested volume: \(byTitle.text)")
+        _ = try await SetBackgroundMusicTool().run(arguments: ["track": "bright-launch", "volume": 1.4], context: context, progress: { _ in })
+        audio = box.project!.settings.resolvedProductDemoAudio
+        check(audio.backgroundMusicPath == "/bundle/bright.m4a" && audio.backgroundMusicVolume == 1, "track by id; volume clamped to 1")
+        _ = try await SetBackgroundMusicTool().run(arguments: ["track": "upbeat"], context: context, progress: { _ in })
+        check(box.project!.settings.resolvedProductDemoAudio.backgroundMusicPath == "/bundle/bright.m4a", "mood words match too")
+        let custom = root.appendingPathComponent("custom.mp3")
+        try Data([0]).write(to: custom)
+        let local = try await SetBackgroundMusicTool().run(arguments: ["track": custom.path, "volume": 0.3], context: context, progress: { _ in })
+        audio = box.project!.settings.resolvedProductDemoAudio
+        check(audio.backgroundMusicPath == custom.path && audio.backgroundMusicVolume == 0.3 && local.text.contains("custom"), "a local audio file is accepted: \(local.text)")
+        await expectToolError("unknown track lists the bundled ones", { _ = try await SetBackgroundMusicTool().run(arguments: ["track": "Jazz Nights"], context: context, progress: { _ in }) }) {
+            if case let .invalidArgument(message) = $0 { return message.contains("Calm Gradient (calm-gradient)") } else { return false }
+        }
+        let notAudio = root.appendingPathComponent("notes.txt")
+        try "x".write(to: notAudio, atomically: true, encoding: .utf8)
+        await expectThrows("not an audio file") { _ = try await SetBackgroundMusicTool().run(arguments: ["track": notAudio.path], context: context, progress: { _ in }) }
+        let removed = try await SetBackgroundMusicTool().run(arguments: ["track": "none"], context: context, progress: { _ in })
+        check(box.project!.settings.resolvedProductDemoAudio.backgroundMusicPath == nil && removed.text.contains("removed"), "\"none\" clears the music: \(removed.text)")
+        check(SetBackgroundMusicTool.resolveTrack("Bright Launch", in: app.tracks)?.id == "bright-launch" && SetBackgroundMusicTool.resolveTrack("", in: app.tracks) == nil, "title lookup helper")
+
+        let effects = try await SetSoundEffectsTool().run(arguments: ["click": true, "zoom_volume": 0.5], context: context, progress: { _ in })
+        audio = box.project!.settings.resolvedProductDemoAudio
+        check(audio.clickSoundEnabled && !audio.zoomTransitionSoundEnabled && audio.zoomTransitionSoundVolume == 0.5 && effects.text.contains("click on") && effects.text.contains("zoom whoosh off"), "sound effect toggles and volumes: \(effects.text)")
+        _ = try await SetSoundEffectsTool().run(arguments: ["zoom": "yes", "click": false], context: context, progress: { _ in })
+        audio = box.project!.settings.resolvedProductDemoAudio
+        check(!audio.clickSoundEnabled && audio.zoomTransitionSoundEnabled, "string booleans are accepted")
+        await expectThrows("no keys") { _ = try await SetSoundEffectsTool().run(arguments: [:], context: context, progress: { _ in }) }
+        await expectThrows("bad boolean") { _ = try await SetSoundEffectsTool().run(arguments: ["click": "maybe"], context: context, progress: { _ in }) }
+        app.closeEditor()
+        await expectToolError("music needs a project", { _ = try await SetBackgroundMusicTool().run(arguments: ["track": "none"], context: context, progress: { _ in }) }) { $0 == .noProject }
+    }
+
+    @MainActor
+    static func exportPaths(root: URL) throws {
+        let box = ProjectBox(nil)
+        var context = makeContext(root: root, box: box)
+        let assets = root.appendingPathComponent("export-assets", isDirectory: true)
+        context.assetsDirectory = assets
+        let stamp = Date(timeIntervalSince1970: 1_800_000_000)
+        func resolve(_ path: String?) throws -> URL {
+            try ExportProjectTool.resolveOutputURL(path: path, context: context, date: stamp)
+        }
+        func resolvedPath(_ path: String?) -> String {
+            do { return try resolve(path).path } catch { return "error: \(error)" }
+        }
+        let byDefault = try resolve(nil)
+        check(byDefault.deletingLastPathComponent().path == assets.path && byDefault.lastPathComponent.hasPrefix("export-") && byDefault.pathExtension == "mp4", "default export lands in the assets folder: \(byDefault.path)")
+        check(FileManager.default.fileExists(atPath: assets.path), "the assets folder is created for the default name")
+        check(resolvedPath("final") == assets.appendingPathComponent("final.mp4").path, "a bare name gets .mp4 inside the assets folder")
+        check(resolvedPath("final.mov") == assets.appendingPathComponent("final.mp4").path, "another video extension becomes .mp4")
+        check(resolvedPath("clips/final.mp4") == assets.appendingPathComponent("clips/final.mp4").path, "relative folders stay under the assets folder")
+        let absolute = root.appendingPathComponent("out/demo.mp4")
+        check(resolvedPath(absolute.path) == absolute.path, "absolute paths are used as given")
+        check(resolvedPath("file://" + absolute.path) == absolute.path, "file URLs are accepted")
+        let folder = root.appendingPathComponent("exports", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let inFolder = try resolve(folder.path)
+        check(inFolder.deletingLastPathComponent().path == folder.path && inFolder.lastPathComponent.hasPrefix("export-") && inFolder.pathExtension == "mp4", "an existing folder gets the default file name: \(inFolder.path)")
+        let trailing = try resolve(root.appendingPathComponent("new-folder").path + "/")
+        check(trailing.deletingLastPathComponent().lastPathComponent == "new-folder" && trailing.lastPathComponent.hasPrefix("export-"), "a trailing slash means a folder: \(trailing.path)")
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        check(resolvedPath("~/Movies/demo.mp4") == home.appendingPathComponent("Movies/demo.mp4").path, "~ is expanded")
+        check((try? resolve("https://example.com/demo.mp4")) == nil, "remote URLs are rejected")
+        try "taken".write(to: assets.appendingPathComponent("export-" + Self.stampString(stamp) + ".mp4"), atomically: true, encoding: .utf8)
+        check(resolvedPath(nil).hasSuffix("-2.mp4"), "an existing file is never clobbered")
+        check(ExportDemoTool().name == "export_demo" && ExportProjectTool().name == "export_project" && ExportDemoTool().parametersSchema.keys == ExportProjectTool().parametersSchema.keys, "export_demo stays as an alias")
+    }
+
+    static func stampString(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return formatter.string(from: date)
+    }
+
     // MARK: - Clip assembly
 
     @MainActor
@@ -617,7 +1092,9 @@ struct AIAssistantTests {
 
         let exported = try await ExportDemoTool().run(arguments: [:], context: context, progress: { _ in })
         let exportDuration = try await AVURLAsset(url: exported.attachments[0]).load(.duration).seconds
-        check(exported.attachments[0].lastPathComponent.hasPrefix("demo-export-") && abs(exportDuration - 1.5) < 0.15, "export_demo renders the recording: \(exported.text)")
+        check(exported.attachments[0].lastPathComponent.hasPrefix("export-") && abs(exportDuration - 1.5) < 0.15, "export_demo (alias) renders the recording into export-<ts>.mp4: \(exported.text)")
+        let customExport = try await ExportProjectTool().run(arguments: ["path": fixtures.appendingPathComponent("final/demo").path], context: context, progress: { _ in })
+        check(customExport.attachments[0].path == fixtures.appendingPathComponent("final/demo.mp4").path && FileManager.default.fileExists(atPath: customExport.attachments[0].path), "export_project writes to the requested path with .mp4: \(customExport.text)")
 
         // The session drives a real paid tool through the confirmation card.
         let provider = ScriptedCompletion([

@@ -20,6 +20,15 @@ struct FocusStudioApp: App {
         .defaultSize(width: 1_440, height: 900)
         .commands { AppLanguageCommands() }
 
+        // The assistant lives in its own window so it can drive the app
+        // (record, open projects, edit, export) while the main window changes pages.
+        Window("AI Assistant", id: AssistantWindow.id) {
+            AppLocalizedView {
+                AssistantWindowView(model: model, gateway: model.aiGateway, codexDirector: model.codexDirector)
+            }
+        }
+        .defaultSize(width: AssistantWindow.defaultSize.width, height: AssistantWindow.defaultSize.height)
+
         Settings {
             AppLocalizedView {
                 TabView {
@@ -38,6 +47,7 @@ struct StudioRootView: View {
     @EnvironmentObject private var model: StudioModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         ZStack {
@@ -104,6 +114,13 @@ struct StudioRootView: View {
             // QA hook: FOCUS_STUDIO_OPEN_SETTINGS=1 opens the Settings window on launch.
             if ProcessInfo.processInfo.environment["FOCUS_STUDIO_OPEN_SETTINGS"] == "1" {
                 openSettings()
+            }
+            // QA hook: FOCUS_STUDIO_ASSISTANT_PROMPT="…" opens the assistant window and
+            // sends that prompt, so an end-to-end run can be captured on screen.
+            if let prompt = ProcessInfo.processInfo.environment["FOCUS_STUDIO_ASSISTANT_PROMPT"],
+               !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                openWindow(id: AssistantWindow.id)
+                model.assistantSession.send(prompt)
             }
         }
         .alert("Focus Studio", isPresented: $model.isShowingError) {

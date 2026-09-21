@@ -698,3 +698,30 @@
 "Revealed %@ in Finder" = "Revealed %@ in Finder";
 "Open the AI assistant" = "Open the AI assistant";
 "No model" = "No model";
+
+/* 1.4: voice and avatar */
+"Voice replies" = "Voice replies";
+"Voice input" = "Voice input";
+"Stop recording (Esc)" = "Stop recording (Esc)";
+"Listening…" = "Listening…";
+"Speech recognition is turned off for Focus Studio." = "Speech recognition is turned off for Focus Studio.";
+"Speech recognition is not available on this Mac." = "Speech recognition is not available on this Mac.";
+"Microphone access is turned off for Focus Studio." = "Microphone access is turned off for Focus Studio.";
+"No microphone was found." = "No microphone was found.";
+"Speech recognition is unavailable right now." = "Speech recognition is unavailable right now.";
+
+/* 1.4: assistant brain, app control */
+"Assistant brain" = "Assistant brain";
+"Codex (ChatGPT sign-in)" = "Codex (ChatGPT sign-in)";
+"Answers the AI Assistant window. Codex uses the sign-in from the Codex tab." = "Answers the AI Assistant window. Codex uses the sign-in from the Codex tab.";
+"ark.env" = "ark.env";
+"Import from ark.env" = "Import from ark.env";
+"Copy ARK_API_KEY from ~/.config/focus-studio/ark.env into the Keychain and test it" = "Copy ARK_API_KEY from ~/.config/focus-studio/ark.env into the Keychain and test it";
+"Importing…" = "Importing…";
+"ark.env was not found" = "ark.env was not found";
+"No ARK_API_KEY found in ark.env" = "No ARK_API_KEY found in ark.env";
+"Key imported from ark.env and tested" = "Key imported from ark.env and tested";
+"Key imported from ark.env, but the test failed: %@" = "Key imported from ark.env, but the test failed: %@";
+"Counting down…" = "Counting down…";
+"Screen Recording permission is required." = "Screen Recording permission is required.";
+"Waiting… %lld s left" = "Waiting… %lld s left";

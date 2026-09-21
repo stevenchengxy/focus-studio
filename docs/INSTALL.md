@@ -41,9 +41,17 @@ Chrome 产品演示：选择 **Window → Chrome 窗口**，开启 **Webpage onl
 
 如果编辑器提示没有捕获点击或输入活动，说明该段视频缺少生成自动缩放所需的交互数据。稍后授权无法补回已经录制的视频事件：请完成权限设置后新录一段，或在原视频的 **Zoom** 时间线上双击添加并调整缩放块。
 
+## AI 助手操控应用、Codex 大脑、语音与数字人（1.4.0）
+
+点击编辑器或项目库顶栏的 **AI** 打开独立的助手窗口。直接说需求，例如"录一段 Chrome 窗口的操作，停止后自动加缩放和章节字幕，导出 1080p"，助手会逐步执行并汇报；开始录制前有 3 秒倒计时，付费生成（Seedance）前会弹出费用确认。
+
+大脑二选一（设置 → AI 模型 → Assistant brain）：**默认文本模型**（已配置的 API Key 提供商）或 **Codex**（在"Codex"页登录 ChatGPT 后即可，无需 API Key）。首次启动时如果 `~/.config/focus-studio/ark.env` 存在火山方舟密钥，应用会自动导入并选定默认模型。
+
+语音：按下麦克风按钮说话，识别结果实时写入输入框，停顿约 1.5 秒自动结束；首次使用需要允许"语音识别"和"麦克风"权限。可在面板中开启"语音回复"让助手朗读答案。数字人会根据倾听、思考、说话、成功、出错切换动作；开启系统"减弱动态效果"后只做淡入淡出。
+
 ## AI 模型、章节字幕与 AI 助手（1.3.0）
 
-**设置 → AI 模型**：在左侧选择提供商（OpenAI、Anthropic、DeepSeek、智谱 GLM、Kimi、OpenRouter、火山方舟或自定义 OpenAI 兼容端点），粘贴 API 密钥并保存（写入 macOS 钥匙串，不会进入项目或安装包），点击 **Test / 测试** 拉取模型列表，然后在顶部选择 **Default text model / 默认文本模型**。OpenRouter 只需一把密钥即可使用多家厂商的模型；火山方舟的密钥同时用于豆包文本模型和 Seedance / Seedream 生成。Codex Director 仍在 **Codex** 页单独配置。
+**设置 → AI 模型**：在左侧选择提供商（OpenAI、Anthropic、DeepSeek、智谱 GLM、Kimi、OpenRouter、火山方舟或自定义 OpenAI 兼容端点），粘贴 API 密钥并保存（写入 `~/Library/Application Support/FocusStudio/secrets.json`，权限 600，不会进入项目或安装包；本地签名的应用不再使用钥匙串，避免每次重新构建后弹出授权对话框），点击 **Test / 测试** 拉取模型列表，然后在顶部选择 **Default text model / 默认文本模型**。OpenRouter 只需一把密钥即可使用多家厂商的模型；火山方舟的密钥同时用于豆包文本模型和 Seedance / Seedream 生成。Codex Director 仍在 **Codex** 页单独配置。
 
 **章节字幕**：编辑器时间线新增 **Chapters / 章节** 泳道，双击添加、拖动移动或改变起止；右侧 **Captions / 字幕** 工具可编辑标题、字幕、样式（位置、大小、章节编号、强调色）并导出 SRT。字幕在预览与导出中一致显示。填写"这个演示展示了什么"后，**Generate chapters / 生成章节** 会根据点击、缩放与输入时间由 AI 生成章节，**Polish captions / 润色字幕** 精简改写；未配置 AI 模型时这些按钮禁用。
 

@@ -1,3 +1,4 @@
 "NSScreenCaptureUsageDescription" = "Focus Studio 会录制你选择的屏幕或窗口，用于制作视频。";
 "NSMicrophoneUsageDescription" = "启用旁白时，Focus Studio 会录制你的麦克风。";
 "NSAudioCaptureUsageDescription" = "启用应用声音时，Focus Studio 会录制系统音频。";
+"NSSpeechRecognitionUsageDescription" = "Focus Studio 会将你的语音转成文字，以便与 AI 助手对话。";

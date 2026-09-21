@@ -14,6 +14,27 @@ struct AIGatewayTests {
         try storeRoundTrip()
         try await mockedTransport()
         try await storeTesting()
+do {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("FocusStudioSecrets-\(UUID().uuidString)", isDirectory: true)
+    let fileURL = directory.appendingPathComponent("secrets.json")
+    let store = FileSecretStore(url: fileURL)
+    try store.write("sk-test-value", account: "openAI")
+    try store.write("ark-test-value", account: "volcengineArk")
+    let openAIValue = try store.read(account: "openAI")
+    precondition(openAIValue == "sk-test-value", "file secret store round trip")
+    precondition(store.contains(account: "volcengineArk"), "file secret store contains")
+    let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+    precondition((attributes[.posixPermissions] as? Int) == 0o600, "secrets file must be 0600")
+    try store.delete(account: "openAI")
+    let deletedValue = try store.read(account: "openAI")
+    precondition(deletedValue == nil, "file secret store delete")
+    let reloadedValue = try FileSecretStore(url: fileURL).read(account: "volcengineArk")
+    precondition(reloadedValue == "ark-test-value", "file secret store reload")
+    try? FileManager.default.removeItem(at: directory)
+    print("AIGatewayTests: file secret store")
+} catch {
+    fatalError("file secret store test failed: \(error)")
+}
         print("AIGatewayTests: PASS (provider table, recommendations, JSON extraction, request bodies, store + keychain privacy, mocked HTTP, connection tests)")
     }
 

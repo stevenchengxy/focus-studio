@@ -147,42 +147,64 @@ final class AIAssistantSession: ObservableObject {
     static let maximumStepsPerTurn = 8
     static let transcriptCharacterBudget = 12_000
     static let maximumListedAssets = 12
+    static let maximumListedZooms = 16
 
     @Published private(set) var messages: [AIAssistantMessage] = []
     @Published private(set) var isRunning = false
     @Published private(set) var pendingConfirmation: PendingToolCall?
     /// Follow-ups offered by the last reply.
     @Published private(set) var suggestions: [String] = []
+    /// Whether a text model (or Codex) can answer right now. Re-evaluated with
+    /// ``refreshModelAvailability()`` whenever the app's AI settings change.
+    @Published private(set) var hasModel: Bool
 
     let context: AIAssistantContext
-    let completion: (any TextCompletionProviding)?
     let tools: [any AIAssistantTool]
 
+    private let completionResolver: @MainActor () -> (any TextCompletionProviding)?
     private let toolCatalogJSON: String
     private var runningTask: Task<Void, Never>?
     private var confirmationContinuation: CheckedContinuation<Bool, Never>?
     private var statusMessageID: UUID?
     private var declinedMessageIDs: Set<UUID> = []
 
-    init(
+    convenience init(
         context: AIAssistantContext,
         completion: (any TextCompletionProviding)?,
         tools: [any AIAssistantTool] = AIAssistantToolCatalog.standard
     ) {
-        self.context = context
-        self.completion = completion
-        self.tools = tools
-        toolCatalogJSON = Self.renderToolCatalog(tools)
+        self.init(context: context, completionResolver: { completion }, tools: tools)
     }
 
-    var hasModel: Bool { completion != nil }
+    /// `completionResolver` is consulted on every send, so switching the model
+    /// or the assistant brain in Settings applies to the next message.
+    init(
+        context: AIAssistantContext,
+        completionResolver: @escaping @MainActor () -> (any TextCompletionProviding)?,
+        tools: [any AIAssistantTool] = AIAssistantToolCatalog.standard
+    ) {
+        self.context = context
+        self.completionResolver = completionResolver
+        self.tools = tools
+        toolCatalogJSON = Self.renderToolCatalog(tools)
+        hasModel = completionResolver() != nil
+    }
+
+    /// The provider that would answer the next message.
+    var completion: (any TextCompletionProviding)? { completionResolver() }
+
+    func refreshModelAvailability() {
+        let available = completionResolver() != nil
+        if available != hasModel { hasModel = available }
+    }
 
     // MARK: - Public actions
 
     func send(_ text: String, attachments: [URL] = []) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !isRunning, !trimmed.isEmpty || !attachments.isEmpty else { return }
-        guard let completion else {
+        refreshModelAvailability()
+        guard let completion = completionResolver() else {
             messages.append(AIAssistantMessage(role: .error, text: L10n.tr("Set up an AI model in Settings")))
             return
         }
@@ -336,21 +358,25 @@ final class AIAssistantSession: ObservableObject {
 
     func systemPrompt() -> String {
         """
-        You are the AI assistant inside Focus Studio, a macOS app that turns screen recordings into polished product-demo videos: automatic zooms on clicks and typing, a styled background with padding and shadow, chapter captions drawn on the video, audio finishing and MP4 export.
-        You work by calling tools: generate a background image or short video clips with Volcengine Ark (Seedream for images, Seedance for video), capture styled frames of the recording as references, change the look, set chapters and captions, list generated assets, export the demo, and assemble intro + demo + outro clips into one MP4.
+        You are the AI assistant inside Focus Studio, a macOS app that records the screen and turns the recording into a polished product-demo video: automatic zooms on clicks and typing, a styled background with padding and shadow, chapter captions drawn on the video, background music and sound effects, and MP4 export.
+        You operate the app through tools. The end-to-end workflow is: list_recording_sources → start_recording (the app counts down 3 seconds, then records until stop_recording) → stop_recording (saves a project and opens it in the editor) → edit: add_zoom / remove_zoom / set_zoom_style, set_chapters, update_settings or set_background_image for the look, set_background_music and set_sound_effects → export_project → optionally generate_image / generate_video (Volcengine Ark: Seedream images, Seedance clips) for an intro or outro and assemble_video to join intro + export + outro. list_projects / open_project / close_editor move between the library and the editor; editing and export tools need a project open in the editor.
 
         Tools (name, summary, JSON schema of the arguments):
         \(toolCatalogJSON)
 
         Rules:
         - Think briefly in "thought", then either call exactly one tool or reply to the user.
-        - When the intent is ambiguous (what the image should show, clip length, mood, which clips to join), ask one short clarifying question instead of guessing.
+        - Multi-step requests ("record Safari and export it") are executed step by step: call the next tool after each result, and keep the user informed with brief replies when a step takes time or needs their action (for example, the demo itself happens while recording — reply after start_recording, then call stop_recording when the user says they are done, unless they asked for a fixed duration).
+        - A recording captures what the user does on screen; do not stop it until the user says the demo is finished, and never start a second recording while one is in progress.
+        - When the intent is ambiguous (which window, what the image should show, clip length, mood, which clips to join), ask one short clarifying question instead of guessing.
         - Prefer cheap choices while iterating: \(ArkMediaClient.defaultVideoModel), 4–6 seconds, 720p; \(ArkMediaClient.defaultImageModel). Say what things cost in 元.
         - generate_video is paid and the app asks the user to confirm before it runs. If the user declines, do not repeat the same call; ask what to change.
         - Never ask for words, letters, logos or interface text inside image or video prompts: captions and titles are added by the app.
         - A background image must keep the screen readable: subtle, low-contrast, soft gradients or abstract shapes that match the product's colours.
         - Refer to local files by full path or by a file name from list_assets. Use capture_frame when a clip should match the current look, then pass the frame as first_frame or reference_images.
+        - Zoom positions are normalized: x 0–1 from left to right, y 0–1 from top to bottom; times are seconds within the recording (see the project summary for duration, clicks and existing zooms).
         - After a tool result decide whether another call is needed; otherwise reply with what happened and up to three short follow-up suggestions.
+        - If a tool fails, explain the problem in one sentence and, when possible, suggest the fix (open a project, grant Screen Recording permission, configure the Ark key).
         - Reply in \(Self.languageName(context.uiLanguage)). Keep replies to one to three sentences, no Markdown headings.
         - Everything you produce stays editable by the user in the editor.
 
@@ -361,13 +387,32 @@ final class AIAssistantSession: ObservableObject {
     }
 
     func userContent() -> String {
-        var sections = ["[Project]\n" + projectSummary()]
+        var sections: [String] = []
+        if let app = appSummary() { sections.append("[App]\n" + app) }
+        sections.append("[Project]\n" + projectSummary())
         sections.append("[Conversation]\n" + transcript())
         return sections.joined(separator: "\n\n")
     }
 
+    /// Recording state, library size and bundled music, when the app is controllable.
+    func appSummary() -> String? {
+        guard let app = context.app else { return nil }
+        var lines = ["Recording: \(app.recordingPhase.label) | Projects in library: \(app.projectSummaries.count) | Editor: \(app.openProjectID == nil ? "closed (library showing)" : "open")"]
+        let sources = app.recordingSources
+        if !sources.isEmpty {
+            let displays = sources.filter { $0.kind == .display }.count
+            let windows = sources.filter { $0.kind == .window }.count
+            lines.append("Known sources: \(displays) displays, \(windows) windows (list_recording_sources refreshes them)")
+        }
+        let music = app.bundledMusicTracks
+        if !music.isEmpty {
+            lines.append("Bundled music: " + music.map { "\($0.title) (\($0.id))" }.joined(separator: ", "))
+        }
+        return lines.joined(separator: "\n")
+    }
+
     func projectSummary() -> String {
-        guard let project = context.readProject() else { return "No recording is open." }
+        guard let project = context.readProject() else { return "No recording is open. Use list_projects and open_project, or record a new demo." }
         let settings = project.settings
         var lines: [String] = []
         let title = project.title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -375,6 +420,17 @@ final class AIAssistantSession: ObservableObject {
         lines.append("Look: background \(Self.backgroundDescription(settings)) | aspect \(settings.aspectRatio.title) | padding \(Int(settings.padding)) px | corner radius \(Int(settings.cornerRadius)) px | shadow \(Self.seconds(settings.shadow)) | screen animation \(settings.screenAnimation.rawValue) | zoom scale \(Self.seconds(settings.zoomScale))× | caption \(settings.resolvedCaptionStyle.position.rawValue)")
         if let description = settings.productDescription?.trimmingCharacters(in: .whitespacesAndNewlines), !description.isEmpty {
             lines.append("Product: \(String(description.prefix(400)))")
+        }
+        let audio = settings.resolvedProductDemoAudio
+        let music = audio.backgroundMusicPath.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent } ?? "none"
+        lines.append("Zoom style: automatic zooms \(settings.autoZoomEnabled ? "on" : "off") | hold \(Self.seconds(settings.zoomHold)) s | ease in \(Self.seconds(settings.zoomEaseIn)) s | ease out \(Self.seconds(settings.zoomEaseOut)) s | chain gap \(Self.seconds(settings.resolvedZoomChainGap)) s")
+        lines.append("Audio: music \(music) (volume \(Self.seconds(audio.backgroundMusicVolume))) | click sound \(audio.clickSoundEnabled ? "on" : "off") | zoom whoosh \(audio.zoomTransitionSoundEnabled ? "on" : "off")")
+        let zooms = AIToolSupport.orderedZooms(project)
+        if !zooms.isEmpty {
+            let listed = zooms.prefix(Self.maximumListedZooms).map { "#\($0.index) \(AIToolSupport.zoomLine($0.segment))" }
+            var text = "Zooms (time order): " + listed.joined(separator: "; ")
+            if zooms.count > Self.maximumListedZooms { text += "; and \(zooms.count - Self.maximumListedZooms) more" }
+            lines.append(text)
         }
         if let chapters = project.chapters, !chapters.isEmpty {
             let listed = chapters.sorted(by: ChapterMath.precedes).prefix(12).enumerated().map { index, chapter in

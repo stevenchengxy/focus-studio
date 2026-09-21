@@ -698,3 +698,30 @@
 "Revealed %@ in Finder" = "已在访达中显示 %@";
 "Open the AI assistant" = "打开 AI 助手";
 "No model" = "未选择模型";
+
+/* 1.4: voice and avatar */
+"Voice replies" = "语音回复";
+"Voice input" = "语音输入";
+"Stop recording (Esc)" = "停止录音（Esc）";
+"Listening…" = "正在聆听…";
+"Speech recognition is turned off for Focus Studio." = "未允许 Focus Studio 使用语音识别。";
+"Speech recognition is not available on this Mac." = "这台 Mac 不支持语音识别。";
+"Microphone access is turned off for Focus Studio." = "未允许 Focus Studio 使用麦克风。";
+"No microphone was found." = "未找到麦克风。";
+"Speech recognition is unavailable right now." = "语音识别暂时不可用。";
+
+/* 1.4: assistant brain, app control */
+"Assistant brain" = "助手大脑";
+"Codex (ChatGPT sign-in)" = "Codex（ChatGPT 登录）";
+"Answers the AI Assistant window. Codex uses the sign-in from the Codex tab." = "为 AI 助手窗口作答。Codex 使用“Codex”标签页中的登录。";
+"ark.env" = "ark.env";
+"Import from ark.env" = "从 ark.env 导入";
+"Copy ARK_API_KEY from ~/.config/focus-studio/ark.env into the Keychain and test it" = "将 ~/.config/focus-studio/ark.env 中的 ARK_API_KEY 存入钥匙串并测试";
+"Importing…" = "正在导入…";
+"ark.env was not found" = "未找到 ark.env";
+"No ARK_API_KEY found in ark.env" = "ark.env 中没有 ARK_API_KEY";
+"Key imported from ark.env and tested" = "已从 ark.env 导入密钥并通过测试";
+"Key imported from ark.env, but the test failed: %@" = "已从 ark.env 导入密钥，但测试失败：%@";
+"Counting down…" = "倒计时中…";
+"Screen Recording permission is required." = "需要“屏幕录制”权限。";
+"Waiting… %lld s left" = "等待中… 还剩 %lld 秒";

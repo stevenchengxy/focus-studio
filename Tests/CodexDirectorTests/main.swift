@@ -187,6 +187,52 @@ struct CodexConnectionTests {
         await signingIn.value
         check(cancelledLogin.connectionState == .disconnected, "disconnect cancels pending authentication")
 
+        // The AI assistant's brain: one-shot completions on a dedicated thread.
+        setenv("FOCUS_STUDIO_CODEX_FIXTURE", "assistant-turn", 1)
+        let assistant = makeService(scope: .existingCodex)
+        check(assistant.isAvailableForCompletion, "a disconnected service connects on the first completion")
+        func object(_ text: String) throws -> [String: Any] {
+            try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] ?? [:]
+        }
+        let first = try object(await assistant.completeText(developerInstructions: "You are a test.", prompt: "hello", json: true))
+        check(first["reply"] as? String == "echo: hello" && first["schema"] as? Bool == true, "completeText returns the final agent text (completion batched before the turn/start response): \(first)")
+        check(first["instructions"] as? String == "You are a test." && (first["thread"] as? String)?.hasPrefix("assistant-thread-") == true, "the thread carries the developer instructions: \(first)")
+        check(assistant.canCreatePlan && assistant.messages.isEmpty && assistant.currentPlan == nil, "assistant turns never touch the Director transcript or plan")
+        let second = try object(await assistant.completeText(developerInstructions: "You are a test.", prompt: "again", json: false))
+        check(second["schema"] as? Bool == false && second["thread"] as? String == first["thread"] as? String, "json: false sends no schema; the thread is reused: \(second)")
+        let third = try object(await assistant.completeText(developerInstructions: "Different instructions.", prompt: "third", json: true))
+        check(third["instructions"] as? String == "Different instructions." && third["thread"] as? String != first["thread"] as? String, "changed instructions start a new thread: \(third)")
+        let slowCompletion = Task { try await assistant.completeText(developerInstructions: "Different instructions.", prompt: "slow one", json: false) }
+        try await Task.sleep(for: .milliseconds(150))
+        slowCompletion.cancel()
+        let slowResult = await slowCompletion.result
+        switch slowResult {
+        case let .failure(error): check(error is CancellationError, "cancelling the caller interrupts the turn: \(error)")
+        case .success: fatalError("FAIL: a cancelled completion must not succeed")
+        }
+        let afterCancel = try object(await assistant.completeText(developerInstructions: "Different instructions.", prompt: "after cancel", json: true))
+        check(afterCancel["reply"] as? String == "echo: after cancel" && assistant.canCreatePlan, "the service stays usable after an interruption: \(afterCancel)")
+        do {
+            _ = try await assistant.completeText(developerInstructions: "Different instructions.", prompt: "please fail", json: true)
+            fatalError("FAIL: a failed turn must throw")
+        } catch CodexDirectorServiceError.turnFailed(let message) {
+            check(message.contains("fixture failure"), "a failed turn surfaces its error: \(message)")
+        }
+        assistant.disconnect()
+
+        setenv("FOCUS_STUDIO_CODEX_FIXTURE", "new-user", 1)
+        let signedOut = makeService()
+        do {
+            _ = try await signedOut.completeText(developerInstructions: "You are a test.", prompt: "hello", json: true)
+            fatalError("FAIL: a signed-out completion must throw")
+        } catch CodexDirectorServiceError.assistantSignInRequired {
+            check(signedOut.connectionState == .needsSignIn && !signedOut.isAvailableForCompletion,
+                  "sign-in required is reported clearly and blocks the assistant: \(signedOut.connectionState)")
+            check(CodexDirectorServiceError.assistantSignInRequired.localizedDescription == "Sign in to Codex in Settings → Codex", "sign-in message")
+        }
+        signedOut.disconnect()
+        check(signedOut.isAvailableForCompletion, "disconnecting lets the next completion retry")
+
         setenv("FOCUS_STUDIO_CODEX_FIXTURE", "config-error", 1)
         let brokenConfig = makeService()
         await brokenConfig.connect()
@@ -201,7 +247,7 @@ struct CodexConnectionTests {
         check(!exitMessage.contains("older diagnostic"), "only the last three stderr lines are shown: \(exitMessage)")
         check(brokenConfig.resolvedExecutablePath == fixturePath, "the launched executable is reported")
         brokenConfig.disconnect()
-        print("CodexConnectionTests: PASS (discovery, setup, auth, cancellation, models, privacy, planning, exit diagnostics)")
+        print("CodexConnectionTests: PASS (discovery, setup, auth, cancellation, models, privacy, planning, assistant completions, exit diagnostics)")
     }
 
     static func check(_ condition: @autoclosure () -> Bool, _ message: String) {
