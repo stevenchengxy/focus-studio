@@ -9,7 +9,7 @@ fi
 BUILD_DIR="$(swift build --show-bin-path)"
 TEST_DIR="$PROJECT_DIR/.artifacts/app-regression"
 mkdir -p "$TEST_DIR"
-APP_SOURCES=(Sources/FocusStudio/*.swift Sources/FocusStudio/AI/*.swift)
+APP_SOURCES=(Sources/FocusStudio/*.swift Sources/FocusStudio/AI/*.swift Sources/FocusStudio/AI/Assistant/*.swift)
 APP_SOURCES=("${(@)APP_SOURCES:#Sources/FocusStudio/FocusStudioApp.swift}")
 CORE_OBJECTS=("$BUILD_DIR"/FocusStudioCore.build/*.swift.o)
 CAPTURE_OBJECTS=("$BUILD_DIR"/FocusStudioCapture.build/*.swift.o)

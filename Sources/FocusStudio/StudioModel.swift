@@ -124,22 +124,76 @@ final class StudioModel: ObservableObject {
         }
     }
 
-    private func importArkEnvironmentKey() async {
+    /// ARK_API_KEY from ~/.config/focus-studio/ark.env, the same file the
+    /// Claude Code skills read. Never written anywhere by the app.
+    nonisolated static func arkEnvironmentKey() -> String? {
         let envURL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".config/focus-studio/ark.env")
-        guard let text = try? String(contentsOf: envURL, encoding: .utf8) else { return }
+        guard let text = try? String(contentsOf: envURL, encoding: .utf8) else { return nil }
         let key = text.split(separator: "\n")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .first { $0.hasPrefix("ARK_API_KEY=") }?
             .dropFirst("ARK_API_KEY=".count)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let key, !key.isEmpty else { return }
+        guard let key, !key.isEmpty else { return nil }
+        return key
+    }
+
+    private func importArkEnvironmentKey() async {
+        guard let key = Self.arkEnvironmentKey() else { return }
         do {
             try aiGateway.setAPIKey(key, for: .volcengineArk)
         } catch {
             return
         }
         await aiGateway.test(.volcengineArk)
+    }
+
+    /// A conversational assistant bound to the active project, or to the shared
+    /// AI Assets folder when no project is open. Generated media lands in the
+    /// project's `ai/` folder so it travels with the project.
+    func makeAssistantSession(projectID: UUID?) -> AIAssistantSession {
+        let assetsDirectory: URL
+        // Loaded projects carry an absolute raw.mp4 path inside their own folder,
+        // so the folder is known without awaiting the store actor.
+        let project = projects.first { $0.id == projectID } ?? (activeProject?.id == projectID ? activeProject : nil)
+        if let project, project.sourceVideoPath.hasPrefix("/") {
+            assetsDirectory = URL(fileURLWithPath: project.sourceVideoPath)
+                .deletingLastPathComponent()
+                .appendingPathComponent("ai", isDirectory: true)
+        } else {
+            assetsDirectory = FileManager.default
+                .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("FocusStudio/AI Assets", isDirectory: true)
+        }
+        // Snapshot the Ark key: tools run off the main actor. The env file is a
+        // fallback so the skills' key works in-app without re-entering it.
+        let arkKey = aiGateway.apiKey(for: .volcengineArk) ?? Self.arkEnvironmentKey()
+        let arkBase = URL(string: aiGateway.configuration(for: .volcengineArk).effectiveBaseURL)
+            ?? URL(string: "https://ark.cn-beijing.volces.com/api/v3")!
+        let context = AIAssistantContext(
+            assetsDirectory: assetsDirectory,
+            uiLanguage: AppLocalization.shared.language.localeIdentifier,
+            readProject: { [weak self] in
+                guard let self, let projectID, let project = self.activeProject, project.id == projectID else { return nil }
+                return project
+            },
+            updateProject: { [weak self] mutate in
+                guard let self, let projectID, var project = self.activeProject, project.id == projectID else { return }
+                mutate(&project)
+                self.updateActiveProject(project)
+            },
+            arkAPIKey: { arkKey },
+            arkBaseURL: arkBase
+        )
+        let completion: (any TextCompletionProviding)? = aiGateway.defaultTextModel == nil
+            ? nil
+            : AIGatewayTextCompletion(store: aiGateway)
+        return AIAssistantSession(context: context, completion: completion)
+    }
+
+    var assistantModelLabel: String {
+        aiGateway.defaultTextModel?.modelID ?? L10n.tr("No model")
     }
 
     func reloadProjects() async {

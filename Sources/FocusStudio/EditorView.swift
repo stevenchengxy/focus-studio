@@ -17,6 +17,9 @@ struct EditorView: View {
     @State private var exportMessage: String?
     @Namespace private var toolHighlight
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.openSettings) private var openSettings
+    @State private var showsAssistant = false
+    @State private var assistantSession: AIAssistantSession?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -54,19 +57,41 @@ struct EditorView: View {
                 }
 
                 Divider().overlay(StudioTheme.line)
-                EditorInspectorView(
-                    project: $project,
-                    selectedZoomID: $selectedZoomID,
-                    selectedChapterID: $selectedChapterID,
-                    tool: selectedTool
-                )
-                .id(selectedTool)
-                .transition(StudioMotion.panel(reduceMotion: reduceMotion))
-                .frame(width: 292)
-                .clipped()
+                if showsAssistant, let assistantSession {
+                    AIAssistantPanel(
+                        session: assistantSession,
+                        modelLabel: model.assistantModelLabel,
+                        onClose: { showsAssistant = false },
+                        openSettings: { openSettings() }
+                    )
+                    .transition(StudioMotion.panel(reduceMotion: reduceMotion))
+                    .frame(width: 360)
+                    .clipped()
+                } else {
+                    EditorInspectorView(
+                        project: $project,
+                        selectedZoomID: $selectedZoomID,
+                        selectedChapterID: $selectedChapterID,
+                        tool: selectedTool
+                    )
+                    .id(selectedTool)
+                    .transition(StudioMotion.panel(reduceMotion: reduceMotion))
+                    .frame(width: 292)
+                    .clipped()
+                }
             }
         }
         .animation(reduceMotion ? nil : StudioMotion.panelAnimation, value: selectedTool)
+        .animation(reduceMotion ? nil : StudioMotion.panelAnimation, value: showsAssistant)
+        .onAppear {
+            // QA hook: FOCUS_STUDIO_ASSISTANT_PROMPT="…" opens the assistant and
+            // sends that prompt, so an end-to-end run can be captured on screen.
+            if let prompt = ProcessInfo.processInfo.environment["FOCUS_STUDIO_ASSISTANT_PROMPT"],
+               !prompt.trimmingCharacters(in: .whitespaces).isEmpty {
+                toggleAssistant(open: true)
+                assistantSession?.send(prompt)
+            }
+        }
         .overlay {
             if isExporting {
                 Color.black.opacity(0.42).ignoresSafeArea()
@@ -150,6 +175,21 @@ struct EditorView: View {
 
             AppLanguageMenu()
 
+            Button {
+                toggleAssistant(open: !showsAssistant)
+            } label: {
+                Label("AI", systemImage: "sparkles")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(showsAssistant ? .white : StudioTheme.purple)
+                    .padding(.horizontal, 12)
+                    .frame(height: 36)
+            }
+            .buttonStyle(.plain)
+            .background(showsAssistant ? StudioTheme.purpleSoft : StudioTheme.purple.opacity(0.14))
+            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .help("Open the AI assistant")
+            .accessibilityIdentifier("editor.assistant")
+
             Button(action: export) {
                 Label("Export", systemImage: "square.and.arrow.up")
             }
@@ -217,6 +257,13 @@ struct EditorView: View {
         .padding(.horizontal, 15)
         .frame(height: 34)
         .background(StudioTheme.panel)
+    }
+
+    private func toggleAssistant(open: Bool) {
+        if open, assistantSession == nil {
+            assistantSession = model.makeAssistantSession(projectID: project.id)
+        }
+        showsAssistant = open
     }
 
     private func export() {

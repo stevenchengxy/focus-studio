@@ -11,7 +11,8 @@
 | `swift run FocusStudioE2E`（合成项目带一个章节：字幕帧与无字幕基线均值差 0.41、变化像素集中在字幕行；章节外帧差 0；预览与导出 MP4 差 0.72；顶部中文字幕无编号；禁用章节不渲染） | PASS |
 | `swift scripts/test-localization.swift` | PASS（630 个键，中英一致） |
 | `zsh scripts/test-app-regression.sh --skip-build` | PASS |
-| AI 助手测试脚本、完整 `scripts/test.sh` | 见下文（助手集成后补充） |
+| `zsh scripts/test-ai-assistant.sh`（协议解析、脚本化代理循环、确认门、停止、`update_settings`/`set_chapters` 校验、`assemble_video` 双片段拼接、Ark 请求体、`fake-ark.py` 夹具往返含全部工具） | PASS |
+| `zsh scripts/test.sh`（以上全部串行，含 E2E 与 Codex 真实连接） | PASS，退出码 0 |
 
 ## 实机检查（候选应用 `dist/candidates/1.3.0/Focus Studio.app`）
 
@@ -20,6 +21,17 @@
 - `FOCUS_STUDIO_OPEN_SETTINGS=1` 启动：设置窗口打开在“AI 模型”页，左侧 8 个提供商带状态点，右侧只有密钥、模型、状态/测试与“高级”折叠（`.artifacts/qa/1.3.0/settings-ai-models.png`）。
 - 火山方舟文本模型实测：`GET /models` 列出 doubao-seed-2.0/2.1 系列，`POST /chat/completions`（`doubao-seed-2-1-turbo-260628`）返回带 `reasoning_content` 的 JSON 回答，网关客户端会跳过思考块只取正文。
 
-## 待补充
+## AI 助手实机运行（真实调用）
 
-设置窗口 AI 模型页截图、AI 助手面板截图、助手测试与完整测试套件结果、Universal 2 安装包。
+`FOCUS_STUDIO_IMPORT_ARK_ENV=1 FOCUS_STUDIO_START_DESTINATION=editor FOCUS_STUDIO_ASSISTANT_PROMPT="为这段录屏生成一张深紫色科技感的 16:9 背景图，不要文字，并把它设为背景"` 启动候选应用：
+
+1. 网关导入火山方舟密钥并测试通过，默认文本模型自动选为 `doubao-seed-2-0-pro-260215`。
+2. 助手理解意图后调用 `generate_image`（Seedream 4.5，2560 × 1440，预估 ¥0.25），图片保存到项目目录 `ai/image-20260922-014049.png`，工具卡片显示缩略图与"在访达中显示"。
+3. 接着调用 `set_background_image`，预览立即显示新的紫色科技背景。
+4. 最终回复中文说明与费用，并给出两条后续建议（调整圆角/阴影、添加章节字幕）。
+
+截图：`.artifacts/qa/1.3.0/assistant-generate-background.png`。视频生成路径（`generate_video`）在离线夹具中验证了确认卡片 → 提交 → 轮询 → 下载全流程；真实 Seedance 2.5 调用已在 skills 一节用同一请求形态验证。
+
+## 安装包
+
+见文末（Universal 2 构建完成后填写）。
