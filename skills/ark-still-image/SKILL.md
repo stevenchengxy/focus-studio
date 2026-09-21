@@ -77,11 +77,13 @@ Numbers are budgeting estimates; `<out>.json` stores the real `usage` block for 
 Response: `{"data": [{"url": "https://...", "size": "2560x1440"}], "usage": {...}}` - the URL is temporary and is
 downloaded immediately; the script converts to the extension of `--out` with Pillow when the API returns JPEG.
 
-Verification status (2026-09-21): this exact request (hero-bg preset, 2560x1440, seedream-4-5) was submitted with the
-account key; Ark answered `404 ModelNotOpen` for every Seedream model, i.e. the account has not activated image
-models yet. Field names follow the current Ark reference. After activation, run one `--dry-run` and one real
-2K call; if `400 InvalidParameter` names `size`, fall back to `--size 2K` without `--ratio`, and record the accepted
-shape here.
+Verification status (2026-09-22): this exact request (hero-bg preset, `"size": "2560x1440"`, `doubao-seedream-4-5-251128`,
+`response_format: url`, `watermark: false`, `sequential_image_generation: disabled`) succeeded with the Ark-native
+console key (`ark-…`): reported size 2560x1440, `usage = {"generated_images": 1, "output_tokens": 14400, "total_tokens": 14400}`,
+≈ ¥0.25. The API enforces minimum output sizes: Seedream 4.5 / 5.0 need ≥ 3,686,400 pixels (2K, e.g. 2560x1440), Seedream 4.0
+needs ≥ 921,600 pixels (1280x720). Activation on this account (free `probe-activation`): 5.0, 4.5 and 4.0 activated; 5.0-pro not
+activated. The IAM API key from console.volcengine.com/iam/keymanage lists models but answers `404 ModelNotOpen` for all of
+them; use the project API key from the Ark console (火山方舟 → API Key 管理) instead.
 
 ## Writing prompts
 

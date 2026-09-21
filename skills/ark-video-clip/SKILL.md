@@ -39,6 +39,14 @@ Image-to-video: `--first-frame hero-bg.png` (local files are embedded as `data:i
 downscaled to 2048 px and ≤ 4 MB with Pillow), optional `--last-frame`, or `--reference img.png` (repeatable,
 Seedance 2.x; mutually exclusive with first/last frame). `--ratio adaptive` follows the first frame.
 
+Multi-modal references (Seedance 2.5, `doubao-seedance-2-5-260628`): add `--reference-video URL` (composition /
+camera language, "视频1" in the prompt) and `--reference-audio URL` (BGM / rhythm, "音频1"), with up to several
+`--reference` images ("图片1", "图片2" … in the order given). Content order is always text → images → videos → audios,
+so the numbering in the prompt matches the CLI order. Reference video/audio should be public http(s) URLs (e.g. TOS
+objects); small local files (≤ 8 MB) are embedded as data URLs. Pass `--resolution auto` to omit `resolution` exactly
+like the console examples, and `--audio` when the clip should carry generated sound (the prompt can quote spoken
+lines and sound cues).
+
 Re-running the same command is free: the cache key is the sha256 of the request JSON (prompt, model, images,
 seed, every parameter), stored in `<out dir>/.cache/`. Change the prompt or pass `--seed` to get a new clip;
 `--force` re-bills deliberately.
@@ -62,7 +70,7 @@ Typical demo budget: 1 hero clip (720p, 5 s, 2.0) + 2 B-roll clips (720p, 5 s, m
 
 ## The request the script sends
 
-`POST {ARK_BASE_URL}/contents/generations/tasks` with `Authorization: Bearer $ARK_API_KEY`:
+`POST {ARK_BASE_URL}/contents/generations/tasks` with `Authorization: Bearer $ARK_API_KEY`. Text-to-video / image-to-video:
 
 ```json
 {
@@ -80,21 +88,42 @@ Typical demo budget: 1 hero clip (720p, 5 s, 2.0) + 2 B-roll clips (720p, 5 s, m
 }
 ```
 
+Multi-modal reference (Seedance 2.5) - this is byte-for-byte the shape of the official console example and is what
+`generate_clip.py --reference A --reference B --reference-video V --reference-audio S --audio --duration 11 --resolution auto` sends:
+
+```json
+{
+  "model": "doubao-seedance-2-5-260628",
+  "content": [
+    {"type": "text", "text": "全程使用视频1的第一视角构图，全程使用音频1作为背景音乐。……首帧为图片1……尾帧定格为图片2。"},
+    {"type": "image_url", "image_url": {"url": "https://…/r2v_tea_pic1.jpg"}, "role": "reference_image"},
+    {"type": "image_url", "image_url": {"url": "https://…/r2v_tea_pic2.jpg"}, "role": "reference_image"},
+    {"type": "video_url", "video_url": {"url": "https://…/r2v_tea_video1.mp4"}, "role": "reference_video"},
+    {"type": "audio_url", "audio_url": {"url": "https://…/r2v_tea_audio1.mp3"}, "role": "reference_audio"}
+  ],
+  "generate_audio": true,
+  "ratio": "16:9",
+  "duration": 11,
+  "watermark": false
+}
+```
+
 Only flags you set are sent (`camera_fixed`, `return_last_frame`, `--extra '{"k": "v"}'` for anything new).
 Response: `{"id": "cgt-..."}`. Poll `GET /contents/generations/tasks/{id}` until `status` is `succeeded`
 (`queued` → `running` → `succeeded|failed|cancelled`); the result is `content.video_url` (a temporary signed URL,
 downloaded immediately) plus `usage.completion_tokens`. `DELETE .../tasks/{id}` cancels a queued task.
 
-Verification status (2026-09-21): the request above was submitted with this account's key and reached model
-routing, which answered `404 ModelNotOpen` for every Seedance model - the account has not activated them yet.
-Parameter names follow the current Ark reference (`resolution`, `ratio`, `duration`, `generate_audio`,
-`watermark`, `seed`, `camera_fixed`, `return_last_frame`); after activation, run one `--dry-run` and one real
-480p/5 s mini call, and if the API returns `400 InvalidParameter` for a field, adjust the flag (or drop it via
-`--extra`) and update this section with the accepted shape.
+Verification status (2026-09-22, Ark-native `ark-…` key): `probe-activation` reports Seedance 2.5, 2.0, 2.0-mini,
+1.0-pro and 1.0-pro-fast as activated (2.0-fast not activated). The multi-modal example above was submitted through this
+script and completed in about 3 minutes (task `cgt-20260922000738-…`): 1280x720 @ 24 fps, 11.07 s, H.264 + AAC with
+model-generated audio, `usage.completion_tokens = 411300` (≈ ¥19 at the estimated 0.046 元/千 tokens; confirm on the bill).
+The pre-flight estimate (width × height × 24 × seconds / 1024 = 237,600) undercounts reference-video + audio jobs by ~1.7×,
+so budget accordingly. The IAM API key type answers
+`404 ModelNotOpen` for every model on this account - use the project key from the Ark console.
 
-Accepted values (per current docs; the API is authoritative): `resolution` 480p/720p/1080p (mini: 480p/720p),
-`ratio` 16:9 · 9:16 · 1:1 · 4:3 · 3:4 · 21:9 · adaptive, `duration` 4-15 s for Seedance 2.x (2-12 s for 1.0),
-images ≥ 300 px, aspect 0.4-2.5, JPEG/PNG/WebP.
+Accepted values (per current docs; the API is authoritative): `resolution` 480p/720p/1080p (mini: 480p/720p) or omitted
+(`--resolution auto`), `ratio` 16:9 · 9:16 · 1:1 · 4:3 · 3:4 · 21:9 · adaptive, `duration` 4-15 s for Seedance 2.x
+(2-12 s for 1.0), images ≥ 300 px, aspect 0.4-2.5, JPEG/PNG/WebP.
 
 ## Prompting for enterprise demo footage
 
@@ -120,7 +149,7 @@ Read `references/prompting.md` before writing prompts. The rules that matter mos
 | --- | --- |
 | `error: ARK_API_KEY is not configured` (exit 3) | create the env file as above or `export ARK_API_KEY` |
 | `HTTP 401` | wrong or revoked key - rotate it in the console; check for stray quotes/whitespace in the env file |
-| `HTTP 404 ModelNotOpen` | model not activated for the account - activate in the console; nothing billed |
+| `HTTP 404 ModelNotOpen` | model not activated for this key's project - activate in the Ark console, or switch from an IAM key to the Ark project key (`ark-…`); nothing billed |
 | `HTTP 404 InvalidEndpointOrModel.NotFound` | typo in the model id, or region mismatch - `ark_client.py models` |
 | `HTTP 400 InvalidParameter ...` | read the message: wrong ratio/duration/resolution for that model, or an image too small |
 | `CERTIFICATE_VERIFY_FAILED` | python.org Python without CA certs; the client already tries `/etc/ssl/cert.pem`, else `export SSL_CERT_FILE=/etc/ssl/cert.pem` |

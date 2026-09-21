@@ -10,7 +10,7 @@ Seedance 视频生成、Seedream 图片生成结合起来，产出企业级科�
 
 | skill | 作用 | 入口脚本 |
 | --- | --- | --- |
-| `ark-video-clip` | 用 Seedance（2.0 / 2.0-fast / 2.0-mini / 2.5 / 1.0-pro）文生视频、图生视频（首帧/尾帧/参考图），含成本预估、轮询、下载、缓存 | `scripts/generate_clip.py` |
+| `ark-video-clip` | 用 Seedance（2.5 / 2.0 / 2.0-mini / 1.0-pro）文生视频、图生视频（首帧/尾帧/参考图），Seedance 2.5 还支持参考视频（`--reference-video`）与参考音频（`--reference-audio`）的多模态参考；含成本预估、轮询、下载、缓存 | `scripts/generate_clip.py` |
 | `ark-still-image` | 用 Seedream（5.0-pro / 5.0 / 4.5 / 4.0）生成标题卡、16:9 主视觉背景、功能图标，或把录屏截图重绘成营销主视觉 | `scripts/generate_still.py` |
 | `demo-storyboard` | 把产品描述 + Focus Studio `project.json`（点击 / 缩放时间）变成 `storyboard.json` 分镜：章节切点、字幕占位、AI 镜头提示词、转场、BGM | `scripts/storyboard_from_project.py` |
 | `product-demo-composer` | 按分镜用 ffmpeg 合成：归一化到 1080p/4K、drawtext 中英文字幕、xfade 转场、BGM 淡入淡出与 ducking，输出 MP4 + `render-report.json`；可按需生成缺失的 AI 素材 | `scripts/compose_demo.py`、`scripts/probe_media.py` |
@@ -76,10 +76,14 @@ Focus Studio 录制 ──导出 MP4──▶ demo-storyboard ──storyboard.j
 `ark_client.py estimate --model ... --resolution 720p --duration 5` 可现场算；每个生成物旁的 `*.json` 记录真实 `usage`，
 按账单校准 `_shared/ark_client.py` 里的价格表即可。一支典型演示视频（1 个片头 + 2 个 B-roll + 2 张静帧）约 ¥10-15。
 
-**2026-09-21 验证记录**：`GET /models` 正常；用本机密钥提交 Seedream 4.5（2560×1440）和 Seedance 2.0 mini（480p、5 s）请求，
-方舟均返回 `404 ModelNotOpen`（账号尚未开通这些模型），`probe-activation` 显示所有 Seedance / Seedream 模型都未开通。
-因此本轮**没有产生任何费用或 token 消耗**；请在火山方舟控制台"开通管理"里开通需要的模型后，再跑一次
-`generate_still.py --dry-run` 与真实请求，若返回 `400 InvalidParameter`，按提示调整参数并把可用的请求形态回填到各 SKILL.md。
+**密钥类型（重要）**：火山引擎有两种 Key。IAM 的 API Key（`console.volcengine.com/iam/keymanage`，形如 `Vx…`）能通过
+`GET /models` 列出模型，但对本账号所有 Seedance / Seedream 请求都返回 `404 ModelNotOpen`；**火山方舟控制台"API Key 管理"里创建的
+项目 Key（`ark-` 开头）才绑定已开通的模型**。请把 `ark-` Key 写入 `~/.config/focus-studio/ark.env`。
+
+**2026-09-22 验证记录**（`ark-` Key）：`probe-activation` 显示已开通 Seedance 2.5 / 2.0 / 2.0-mini / 1.0-pro / 1.0-pro-fast 与
+Seedream 5.0 / 4.5 / 4.0（未开通：Seedance 2.0-fast、Seedream 5.0-pro）。真实调用：Seedream 4.5 生成 2560×1440 主视觉成功
+（`output_tokens` 14400，≈ ¥0.25）；Seedance 2.5 用官方多模态参考示例（2 张 `reference_image` + `reference_video` + `reference_audio`、
+`generate_audio: true`、11 秒）提交成功并在约 3 分钟内完成：1280×720、24 fps、11.07 s、含模型生成的音频，`completion_tokens` 411300（约 ¥19；带参考视频与音频的实际用量约为事前估算的 1.7 倍）。
 
 ## 密钥与安全规则
 

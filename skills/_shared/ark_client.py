@@ -53,7 +53,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 __all__ = [
     "ArkClient", "ArkError", "ArkConfigError", "ArkAPIError", "ArkTaskError", "ArkTimeoutError",
     "Cache", "load_config", "missing_key_instructions", "image_to_data_url", "resolve_image_ref",
-    "estimate_video_cost", "estimate_image_cost", "cost_from_usage", "VIDEO_MODELS", "IMAGE_MODELS",
+    "estimate_video_cost", "estimate_image_cost", "cost_from_usage", "VIDEO_MODELS", "IMAGE_MODELS", "VIDEO_ROLES", "AUDIO_ROLES",
     "redact_for_display", "DEFAULT_BASE_URL", "ENV_FILE",
     "run_video_generation", "run_image_generation", "write_sidecar", "DEFAULT_VIDEO_MODEL", "DEFAULT_IMAGE_MODEL",
     "VIDEO_RATIOS", "VIDEO_RESOLUTIONS", "IMAGE_ROLES", "canonical_json", "utc_now", "probe_activation", "ssl_context",
@@ -115,6 +115,10 @@ DEFAULT_IMAGE_MODEL = "doubao-seedream-4-5-251128"
 VIDEO_RATIOS = ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"]
 VIDEO_RESOLUTIONS = ["480p", "720p", "1080p"]
 IMAGE_ROLES = ["first_frame", "last_frame", "reference_image"]
+# Seedance 2.5 multi-modal references (verified 2026-09-22 with the official console example):
+# a reference video drives composition/camera ("视频1"), a reference audio drives BGM/rhythm ("音频1").
+VIDEO_ROLES = ["reference_video"]
+AUDIO_ROLES = ["reference_audio"]
 
 # Approximate output pixel counts used for token estimates (24 fps assumed).
 _RES_PIXELS = {"480p": 864 * 480, "720p": 1280 * 720, "1080p": 1920 * 1080, "4k": 3840 * 2160}
@@ -532,6 +536,7 @@ class ArkClient:
     # -- video -------------------------------------------------------------
     @staticmethod
     def build_video_payload(model: str, prompt: str, *, images: Iterable[Dict[str, str]] = (),
+                            videos: Iterable[Dict[str, str]] = (), audios: Iterable[Dict[str, str]] = (),
                             resolution: Optional[str] = None, ratio: Optional[str] = None,
                             duration: Optional[int] = None, generate_audio: Optional[bool] = None,
                             watermark: Optional[bool] = False, seed: Optional[int] = None,
@@ -540,7 +545,10 @@ class ArkClient:
         """Build the JSON body for POST /contents/generations/tasks.
 
         ``images`` items: ``{"url": <http(s)/data URL>, "role": first_frame|last_frame|reference_image}``.
-        Only parameters that are not None are sent, so model-specific rejects are avoided.
+        ``videos`` items: ``{"url": <http(s) URL>, "role": "reference_video"}`` (Seedance 2.5).
+        ``audios`` items: ``{"url": <http(s) URL>, "role": "reference_audio"}`` (Seedance 2.5).
+        Content order is preserved: text, images, videos, audios - the prompt refers to them as
+        图片1/图片2…, 视频1, 音频1 in that order. Only parameters that are not None are sent.
         """
         if not prompt or not prompt.strip():
             raise ArkError("prompt must not be empty")
@@ -551,6 +559,16 @@ class ArkClient:
             if role not in IMAGE_ROLES:
                 raise ArkError(f"unknown image role {role!r}; expected one of {IMAGE_ROLES}")
             content.append({"type": "image_url", "image_url": {"url": url}, "role": role})
+        for vid in videos:
+            role = vid.get("role", "reference_video")
+            if role not in VIDEO_ROLES:
+                raise ArkError(f"unknown video role {role!r}; expected one of {VIDEO_ROLES}")
+            content.append({"type": "video_url", "video_url": {"url": vid["url"]}, "role": role})
+        for aud in audios:
+            role = aud.get("role", "reference_audio")
+            if role not in AUDIO_ROLES:
+                raise ArkError(f"unknown audio role {role!r}; expected one of {AUDIO_ROLES}")
+            content.append({"type": "audio_url", "audio_url": {"url": aud["url"]}, "role": role})
         payload: Dict[str, Any] = {"model": model, "content": content}
         for key, val in (("resolution", resolution), ("ratio", ratio), ("duration", duration),
                          ("generate_audio", generate_audio), ("watermark", watermark), ("seed", seed),

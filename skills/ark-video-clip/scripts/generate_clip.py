@@ -54,6 +54,25 @@ from ark_client import (  # noqa: E402
 EXIT_USAGE, EXIT_CONFIG, EXIT_API, EXIT_TASK, EXIT_TIMEOUT = 2, 3, 4, 5, 6
 
 
+def resolve_media_ref(ref: str, *, kind: str, max_bytes: int = 8 * 1024 * 1024) -> str:
+    """Pass URLs through; embed a small local video/audio file as a data URL.
+
+    Ark documents http(s) URLs (e.g. TOS objects) for reference video/audio. Large local files
+    must be hosted first; the size guard keeps the request body reasonable.
+    """
+    if ref.startswith(("http://", "https://", "data:")):
+        return ref
+    path = Path(ref).expanduser()
+    if not path.is_file():
+        raise ArkError(f"{kind} reference not found: {ref}")
+    size = path.stat().st_size
+    if size > max_bytes:
+        raise ArkError(f"{kind} reference {path.name} is {size / 1048576:.1f} MB; host it on a public URL (e.g. TOS) instead of embedding")
+    import base64, mimetypes
+    mime = mimetypes.guess_type(path.name)[0] or ("video/mp4" if kind == "video" else "audio/mpeg")
+    return f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode("ascii")
+
+
 def parse_args(argv=None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         prog="generate_clip.py",
@@ -64,12 +83,14 @@ def parse_args(argv=None) -> argparse.Namespace:
     src.add_argument("--prompt", help="text prompt (Chinese or English). Keep on-screen text out of the prompt; captions are added by the composer.")
     src.add_argument("--prompt-file", help="read the prompt from a UTF-8 text file")
     ap.add_argument("--model", default=DEFAULT_VIDEO_MODEL, help=f"Seedance model id (default: {DEFAULT_VIDEO_MODEL})")
-    ap.add_argument("--resolution", default="720p", choices=VIDEO_RESOLUTIONS + ["4k"], help="output resolution (default 720p)")
+    ap.add_argument("--resolution", default="720p", choices=VIDEO_RESOLUTIONS + ["4k", "auto"], help="output resolution (default 720p; 'auto' omits the field and lets the model decide, as in the console examples)")
     ap.add_argument("--ratio", default="16:9", choices=VIDEO_RATIOS, help="aspect ratio; 'adaptive' follows the first frame image")
     ap.add_argument("--duration", type=int, default=5, help="seconds (Seedance 2.x: 4-15, 1.0: 2-12). Default 5")
     ap.add_argument("--first-frame", metavar="IMG", help="image path or URL used as the first frame (image-to-video)")
     ap.add_argument("--last-frame", metavar="IMG", help="image path or URL used as the last frame (needs --first-frame)")
-    ap.add_argument("--reference", metavar="IMG", action="append", default=[], help="reference image (repeatable; Seedance 2.x). Mutually exclusive with first/last frame on most models")
+    ap.add_argument("--reference", metavar="IMG", action="append", default=[], help="reference image (repeatable; Seedance 2.x). Referred to as 图片1, 图片2… in the prompt, in the order given. Mutually exclusive with first/last frame on most models")
+    ap.add_argument("--reference-video", metavar="URL", action="append", default=[], help="reference video URL (Seedance 2.5; '视频1' in the prompt). Public http(s) URL, e.g. a TOS object; small local files are embedded as data URLs")
+    ap.add_argument("--reference-audio", metavar="URL", action="append", default=[], help="reference audio URL (Seedance 2.5; '音频1' in the prompt, used as BGM/rhythm). Public http(s) URL or a small local file")
     ap.add_argument("--out", help="output .mp4 path (default ai-clips/clip-<hash>.mp4)")
     ap.add_argument("--seed", type=int, help="seed for reproducibility (also part of the cache key)")
     ap.add_argument("--audio", action="store_true", help="ask the model to generate audio (Seedance 2.x). Off by default: BGM is mixed later")
@@ -111,8 +132,10 @@ def main(argv=None) -> int:
         lo, hi = info["durations"]
         if not (lo <= args.duration <= hi):
             log(f"warning: {args.model} usually accepts {lo}-{hi} s; the API may reject {args.duration} s")
-        if args.resolution not in info["resolutions"]:
+        if args.resolution != "auto" and args.resolution not in info["resolutions"]:
             log(f"warning: {args.model} is documented for {info['resolutions']}; {args.resolution} may be rejected")
+        if (args.reference_video or args.reference_audio) and info.get("family") != "seedance-2.5":
+            log(f"warning: reference video/audio are documented for Seedance 2.5; {args.model} may reject them")
         if args.audio and not info.get("audio"):
             log(f"warning: {args.model} does not support generate_audio; the flag will be ignored")
     if args.last_frame and not args.first_frame:
@@ -137,11 +160,14 @@ def main(argv=None) -> int:
             images.append({"url": resolve_image_ref(args.last_frame, max_side=args.max_image_side), "role": "last_frame"})
         for ref in args.reference:
             images.append({"url": resolve_image_ref(ref, max_side=args.max_image_side), "role": "reference_image"})
+        videos = [{"url": resolve_media_ref(v, kind="video"), "role": "reference_video"} for v in args.reference_video]
+        audios = [{"url": resolve_media_ref(a, kind="audio"), "role": "reference_audio"} for a in args.reference_audio]
         generate_audio = None
         if info is None or info.get("audio"):
             generate_audio = bool(args.audio)
         payload = ArkClient.build_video_payload(
-            args.model, prompt, images=images, resolution=args.resolution, ratio=args.ratio, duration=args.duration,
+            args.model, prompt, images=images, videos=videos, audios=audios,
+            resolution=None if args.resolution == "auto" else args.resolution, ratio=args.ratio, duration=args.duration,
             generate_audio=generate_audio, watermark=bool(args.watermark), seed=args.seed,
             camera_fixed=True if args.camera_fixed else None,
             return_last_frame=True if args.return_last_frame else None, extra=extra)

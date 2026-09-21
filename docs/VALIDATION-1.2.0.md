@@ -49,7 +49,9 @@ Connection 面板新增 **Detected installations** 列表（路径、版本、Re
 
 ## AI 视频/生图 Skills（火山方舟）
 
-- `GET /api/v3/models` 用本机密钥（存放于 `~/.config/focus-studio/ark.env`，未进入仓库；`git log -p` 与工作树全文检索均无密钥）返回 134 个模型，其中可见 Seedance 2.0 / 2.0-fast / 2.0-mini / 2.5 / 1.0-pro / 1.0-pro-fast 与 Seedream 4.0 / 4.5 / 5.0 / 5.0-pro。
-- 真实生成请求（Seedream 4.0、Seedream 5.0 各一次 1K 生图；Seedance 2.0 mini 480p 4 秒一次）全部返回 `404 ModelNotOpen`：账号 2132281387 尚未在火山方舟控制台开通这些模型。因此本轮**没有任何计费**，也无法验证最终生成质量；开通后按 `skills/README.md` 的步骤先 `--dry-run` 再实跑一次 480p/5 s 的 mini 请求即可回填参数形态。
+- 密钥类型：IAM API Key（`console.volcengine.com/iam/keymanage`）能列出 134 个模型，但对本账号（2132281387）所有 Seedance / Seedream 请求返回 `404 ModelNotOpen`；9 月 22 日用户提供的火山方舟项目 Key（`ark-` 开头）才绑定已开通模型。两把 Key 都只存放在 `~/.config/focus-studio/ark.env`，`git log -p` 与工作树全文检索均无密钥。
+- 免费探测（`ark_client.py probe-activation`）：已开通 Seedance 2.5 / 2.0 / 2.0-mini / 1.0-pro / 1.0-pro-fast 与 Seedream 5.0 / 4.5 / 4.0；未开通 Seedance 2.0-fast、Seedream 5.0-pro。API 同时给出尺寸下限：Seedream 4.5 / 5.0 ≥ 3,686,400 像素（2K），Seedream 4.0 ≥ 921,600 像素。
+- 真实生图：`generate_still.py --preset hero-bg --size 2K --ratio 16:9`（Seedream 4.5）成功，返回 2560 × 1440，`usage.output_tokens` 14400，约 ¥0.25；产物 `.artifacts/ai-clips/verify/hero-bg.png`（紫色玻璃面板科技背景，中央留白，无文字）。
+- 真实生视频：官方 Seedance 2.5 多模态参考示例（2 张 `reference_image` + `reference_video` + `reference_audio`，`generate_audio: true`，11 秒，16:9）经 `generate_clip.py --reference-video/--reference-audio` 提交，请求体与控制台示例逐字段一致；任务 `cgt-20260922000738-zqdwq` 约 3 分钟完成，产物 `.artifacts/ai-clips/verify/r2v-tea.mp4`：1280 × 720、24 fps、11.07 s、H.264 + AAC（模型生成的音频），`usage.completion_tokens` 411300（按 0.046 元/千 tokens 估算约 ¥19；官方定价以控制台账单为准）。注意：脚本的事前估算按 宽×高×24×秒/1024 只得到 237600 tokens，带参考视频与音频生成的实际用量约为其 1.7 倍。
 - `product-demo-composer` 用 ffmpeg 合成的零费用冒烟测试通过：`.artifacts/ai-clips/composer-test/smoke-final-v2.mp4` 为 1920 × 1080、30 fps、13.6 s、H.264 + AAC，抽帧确认中文字幕（PingFang）、章节编号与 CTA 卡片渲染正确；`composer-test2/edge-final.mp4`（1280 × 720，静帧 Ken Burns + 占位片段）同样可读。
 - 四个 SKILL.md 均含触发描述、脚本入口、请求形态、成本估算与故障排查；`skills/install.sh` 可把它们软链到 `~/.claude/skills/`。
