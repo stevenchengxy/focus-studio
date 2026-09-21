@@ -39,6 +39,8 @@ GENERATED_AUDIO_ASSETS=(
 NETWORK_AUDIO_ASSETS=(
     city-loop.mp3
     overworld.mp3
+    calm-loop.mp3
+    loading-screen-loop.wav
 )
 
 BUNDLED_AUDIO_ASSETS=(
@@ -74,6 +76,8 @@ verify_network_audio() {
 
 verify_network_audio city-loop.mp3 9349982fb8e365167bc5c89f2ac50d3b5376b9f627d506ba30a9b26c8230597e
 verify_network_audio overworld.mp3 d32949f8467ac463a52ca88ed250e505545bc98a46e4e472c1f994bf447a1beb
+verify_network_audio calm-loop.mp3 1d7e386c079d4add6b3b1592054846e4977035f26844466e409467c6dc7bdbde
+verify_network_audio loading-screen-loop.wav 1d169377c84b4c62362cd21144daad68f41e56e8a7e2ab837723e9b01200f44c
 
 if [[ "$needs_audio_regen" == true ]]; then
     swift "$AUDIO_GENERATOR" "$AUDIO_DIR"

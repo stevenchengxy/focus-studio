@@ -48,7 +48,7 @@ while IFS= read -r dependency; do
 done < <(otool -L "$EXECUTABLE" | awk '/^[[:space:]]+[^[:space:]]/ { print $1 }' | sort -u)
 
 audio_directory="$APP_DIR/Contents/Resources/Audio"
-for asset in catalog.json README.md product-demo-bed.wav calm-gradient-bed.wav bright-launch-bed.wav midnight-focus-bed.wav ui-click.wav soft-tap.wav typing-key.wav zoom-whoosh.wav city-loop.mp3 overworld.mp3; do
+for asset in catalog.json README.md product-demo-bed.wav calm-gradient-bed.wav bright-launch-bed.wav midnight-focus-bed.wav ui-click.wav soft-tap.wav typing-key.wav zoom-whoosh.wav city-loop.mp3 overworld.mp3 calm-loop.mp3 loading-screen-loop.wav; do
     [[ -s "$audio_directory/$asset" ]] || { echo "Missing bundled resource: $asset" >&2; exit 1; }
 done
 plutil -convert xml1 -o /dev/null "$audio_directory/catalog.json"
@@ -83,7 +83,8 @@ while IFS= read -r entry; do
         Contents/Resources/en.lproj/InfoPlist.strings|Contents/Resources/zh-Hans.lproj/InfoPlist.strings) ;;
         Contents/Resources/Audio/catalog.json|Contents/Resources/Audio/README.md) ;;
         Contents/Resources/Audio/product-demo-bed.wav|Contents/Resources/Audio/calm-gradient-bed.wav|Contents/Resources/Audio/bright-launch-bed.wav|Contents/Resources/Audio/midnight-focus-bed.wav) ;;
-        Contents/Resources/Audio/ui-click.wav|Contents/Resources/Audio/soft-tap.wav|Contents/Resources/Audio/typing-key.wav|Contents/Resources/Audio/zoom-whoosh.wav|Contents/Resources/Audio/city-loop.mp3|Contents/Resources/Audio/overworld.mp3) ;;
+        Contents/Resources/Audio/ui-click.wav|Contents/Resources/Audio/soft-tap.wav|Contents/Resources/Audio/typing-key.wav|Contents/Resources/Audio/zoom-whoosh.wav) ;;
+        Contents/Resources/Audio/city-loop.mp3|Contents/Resources/Audio/overworld.mp3|Contents/Resources/Audio/calm-loop.mp3|Contents/Resources/Audio/loading-screen-loop.wav) ;;
         *) echo "Unexpected release file: $entry" >&2; exit 1 ;;
     esac
 done < <(cd "$APP_DIR" && find Contents -type f -print)

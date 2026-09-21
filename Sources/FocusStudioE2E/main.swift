@@ -385,7 +385,7 @@ enum FocusStudioE2E {
         // Load the same machine-readable catalog used by the editor. Its
         // initializer validates that every referenced resource exists.
         let audioCatalog = try AudioAssetCatalog.loadBundled()
-        try require(audioCatalog.music.count >= 6, "the audio library must include at least six music tracks")
+        try require(audioCatalog.music.count >= 8, "the audio library must include at least eight music tracks")
         try require(
             audioCatalog.soundEffects.count >= 3,
             "the audio library must include multiple distinct sound effects"

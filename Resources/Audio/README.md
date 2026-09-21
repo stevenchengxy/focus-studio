@@ -1,7 +1,7 @@
 # Focus Studio original audio library
 
 Focus Studio ships two clearly separated groups: deterministic originals made
-by `scripts/generate-audio-assets.swift`, and two author-uploaded CC0 tracks
+by `scripts/generate-audio-assets.swift`, and four author-uploaded CC0 tracks
 whose provenance is recorded below and in `catalog.json`.
 
 ## Original music
@@ -22,14 +22,22 @@ downloaded media.
 | --- | --- | ---: | ---: | --- | --- |
 | `city-loop.mp3` | City Loop — wipics | 56.4245 s | 8% | MP3, 44.1 kHz stereo, 192 kb/s | `9349982fb8e365167bc5c89f2ac50d3b5376b9f627d506ba30a9b26c8230597e` |
 | `overworld.mp3` | Overworld (BGM) — IntelligentGene / Another Page Studio | 9.840 s | 26% | MP3, 48 kHz stereo, ~224 kb/s | `d32949f8467ac463a52ca88ed250e505545bc98a46e4e472c1f994bf447a1beb` |
+| `calm-loop.mp3` | Calm Loop — wipics | 19.383 s | 6% | MP3, 44.1 kHz stereo, 128 kb/s | `1d7e386c079d4add6b3b1592054846e4977035f26844466e409467c6dc7bdbde` |
+| `loading-screen-loop.wav` | Loading Screen Loop — Brandon Morris (uploaded by HaelDB) | 20.645 s | 7% | WAV, PCM 16-bit 44.1 kHz stereo | `1d169377c84b4c62362cd21144daad68f41e56e8a7e2ab837723e9b01200f44c` |
 
-Both creator-uploaded work pages mark the exact recording as **CC0**, and both
-download responses identify the payload as `audio/mpeg`:
+All four creator-uploaded work pages mark the exact recording as **CC0**. The
+three MP3 download responses identify the payload as `audio/mpeg`; the WAV
+download is served as `application/octet-stream` and was confirmed to be a
+RIFF/WAVE PCM file by `ffprobe` and by the SHA-256 recorded below:
 
 - **City Loop:** [work page](https://opengameart.org/content/city-loop-0) ·
   [original MP3](https://opengameart.org/sites/default/files/city-loop_0.mp3)
 - **Overworld (BGM):** [work page](https://opengameart.org/content/overworld-bgm) ·
   [original MP3](https://opengameart.org/sites/default/files/overworld.mp3)
+- **Calm Loop:** [work page](https://opengameart.org/content/calm-loop) ·
+  [original MP3](https://opengameart.org/sites/default/files/Relaxing.mp3)
+- **Loading screen loop:** [work page](https://opengameart.org/content/loading-screen-loop) ·
+  [original WAV](https://opengameart.org/sites/default/files/TremLoadingloopl.wav)
 - License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
 
 CC0 permits copying, modification, distribution, performance, and commercial
@@ -61,7 +69,15 @@ swift scripts/generate-audio-assets.swift Resources/Audio
 ```
 
 During the September 2026 review we required the creator's work page to apply
-CC0 to the exact recording before it could enter the network library. General
+CC0 to the exact recording before it could enter the network library. Calm Loop
+and Loading Screen Loop were added in a September 2026 re-verification pass under
+the same rule: each work page states CC0 (the Calm Loop attribution notice reads
+"Public Domain"; the Loading screen loop page lists the recording under CC0 with
+HaelDB as uploader and Brandon Morris as author), each file was fetched directly
+from the linked upstream download (`audio/mpeg` for the MP3,
+`application/octet-stream` for the WAV), and the SHA-256 in `catalog.json`
+matches that byte-for-byte upstream copy. `scripts/build-app.sh` and
+`scripts/verify-release.sh` re-check every network hash on each build. General
 public-domain guidance used for that review:
 
 - Creative Commons CC0 deed: <https://creativecommons.org/publicdomain/zero/1.0/>

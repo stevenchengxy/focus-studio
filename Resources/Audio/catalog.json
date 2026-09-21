@@ -72,6 +72,36 @@
       "sha256": "d32949f8467ac463a52ca88ed250e505545bc98a46e4e472c1f994bf447a1beb"
     },
     {
+      "id": "calm-loop",
+      "kind": "music",
+      "title": "Calm Loop",
+      "mood": "Calm · Chill synths · Seamless loop",
+      "relativePath": "calm-loop.mp3",
+      "durationSeconds": 19.383,
+      "suggestedVolume": 0.06,
+      "license": "CC0 1.0 Universal",
+      "licenseURL": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "author": "wipics",
+      "sourcePage": "https://opengameart.org/content/calm-loop",
+      "downloadURL": "https://opengameart.org/sites/default/files/Relaxing.mp3",
+      "sha256": "1d7e386c079d4add6b3b1592054846e4977035f26844466e409467c6dc7bdbde"
+    },
+    {
+      "id": "loading-screen-loop",
+      "kind": "music",
+      "title": "Loading Screen Loop",
+      "mood": "Futuristic · Electronic pulse · Dev tools",
+      "relativePath": "loading-screen-loop.wav",
+      "durationSeconds": 20.645,
+      "suggestedVolume": 0.07,
+      "license": "CC0 1.0 Universal",
+      "licenseURL": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "author": "Brandon Morris (uploaded by HaelDB)",
+      "sourcePage": "https://opengameart.org/content/loading-screen-loop",
+      "downloadURL": "https://opengameart.org/sites/default/files/TremLoadingloopl.wav",
+      "sha256": "1d169377c84b4c62362cd21144daad68f41e56e8a7e2ab837723e9b01200f44c"
+    },
+    {
       "id": "ui-click",
       "kind": "soundEffect",
       "title": "UI Click",
