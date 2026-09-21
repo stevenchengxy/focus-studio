@@ -107,6 +107,12 @@ final class StudioModel: ObservableObject {
         // QA hook: `open -n "Focus Studio.app" --env FOCUS_STUDIO_START_DESTINATION=recorder`
         // lands on the recording picker so screenshots of live previews can be
         // taken without scripted clicks. Ignored for any other value.
+        // QA / convenience hook: FOCUS_STUDIO_IMPORT_ARK_ENV=1 copies ARK_API_KEY from
+        // ~/.config/focus-studio/ark.env into the Keychain-backed gateway, tests the
+        // provider and, when nothing else is configured, makes it the default text model.
+        if ProcessInfo.processInfo.environment["FOCUS_STUDIO_IMPORT_ARK_ENV"] == "1" {
+            await importArkEnvironmentKey()
+        }
         switch ProcessInfo.processInfo.environment["FOCUS_STUDIO_START_DESTINATION"] {
         case "recorder":
             await showRecorder()
@@ -116,10 +122,24 @@ final class StudioModel: ObservableObject {
         default:
             break
         }
-        if ProcessInfo.processInfo.environment["FOCUS_STUDIO_OPEN_SETTINGS"] == "1" {
-            // Same action the app menu's Settings… item sends.
-            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+    }
+
+    private func importArkEnvironmentKey() async {
+        let envURL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/focus-studio/ark.env")
+        guard let text = try? String(contentsOf: envURL, encoding: .utf8) else { return }
+        let key = text.split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { $0.hasPrefix("ARK_API_KEY=") }?
+            .dropFirst("ARK_API_KEY=".count)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let key, !key.isEmpty else { return }
+        do {
+            try aiGateway.setAPIKey(key, for: .volcengineArk)
+        } catch {
+            return
         }
+        await aiGateway.test(.volcengineArk)
     }
 
     func reloadProjects() async {

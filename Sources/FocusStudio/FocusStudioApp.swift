@@ -37,6 +37,7 @@ struct FocusStudioApp: App {
 struct StudioRootView: View {
     @EnvironmentObject private var model: StudioModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         ZStack {
@@ -98,7 +99,13 @@ struct StudioRootView: View {
         .animation(reduceMotion ? nil : StudioMotion.pageAnimation, value: model.destination)
         .animation(StudioMotion.fade, value: model.isBusy)
         .foregroundStyle(StudioTheme.text)
-        .task { await model.bootstrap() }
+        .task {
+            await model.bootstrap()
+            // QA hook: FOCUS_STUDIO_OPEN_SETTINGS=1 opens the Settings window on launch.
+            if ProcessInfo.processInfo.environment["FOCUS_STUDIO_OPEN_SETTINGS"] == "1" {
+                openSettings()
+            }
+        }
         .alert("Focus Studio", isPresented: $model.isShowingError) {
             Button("OK", role: .cancel) {}
         } message: {
