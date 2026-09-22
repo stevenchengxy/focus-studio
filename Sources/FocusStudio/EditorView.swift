@@ -11,7 +11,11 @@ struct EditorView: View {
     @State private var isPlaying = false
     @State private var selectedZoomID: UUID?
     @State private var selectedChapterID: UUID?
-    @State private var selectedTool: EditorTool = .zoom
+    // QA hook, mirroring FOCUS_STUDIO_START_DESTINATION: opens the editor on a
+    // named inspector tab so a panel can be screenshotted without scripted clicks.
+    @State private var selectedTool: EditorTool = ProcessInfo.processInfo
+        .environment["FOCUS_STUDIO_EDITOR_TOOL"]
+        .flatMap(EditorTool.init(rawValue:)) ?? .zoom
     @State private var renderError: String?
     @State private var isExporting = false
     @State private var exportMessage: String?

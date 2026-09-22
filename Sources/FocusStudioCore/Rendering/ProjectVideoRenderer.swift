@@ -267,7 +267,10 @@ public enum ProjectVideoRenderer {
 
         let geometry = geometry(for: project)
         let cursorGraphics = await MainActor.run {
-            CursorGraphicSet(appearance: project.settings.resolvedCursorAppearance)
+            CursorGraphicSet(
+                appearance: project.settings.resolvedCursorAppearance,
+                tintHex: project.settings.resolvedClickAnimation.colorHex
+            )
         }
         let frameRenderer = ProjectFrameRenderer(
             project: project,
@@ -1137,8 +1140,11 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
         let baseScale = max(0.5, sourceReferenceScale) * max(0.1, project.settings.cursorScale)
             * cursorPressScale(at: seconds)
         let opacity = cursorOpacity(at: seconds)
-        func placed(_ graphic: CursorGraphic, scaleMultiplier: CGFloat, alpha: Double) -> CIImage {
-            let scale = baseScale * scaleMultiplier
+        func placed(_ graphic: CursorArtwork.Graphic, scaleMultiplier: CGFloat, alpha: Double) -> CIImage {
+            // Artwork drawn finer than the reference grid renders at the same
+            // size, just with more detail; the hot spot is already in pixels, so
+            // the arrow tip lands exactly on the recorded point.
+            let scale = baseScale * scaleMultiplier / max(0.001, graphic.supersample)
             let offsetX = graphic.hotSpot.x * scale
             let offsetYFromBottom = (CGFloat(graphic.image.height) - graphic.hotSpot.y) * scale
             return CIImage(cgImage: graphic.image)
@@ -1161,11 +1167,21 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
             changeIndices: cursorKindChangeIndices
         )
         let current = cursorGraphics.graphic(for: transition.to)
-        guard transition.progress < 1, transition.from != transition.to else {
+        let previous = cursorGraphics.graphic(for: transition.from)
+        // Styles that draw every shape the same way (the dot) would otherwise
+        // cross-fade an image against itself and visibly pulse.
+        guard transition.progress < 1,
+              transition.from != transition.to,
+              previous.image !== current.image
+        else {
             return placed(current, scaleMultiplier: 1, alpha: 1)
         }
-        let incoming = placed(current, scaleMultiplier: CGFloat(0.9 + 0.1 * transition.progress), alpha: transition.progress)
-        let outgoing = placed(cursorGraphics.graphic(for: transition.from), scaleMultiplier: 1, alpha: 1 - transition.progress)
+        // "None" means the pointer never changes size, shape swaps included.
+        let pop: CGFloat = project.settings.resolvedClickAnimation.resolvedPressStyle == .none
+            ? 1
+            : CGFloat(0.9 + 0.1 * transition.progress)
+        let incoming = placed(current, scaleMultiplier: pop, alpha: transition.progress)
+        let outgoing = placed(previous, scaleMultiplier: 1, alpha: 1 - transition.progress)
         return incoming.composited(over: outgoing)
     }
 
@@ -1187,9 +1203,9 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
             for layer in ClickAnimationMath.layers(age: age, settings: settings) where layer.opacity > 0.001 {
                 let graphic: CGImage
                 switch layer.kind {
-                case .ring: graphic = CursorGraphic.clickRing
-                case .fill: graphic = CursorGraphic.clickFill
-                case .halo: graphic = CursorGraphic.clickHalo
+                case .ring: graphic = ClickGraphic.clickRing
+                case .fill: graphic = ClickGraphic.clickFill
+                case .halo: graphic = ClickGraphic.clickHalo
                 }
                 let scale = layer.radius * 2 * outputScale / CGFloat(graphic.width)
                 let image = CIImage(cgImage: graphic)
@@ -1213,14 +1229,15 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
     }
 
     private func cursorPressScale(at seconds: Double) -> Double {
-        guard project.settings.showClickRing else { return 1 }
         let settings = project.settings.resolvedClickAnimation
+        guard settings.resolvedPressStyle != .none else { return 1 }
+        let pressDuration = ClickAnimationMath.pressDuration(settings: settings)
         var clickIndex = insertionIndex(atOrBefore: seconds, times: clickTimes)
         var compression: Double = 0
         var rebound: Double = 0
         while clickIndex >= 0 {
             let age = seconds - sortedClicks[clickIndex].time
-            if age > min(0.42, settings.duration * 0.72) { break }
+            if age > pressDuration { break }
             // Independent continuous envelopes preserve feedback when a second
             // click starts before the first press has settled.
             let candidate = ClickAnimationMath.cursorPressScale(age: age, settings: settings)
@@ -1312,171 +1329,34 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
 }
 
 private struct CursorGraphicSet: @unchecked Sendable {
-    let arrow: CursorGraphic
-    let iBeam: CursorGraphic
-    let pointingHand: CursorGraphic
+    private let graphics: [CursorKind: CursorArtwork.Graphic]
+    private let fallback: CursorArtwork.Graphic
 
     @MainActor
-    init(appearance: CursorAppearance) {
-        switch appearance {
-        case .system:
-            arrow = CursorGraphic.systemOrFallback(
-                NSCursor.arrow,
-                fallback: CursorGraphic.highContrastArrow,
-                fallbackHotSpot: CGPoint(x: 3, y: 2)
-            )
-            iBeam = CursorGraphic.systemOrFallback(
-                NSCursor.iBeam,
-                fallback: CursorGraphic.highContrastIBeam,
-                fallbackHotSpot: CGPoint(x: 14, y: 20)
-            )
-            pointingHand = CursorGraphic.systemOrFallback(
-                NSCursor.pointingHand,
-                fallback: CursorGraphic.highContrastHand,
-                fallbackHotSpot: CGPoint(x: 11, y: 3)
-            )
-        case .highContrast:
-            arrow = CursorGraphic(
-                image: CursorGraphic.highContrastArrow,
-                hotSpot: CGPoint(x: 3, y: 2)
-            )
-            iBeam = CursorGraphic(
-                image: CursorGraphic.highContrastIBeam,
-                hotSpot: CGPoint(x: 14, y: 20)
-            )
-            pointingHand = CursorGraphic(
-                image: CursorGraphic.highContrastHand,
-                hotSpot: CGPoint(x: 11, y: 3)
-            )
-        case .dot:
-            let dot = CursorGraphic(
-                image: CursorGraphic.dot,
-                hotSpot: CGPoint(x: 14, y: 14)
-            )
-            arrow = dot
-            iBeam = dot
-            pointingHand = dot
-        }
+    init(appearance: CursorAppearance, tintHex: String) {
+        let tint = CursorGraphicSet.tintColor(tintHex)
+        graphics = CursorArtwork.set(for: appearance, tint: tint)
+        fallback = CursorArtwork.graphic(for: .arrow, appearance: appearance, tint: tint)
     }
 
-    func graphic(for kind: CursorKind) -> CursorGraphic {
-        switch kind {
-        case .arrow: return arrow
-        case .iBeam: return iBeam
-        case .pointingHand: return pointingHand
-        }
+    private static func tintColor(_ hex: String) -> NSColor {
+        guard let color = CIColor(hex: hex) else { return CursorArtwork.accentFallback }
+        return NSColor(
+            srgbRed: color.red,
+            green: color.green,
+            blue: color.blue,
+            alpha: 1
+        )
+    }
+
+    func graphic(for kind: CursorKind) -> CursorArtwork.Graphic {
+        graphics[kind] ?? fallback
     }
 }
 
-private struct CursorGraphic: @unchecked Sendable {
-    let image: CGImage
-    let hotSpot: CGPoint
-
-    @MainActor
-    static func systemOrFallback(
-        _ cursor: NSCursor,
-        fallback: CGImage,
-        fallbackHotSpot: CGPoint
-    ) -> CursorGraphic {
-        let image = cursor.image
-        var proposedRect = CGRect(origin: .zero, size: image.size)
-        if let cgImage = image.cgImage(
-            forProposedRect: &proposedRect,
-            context: nil,
-            hints: nil
-        ) {
-            return CursorGraphic(image: cgImage, hotSpot: cursor.hotSpot)
-        }
-        return CursorGraphic(image: fallback, hotSpot: fallbackHotSpot)
-    }
-
-    static let highContrastArrow: CGImage = drawImage(size: CGSize(width: 32, height: 40)) { context in
-        context.setAllowsAntialiasing(true)
-        context.setShouldAntialias(true)
-        context.translateBy(x: 0, y: 40)
-        context.scaleBy(x: 1, y: -1)
-        context.move(to: CGPoint(x: 3, y: 2))
-        context.addLine(to: CGPoint(x: 4, y: 31))
-        context.addLine(to: CGPoint(x: 11, y: 24))
-        context.addLine(to: CGPoint(x: 17, y: 37))
-        context.addLine(to: CGPoint(x: 23, y: 34))
-        context.addLine(to: CGPoint(x: 17, y: 21))
-        context.addLine(to: CGPoint(x: 27, y: 20))
-        context.closePath()
-        context.setLineJoin(.round)
-        context.setLineWidth(4)
-        context.setStrokeColor(NSColor.white.cgColor)
-        context.strokePath()
-        context.move(to: CGPoint(x: 3, y: 2))
-        context.addLine(to: CGPoint(x: 4, y: 31))
-        context.addLine(to: CGPoint(x: 11, y: 24))
-        context.addLine(to: CGPoint(x: 17, y: 37))
-        context.addLine(to: CGPoint(x: 23, y: 34))
-        context.addLine(to: CGPoint(x: 17, y: 21))
-        context.addLine(to: CGPoint(x: 27, y: 20))
-        context.closePath()
-        context.setFillColor(NSColor.black.cgColor)
-        context.fillPath()
-    }
-
-    /// A bold pointing hand built from the SF Symbol so it reads at any size,
-    /// with a dark outline for light backgrounds.
-    static let highContrastHand: CGImage = drawImage(size: CGSize(width: 36, height: 40)) { context in
-        context.setAllowsAntialiasing(true)
-        let rect = CGRect(x: 2, y: 2, width: 32, height: 36)
-        for (name, color, inset) in [
-            ("hand.point.up.left.fill", NSColor.black, -1.5),
-            ("hand.point.up.left.fill", NSColor.white, 1.5),
-        ] {
-            guard let symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
-                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 30, weight: .bold)) else { continue }
-            let tinted = NSImage(size: symbol.size, flipped: false) { drawRect in
-                symbol.draw(in: drawRect)
-                color.set()
-                drawRect.fill(using: .sourceAtop)
-                return true
-            }
-            var proposed = rect.insetBy(dx: inset, dy: inset)
-            if let cgImage = tinted.cgImage(forProposedRect: &proposed, context: nil, hints: nil) {
-                context.draw(cgImage, in: rect.insetBy(dx: inset, dy: inset))
-            }
-        }
-    }
-
-    static let highContrastIBeam: CGImage = drawImage(size: CGSize(width: 28, height: 40)) { context in
-        context.setAllowsAntialiasing(true)
-        context.setShouldAntialias(true)
-        context.setLineCap(.round)
-        context.setLineJoin(.round)
-
-        func addIBeamPath() {
-            context.move(to: CGPoint(x: 14, y: 4))
-            context.addLine(to: CGPoint(x: 14, y: 36))
-            context.move(to: CGPoint(x: 7, y: 4))
-            context.addLine(to: CGPoint(x: 21, y: 4))
-            context.move(to: CGPoint(x: 7, y: 36))
-            context.addLine(to: CGPoint(x: 21, y: 36))
-        }
-
-        addIBeamPath()
-        context.setLineWidth(7)
-        context.setStrokeColor(NSColor.white.cgColor)
-        context.strokePath()
-        addIBeamPath()
-        context.setLineWidth(3)
-        context.setStrokeColor(NSColor.black.cgColor)
-        context.strokePath()
-    }
-
-    static let dot: CGImage = drawImage(size: CGSize(width: 28, height: 28)) { context in
-        context.setAllowsAntialiasing(true)
-        context.setShouldAntialias(true)
-        context.setFillColor(NSColor.white.cgColor)
-        context.fillEllipse(in: CGRect(x: 2, y: 2, width: 24, height: 24))
-        context.setFillColor(NSColor.black.cgColor)
-        context.fillEllipse(in: CGRect(x: 6, y: 6, width: 16, height: 16))
-    }
-
+/// The white bitmaps the click feedback is tinted from. Pointer artwork lives
+/// in ``CursorArtwork``.
+private enum ClickGraphic {
     static let clickRing: CGImage = drawImage(size: CGSize(width: 256, height: 256)) { context in
         context.setAllowsAntialiasing(true)
         context.setShouldAntialias(true)

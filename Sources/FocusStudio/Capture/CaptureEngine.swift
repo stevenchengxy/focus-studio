@@ -116,6 +116,16 @@ public enum CaptureStartupPolicy {
     }
 }
 
+/// What happened to a take the user chose to throw away.
+public enum RecordingDiscardOutcome: Sendable, Equatable {
+    /// Finalized and moved to the Trash, where it can still be recovered.
+    case trashed
+    /// Finalized but the Trash refused it, so the file was left where it is.
+    case kept(URL, String)
+    /// Finalizing itself failed; the recording was not thrown away.
+    case failed(String)
+}
+
 public struct RecordingResult: Sendable {
     public var outputURL: URL
     public var duration: TimeInterval
@@ -383,6 +393,29 @@ public final class CaptureEngine: ObservableObject {
 
     deinit {
         durationTask?.cancel()
+    }
+
+    /// A background refresh for the picker, which runs while the user is looking
+    /// at the source list. Unlike ``refreshAvailableTargets(onScreenWindowsOnly:)``
+    /// it never empties the list on a transient failure, never surfaces an error,
+    /// keeps a registered area target, and only publishes when something actually
+    /// changed, so the grid does not re-render every tick.
+    @discardableResult
+    public func refreshAvailableTargetsQuietly(
+        onScreenWindowsOnly: Bool = true
+    ) async -> Bool {
+        guard !isRecording else { return false }
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(
+            false,
+            onScreenWindowsOnly: onScreenWindowsOnly
+        ) else { return false }
+        let shareable = makeTargetInfos(from: content)
+        // Area targets are made by this app, not enumerated by the system.
+        let areas = availableTargets.filter { $0.kind == .area }
+        let updated = shareable + areas
+        guard updated != availableTargets else { return true }
+        availableTargets = updated
+        return true
     }
 
     /// Requests current display/window inventory. Calling this may cause macOS to
@@ -830,10 +863,34 @@ public final class CaptureEngine: ObservableObject {
         return actual
     }
 
-    /// Stops and finalizes the active recording, intentionally retaining its file.
+    /// Aborts a recording the user never saw: a lost start-up race or a failed
+    /// launch. The partial file is deleted outright because there is nothing in
+    /// it worth keeping. For a take the user asks to throw away, use
+    /// ``discardRecording()``, which moves the file to the Trash instead.
     public func cancelRecording() async {
         guard let result = try? await stopRecording() else { return }
         try? FileManager.default.removeItem(at: result.outputURL)
+    }
+
+    /// The user-facing discard. It finalizes through the same `stopRecording()`
+    /// as Finish, so a paused-and-resumed take is spliced identically, then
+    /// moves the file to the Trash. A mis-click stays recoverable, which matches
+    /// the library's policy of never deleting a recording permanently.
+    public func discardRecording() async -> RecordingDiscardOutcome {
+        let result: RecordingResult
+        do {
+            result = try await stopRecording()
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+        do {
+            try FileManager.default.trashItem(at: result.outputURL, resultingItemURL: nil)
+            return .trashed
+        } catch {
+            // Keep the file rather than falling back to a permanent delete: on a
+            // volume with no Trash, losing the take silently is the worse bug.
+            return .kept(result.outputURL, error.localizedDescription)
+        }
     }
 
     /// Captures the exact source currently being recorded and writes a PNG.

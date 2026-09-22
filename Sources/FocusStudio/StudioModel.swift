@@ -29,6 +29,10 @@ final class StudioModel: ObservableObject {
     @Published var selectedTargetID: String?
     @Published private(set) var selectedAreaTarget: CaptureTargetInfo?
     @Published private(set) var isSelectingArea = false
+    /// Bumped whenever the capture engine's source list actually changes.
+    /// Views read `captureEngine.availableTargets` but observe this model, and a
+    /// change published by the engine alone would never re-render them.
+    @Published private(set) var sourceListVersion = 0
     // Screen-only capture is the quiet default. On current macOS releases,
     // enabling system audio can trigger a separate Screen & System Audio
     // permission prompt even when Screen Recording itself is already granted.
@@ -407,6 +411,37 @@ final class StudioModel: ObservableObject {
         }
     }
 
+    /// Keeps the source list live while the picker is on screen. Without it a
+    /// window opened after the picker appeared never shows up, and a browser
+    /// window keeps the title of whatever tab was open when the list was built.
+    func refreshRecordingSourcesQuietly() async {
+        guard destination == .recorder,
+              !isBusy,
+              !isSelectingArea,
+              !capturePermissionDenied,
+              !captureEngine.isRecording
+        else { return }
+        let before = captureEngine.availableTargets
+        await captureEngine.refreshAvailableTargetsQuietly()
+        if captureEngine.availableTargets != before { sourceListVersion &+= 1 }
+        if let selectedTargetID,
+           selectedTarget == nil,
+           selectedAreaTarget?.id != selectedTargetID {
+            // The chosen window closed while the picker was open.
+            self.selectedTargetID = captureEngine.availableTargets
+                .first { $0.kind == recordingSourceKind }?.id
+        }
+    }
+
+    /// Recording usually ends while another app is in front. Bring Focus Studio
+    /// forward so the finished take is visible without hunting for the window.
+    func bringToFront() {
+        guard NSApp.activationPolicy() == .regular else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        let main = NSApp.windows.first { $0.canBecomeMain && !$0.isExcludedFromWindowsMenu }
+        main?.makeKeyAndOrderFront(nil)
+    }
+
     func selectRecordingArea(on display: CaptureTargetInfo) async {
         guard display.kind == .display, !isSelectingArea else { return }
         isSelectingArea = true
@@ -663,6 +698,7 @@ final class StudioModel: ObservableObject {
             projects.removeAll { $0.id == project.id }
             projects.insert(project, at: 0)
             destination = .editor
+            bringToFront()
         } catch {
             // CaptureEngine has already torn down a failed finalization. Return
             // to a retryable source picker instead of leaving a dead recording
@@ -680,12 +716,28 @@ final class StudioModel: ObservableObject {
             codexPlanTask?.cancel()
             return
         }
-        busy("Saving…")
+        busy("Discarding recording…")
         defer { isBusy = false }
-        await captureEngine.cancelRecording()
+        let outcome = await captureEngine.discardRecording()
         pendingSourceCropInsets = nil
-        RecordingControlPanelCoordinator.shared.hide()
-        destination = .library
+        switch outcome {
+        case .trashed:
+            RecordingControlPanelCoordinator.shared.hide()
+            destination = .library
+        case let .kept(url, reason):
+            RecordingControlPanelCoordinator.shared.hide()
+            destination = .library
+            showMessage(L10n.format(
+                "This recording could not be moved to the Trash, so it was kept at %@.\n%@",
+                url.path,
+                reason
+            ))
+        case let .failed(message):
+            // handleCaptureStateChange bails while isBusy, so without this arm a
+            // failed finalize would be swallowed on the way to the library.
+            destination = .recorder
+            showMessage(message)
+        }
     }
 
     func toggleRecordingPause() async {

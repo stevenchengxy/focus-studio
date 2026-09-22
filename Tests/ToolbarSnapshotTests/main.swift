@@ -63,12 +63,105 @@ struct ToolbarSnapshotTests {
             reports.append(["path": url.path, "width": image.width, "height": image.height,
                             "distinctColors": variedPixels, "bytes": size])
         }
+        // The recording bar, rendered through the same view with its layout
+        // forced. No capture is started; only geometry and controls are checked.
+        for (width, height) in [(324, 46)] {
+            let view = FloatingRecordingControls(model: model, layoutOverride: .compact)
+                .preferredColorScheme(.dark)
+                .frame(width: CGFloat(width), height: CGFloat(height))
+            let image = try renderOffscreen(view, width: width, height: height)
+            precondition(image.width == width && image.height == height,
+                         "Compact bar must use its real logical layout dimensions")
+            let variedPixels = countDistinctColors(image)
+            precondition(variedPixels > 30,
+                         "The compact snapshot must contain rendered controls, not a flat background")
+            let url = output.appendingPathComponent("toolbar-recording-compact.png")
+            guard let destination = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) else {
+                throw SnapshotError.renderFailed
+            }
+            CGImageDestinationAddImage(destination, image, nil)
+            guard CGImageDestinationFinalize(destination) else { throw SnapshotError.renderFailed }
+            let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            precondition(size > 500, "Compact snapshot PNG must not be empty")
+            reports.append(["path": url.path, "width": image.width, "height": image.height,
+                            "distinctColors": variedPixels, "bytes": size])
+        }
+        // The cursor inspector, so the style gallery is checked the same way the
+        // toolbar is: rendered from the real view, never from a description of it.
+        var inspectorProject = RecordingProject(
+            title: "Cursor gallery fixture",
+            sourceVideoPath: fixtureRoot.appendingPathComponent("fixture.mp4").path,
+            duration: 6,
+            sourceWidth: 1440,
+            sourceHeight: 900,
+            clickEvents: [ClickEvent(time: 1, x: 0.5, y: 0.5, button: .left)]
+        )
+        inspectorProject.settings.cursorAppearance = .accent
+        for (name, width, height) in [("inspector-cursor.png", 330, 720)] {
+            let binding = Binding<RecordingProject>(
+                get: { inspectorProject },
+                set: { inspectorProject = $0 }
+            )
+            let view = EditorInspectorView(
+                project: binding,
+                selectedZoomID: .constant(nil),
+                selectedChapterID: .constant(nil),
+                tool: .cursor
+            )
+            .environmentObject(model)
+            .preferredColorScheme(.dark)
+            .frame(width: CGFloat(width), height: CGFloat(height))
+            let image = try renderOffscreen(view, width: width, height: height)
+            let variedPixels = countDistinctColors(image)
+            precondition(variedPixels > 80,
+                         "The cursor inspector snapshot must contain the rendered style gallery")
+            let url = output.appendingPathComponent(name)
+            guard let destination = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) else {
+                throw SnapshotError.renderFailed
+            }
+            CGImageDestinationAddImage(destination, image, nil)
+            guard CGImageDestinationFinalize(destination) else { throw SnapshotError.renderFailed }
+            let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            precondition(size > 1_000, "Cursor inspector PNG must not be empty")
+            reports.append(["path": url.path, "width": image.width, "height": image.height,
+                            "distinctColors": variedPixels, "bytes": size])
+        }
+        // The area overlay's own controls, which are AppKit rather than SwiftUI.
+        do {
+            let bounds = NSRect(x: 0, y: 0, width: 900, height: 560)
+            let overlay = AreaSelectionView(frame: bounds)
+            overlay.previewSelection(CGRect(x: 180, y: 150, width: 540, height: 280))
+            let host = NSWindow(contentRect: bounds, styleMask: [.borderless], backing: .buffered, defer: false)
+            host.isReleasedWhenClosed = false
+            host.appearance = NSAppearance(named: .darkAqua)
+            host.contentView = overlay
+            defer { host.close() }
+            overlay.layoutSubtreeIfNeeded()
+            overlay.displayIfNeeded()
+            precondition(!host.isVisible, "Overlay fixture window must never be shown")
+            guard let rep = overlay.bitmapImageRepForCachingDisplay(in: bounds) else {
+                throw SnapshotError.renderFailed
+            }
+            overlay.cacheDisplay(in: bounds, to: rep)
+            guard let image = rep.cgImage else { throw SnapshotError.renderFailed }
+            let variedPixels = countDistinctColors(image)
+            precondition(variedPixels > 20, "The area overlay snapshot must contain its controls")
+            let url = output.appendingPathComponent("area-overlay.png")
+            guard let destination = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) else {
+                throw SnapshotError.renderFailed
+            }
+            CGImageDestinationAddImage(destination, image, nil)
+            guard CGImageDestinationFinalize(destination) else { throw SnapshotError.renderFailed }
+            reports.append(["path": url.path, "width": image.width, "height": image.height,
+                            "distinctColors": variedPixels,
+                            "bytes": try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0])
+        }
         let report: [String: Any] = ["status": "PASS", "fixtureOnly": true,
-                                    "renderedView": "FloatingRecordingControls", "screenshots": reports]
+                                    "renderedViews": ["FloatingRecordingControls", "EditorInspectorView", "AreaSelectionView"], "screenshots": reports]
         try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
             .write(to: output.appendingPathComponent("toolbar-snapshots.json"), options: .atomic)
         precondition(!model.captureEngine.isRecording && model.destination == .recorder)
-        print("ToolbarSnapshotTests: PASS (real SwiftUI ready toolbar at 760×116 and 640×116; isolated fixture, no live app or screen capture)")
+        print("ToolbarSnapshotTests: PASS (real SwiftUI ready toolbar at 760×116 and 640×116, the 324×46 recording bar, the cursor inspector and the area overlay; isolated fixture, no live app or screen capture)")
     }
 
     enum SnapshotError: Error { case renderFailed }

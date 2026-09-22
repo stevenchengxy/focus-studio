@@ -815,3 +815,37 @@
 "Add zoom at playhead" = "Add zoom at playhead";
 "Duplicate zoom" = "Duplicate zoom";
 "Moved %lld of %lld selected projects to Trash. The remaining projects were kept.\n%@" = "Moved %lld of %lld selected projects to Trash. The remaining projects were kept.\n%@";
+
+
+/* cursor styles and press animation */
+"Elevated" = "Elevated";
+"Light" = "Light";
+"Cursor press" = "Cursor press";
+"Press in" = "Press in";
+"Pop out" = "Pop out";
+"Press amount" = "Press amount";
+
+/* compact recording controls */
+"Cancel recording" = "Cancel recording";
+"Discard?" = "Discard?";
+"Discard recording" = "Discard recording";
+"Keep recording" = "Keep recording";
+"Expand controls" = "Expand controls";
+"Collapse controls" = "Collapse controls";
+
+/* recording bar */
+"Discard recording?" = "Discard recording?";
+"Discard" = "Discard";
+"Keep" = "Keep";
+"Discarding recording…" = "Discarding recording…";
+"Show full controls" = "Show full controls";
+"Hide full controls" = "Hide full controls";
+"This recording could not be moved to the Trash, so it was kept at %@.\n%@" = "This recording could not be moved to the Trash, so it was kept at %@.\n%@";
+
+/* area selection overlay */
+"Use this area" = "Use this area";
+"Draw again" = "Draw again";
+"Whole display" = "Whole display";
+"Drag to select the clean recording area" = "Drag to select the clean recording area";
+"Drag again to adjust, or use the buttons below" = "Drag again to adjust, or use the buttons below";
+"That area is not on “%@”. Draw the area again inside the display." = "That area is not on “%@”. Draw the area again inside the display.";

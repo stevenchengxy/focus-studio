@@ -143,6 +143,9 @@ struct StudioRootView: View {
         if !model.isSelectingArea,
            [.recorder, .countdown, .recording].contains(model.destination) {
             RecordingControlPanelCoordinator.shared.show(model: model)
+            // show() early-returns once the panels exist, so this call is what
+            // lets the console shrink to the recording bar and expand back.
+            RecordingControlPanelCoordinator.shared.updateLayout()
         } else {
             RecordingControlPanelCoordinator.shared.hide()
         }

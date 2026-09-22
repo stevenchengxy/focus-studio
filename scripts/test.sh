@@ -11,6 +11,7 @@ swift run FocusStudioE2E --output-dir "$PROJECT_DIR/.artifacts/e2e"
 swift "$SCRIPT_DIR/test-localization.swift"
 zsh "$SCRIPT_DIR/test-language-preferences.sh"
 zsh "$SCRIPT_DIR/test-app-regression.sh" --skip-build
+zsh "$SCRIPT_DIR/test-toolbar-snapshots.sh" --skip-build
 zsh "$SCRIPT_DIR/test-installation.sh"
 zsh "$SCRIPT_DIR/test-codex-plan-runner.sh" --skip-build
 bash "$SCRIPT_DIR/test-codex-connection.sh"

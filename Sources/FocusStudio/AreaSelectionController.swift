@@ -5,6 +5,7 @@ import FocusStudioCore
 enum AreaSelectionError: LocalizedError {
     case selectionAlreadyActive
     case displayUnavailable(String)
+    case selectionOutsideDisplay(String)
 
     var errorDescription: String? {
         switch self {
@@ -12,6 +13,8 @@ enum AreaSelectionError: LocalizedError {
             return L10n.tr("Another area selection is already in progress.")
         case let .displayUnavailable(name):
             return L10n.format("The display “%@” is no longer available.", name)
+        case let .selectionOutsideDisplay(name):
+            return L10n.format("That area is not on “%@”. Draw the area again inside the display.", name)
         }
     }
 }
@@ -35,6 +38,9 @@ final class AreaSelectionController {
         using captureEngine: CaptureEngine
     ) async throws -> CaptureTargetInfo? {
         guard continuation == nil else { throw AreaSelectionError.selectionAlreadyActive }
+        // Any overlay left behind by an earlier attempt is torn down first, so a
+        // single failure can never make the feature unusable until relaunch.
+        cleanup()
         guard display.kind == .display else {
             throw CaptureEngineError.invalidTarget("Area selection requires a display target.")
         }
@@ -50,6 +56,12 @@ final class AreaSelectionController {
             view.onCancel = { [weak self] in self?.finish(with: nil) }
             view.onConfirm = { [weak self] localRect in
                 self?.finish(localSelection: localRect, using: captureEngine)
+            }
+            view.onUseWholeDisplay = { [weak self] in
+                self?.finish(
+                    localSelection: CGRect(origin: .zero, size: screen.frame.size),
+                    using: captureEngine
+                )
             }
 
             let window = AreaSelectionWindow(
@@ -90,6 +102,10 @@ final class AreaSelectionController {
             forLocalSelection: local,
             onDisplay: displayTarget.frame
         ) else {
+            // Returning here used to strand the continuation, which left the app
+            // permanently "selecting an area": every later attempt threw
+            // selectionAlreadyActive until relaunch.
+            finish(throwing: AreaSelectionError.selectionOutsideDisplay(displayTarget.title))
             return
         }
         do {
@@ -142,13 +158,28 @@ private final class AreaSelectionWindow: NSWindow {
     override var canBecomeMain: Bool { false }
 }
 
-private final class AreaSelectionView: NSView {
+/// Internal rather than private so the snapshot harness can render it.
+final class AreaSelectionView: NSView {
     var onCancel: (() -> Void)?
     var onConfirm: ((CGRect) -> Void)?
+    var onUseWholeDisplay: (() -> Void)?
+
+    /// Snapshot hook: draw the overlay as it looks once an area exists.
+    func previewSelection(_ rect: CGRect) { selection = rect; needsDisplay = true }
 
     private var dragStart: CGPoint?
-    private var selection: CGRect?
+    private var selection: CGRect? {
+        didSet { updateControls() }
+    }
     private let minimumDimension: CGFloat = 48
+
+    /// Keyboard shortcuts alone were not discoverable: the overlay covers the
+    /// screen, so the only affordances are the ones drawn on it.
+    private let controls = NSStackView()
+    private let useButton = NSButton()
+    private let redrawButton = NSButton()
+    private let wholeDisplayButton = NSButton()
+    private let cancelButton = NSButton()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -159,7 +190,77 @@ private final class AreaSelectionView: NSView {
         setAccessibilityHelp(
             L10n.tr("Drag to select an area. Press Return to use it or Escape to cancel.")
         )
+        buildControls()
+        updateControls()
         updateAccessibilityValue()
+    }
+
+    private func buildControls() {
+        func configure(
+            _ button: NSButton,
+            title: String,
+            identifier: String,
+            action: Selector,
+            keyEquivalent: String = ""
+        ) {
+            button.title = L10n.tr(title)
+            button.bezelStyle = .rounded
+            button.controlSize = .large
+            button.target = self
+            button.action = action
+            button.keyEquivalent = keyEquivalent
+            button.setAccessibilityIdentifier(identifier)
+            button.setAccessibilityLabel(L10n.tr(title))
+        }
+        configure(useButton, title: "Use this area", identifier: "area.use", action: #selector(useSelection), keyEquivalent: "\r")
+        useButton.keyEquivalentModifierMask = []
+        configure(redrawButton, title: "Draw again", identifier: "area.redraw", action: #selector(redraw))
+        configure(wholeDisplayButton, title: "Whole display", identifier: "area.wholeDisplay", action: #selector(useWholeDisplay))
+        configure(cancelButton, title: "Cancel", identifier: "area.cancel", action: #selector(cancelSelection))
+
+        controls.orientation = .horizontal
+        controls.spacing = 10
+        controls.edgeInsets = NSEdgeInsets(top: 10, left: 14, bottom: 10, right: 14)
+        controls.wantsLayer = true
+        controls.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.82).cgColor
+        controls.layer?.cornerRadius = 14
+        controls.layer?.borderWidth = 1
+        controls.layer?.borderColor = NSColor.white.withAlphaComponent(0.14).cgColor
+        for button in [cancelButton, wholeDisplayButton, redrawButton, useButton] {
+            controls.addArrangedSubview(button)
+        }
+        controls.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(controls)
+        NSLayoutConstraint.activate([
+            controls.centerXAnchor.constraint(equalTo: centerXAnchor),
+            controls.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -46),
+        ])
+    }
+
+    private func updateControls() {
+        let hasSelection = selection != nil
+        useButton.isEnabled = hasSelection
+        redrawButton.isEnabled = hasSelection
+    }
+
+    @objc private func useSelection() {
+        guard let selection else { return }
+        onConfirm?(selection)
+    }
+
+    @objc private func redraw() {
+        selection = nil
+        dragStart = nil
+        updateAccessibilityValue()
+        needsDisplay = true
+    }
+
+    @objc private func useWholeDisplay() {
+        onUseWholeDisplay?()
+    }
+
+    @objc private func cancelSelection() {
+        onCancel?()
     }
 
     @available(*, unavailable)
@@ -206,8 +307,8 @@ private final class AreaSelectionView: NSView {
         }
 
         let instruction = L10n.tr(selection == nil
-            ? "Drag to select the clean recording area  •  Esc to cancel"
-            : "Drag again to adjust  •  Return or double-click to use this area  •  Esc to cancel")
+            ? "Drag to select the clean recording area"
+            : "Drag again to adjust, or use the buttons below")
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 15, weight: .semibold),
             .foregroundColor: NSColor.white,

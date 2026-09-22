@@ -342,17 +342,58 @@ public enum CursorAnimationStyle: String, Codable, Sendable, CaseIterable {
 }
 
 /// A non-destructive visual treatment for cursor metadata during preview/export.
+///
+/// Cases are declared in the order the style gallery shows them. Raw values are
+/// stable, so projects written by earlier builds keep decoding.
 public enum CursorAppearance: String, Codable, Hashable, Sendable, CaseIterable {
     case system
+    case elevated
     case highContrast
+    case light
+    case accent
     case dot
 
     public var title: String {
         switch self {
         case .system: return "System"
+        case .elevated: return "Elevated"
         case .highContrast: return "High Contrast"
+        case .light: return "Light"
+        case .accent: return "Accent"
         case .dot: return "Dot"
         }
+    }
+
+    /// Whether the style takes its ink from the click colour instead of fixed ink.
+    public var usesAccentTint: Bool { self == .accent }
+
+    /// A style added by a later build decodes as the system pointer rather than
+    /// making the whole project unreadable.
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = CursorAppearance(rawValue: raw) ?? .system
+    }
+}
+
+/// How the pointer itself reacts at the moment of a click.
+public enum ClickPressStyle: String, Codable, Hashable, Sendable, CaseIterable {
+    /// Compress into the click, then settle. Matches builds before 1.10.
+    case press
+    /// Swell away from the click, then settle. Reads as a tap landing.
+    case pop
+    case none
+
+    public var title: String {
+        switch self {
+        case .press: return "Press in"
+        case .pop: return "Pop out"
+        case .none: return "None"
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = ClickPressStyle(rawValue: raw) ?? .press
     }
 }
 
@@ -368,6 +409,11 @@ public enum ClickAnimationStyle: String, Codable, Hashable, Sendable, CaseIterab
         case .pulse: return "Pulse"
         }
     }
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = ClickAnimationStyle(rawValue: raw) ?? .ripple
+    }
 }
 
 /// Editing click feedback does not modify the captured pointer or click events.
@@ -377,7 +423,14 @@ public struct ClickAnimationSettings: Codable, Hashable, Sendable {
     public var size: Double
     public var duration: Double
     public var intensity: Double
+    /// Kept for projects written before the press style existed, and used as the
+    /// on/off switch: turning it off is the same as ``ClickPressStyle/none``.
     public var pressCursor: Bool
+    /// Optional so projects saved before choosable press styles decode unchanged.
+    public var pressStyle: ClickPressStyle?
+    /// How far the pointer travels during the press, 0...1. Optional for the
+    /// same reason.
+    public var pressAmount: Double?
 
     public init(
         style: ClickAnimationStyle = .ripple,
@@ -385,7 +438,9 @@ public struct ClickAnimationSettings: Codable, Hashable, Sendable {
         size: Double = 1,
         duration: Double = 0.65,
         intensity: Double = 0.85,
-        pressCursor: Bool = true
+        pressCursor: Bool = true,
+        pressStyle: ClickPressStyle? = nil,
+        pressAmount: Double? = nil
     ) {
         self.style = style
         self.colorHex = colorHex
@@ -393,6 +448,22 @@ public struct ClickAnimationSettings: Codable, Hashable, Sendable {
         self.duration = duration
         self.intensity = intensity
         self.pressCursor = pressCursor
+        self.pressStyle = pressStyle
+        self.pressAmount = pressAmount
+    }
+
+    public static let defaultPressAmount = 1.0
+
+    /// `.none` whenever the pointer must not react, so callers never have to
+    /// check both the switch and the style.
+    public var resolvedPressStyle: ClickPressStyle {
+        guard pressCursor else { return .none }
+        return pressStyle ?? .press
+    }
+
+    public var resolvedPressAmount: Double {
+        guard let pressAmount, pressAmount.isFinite else { return Self.defaultPressAmount }
+        return pressAmount.clamped(to: 0...1)
     }
 
     public var sanitized: ClickAnimationSettings {
@@ -400,6 +471,11 @@ public struct ClickAnimationSettings: Codable, Hashable, Sendable {
         result.size = size.isFinite ? size.clamped(to: 0.4...2.5) : 1
         result.duration = duration.isFinite ? duration.clamped(to: 0.25...1.5) : 0.65
         result.intensity = intensity.isFinite ? intensity.clamped(to: 0...1) : 0.85
+        if let pressAmount {
+            result.pressAmount = pressAmount.isFinite
+                ? pressAmount.clamped(to: 0...1)
+                : Self.defaultPressAmount
+        }
         return result
     }
 }

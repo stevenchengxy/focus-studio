@@ -815,3 +815,37 @@
 "Add zoom at playhead" = "在播放头处添加缩放";
 "Duplicate zoom" = "复制缩放";
 "Moved %lld of %lld selected projects to Trash. The remaining projects were kept.\n%@" = "已将所选项目中的 %lld / %lld 个移到废纸篓，其余项目已保留。\n%@";
+
+
+/* cursor styles and press animation */
+"Elevated" = "立体";
+"Light" = "浅色";
+"Cursor press" = "点击时的光标";
+"Press in" = "按下";
+"Pop out" = "弹出";
+"Press amount" = "幅度";
+
+/* compact recording controls */
+"Cancel recording" = "取消录制";
+"Discard?" = "放弃这段录制？";
+"Discard recording" = "放弃录制";
+"Keep recording" = "继续录制";
+"Expand controls" = "展开控制条";
+"Collapse controls" = "收起控制条";
+
+/* recording bar */
+"Discard recording?" = "要丢弃这次录制吗？";
+"Discard" = "丢弃";
+"Keep" = "保留";
+"Discarding recording…" = "正在丢弃录制…";
+"Show full controls" = "显示完整控制栏";
+"Hide full controls" = "收起完整控制栏";
+"This recording could not be moved to the Trash, so it was kept at %@.\n%@" = "本次录制无法移到废纸篓，已保留在 %@。\n%@";
+
+/* area selection overlay */
+"Use this area" = "使用此区域";
+"Draw again" = "重新框选";
+"Whole display" = "整个屏幕";
+"Drag to select the clean recording area" = "拖动以框选需要录制的区域";
+"Drag again to adjust, or use the buttons below" = "可再次拖动调整，或使用下方按钮";
+"That area is not on “%@”. Draw the area again inside the display." = "该区域不在“%@”上，请在该屏幕范围内重新框选。";

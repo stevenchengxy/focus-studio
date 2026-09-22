@@ -47,19 +47,49 @@ public enum ClickAnimationMath {
         }
     }
 
-    /// Compress around the cursor hotspot, then settle with a restrained rebound.
-    /// No spring integrator is used, so seeking directly to a frame is exact.
+    /// How long a press lasts, whatever its style, so callers can bound the
+    /// search over overlapping clicks without evaluating the curve.
+    public static func pressDuration(settings: ClickAnimationSettings) -> Double {
+        min(0.42, settings.sanitized.duration * 0.72)
+    }
+
+    /// Scale the pointer around its hot spot at the moment of a click.
+    ///
+    /// Both styles start and end at 1 with zero velocity, and no spring
+    /// integrator is used, so seeking directly to a frame stays exact.
+    /// ``ClickPressStyle/press`` reproduces the curve shipped before the style
+    /// became choosable.
     public static func cursorPressScale(age: Double, settings: ClickAnimationSettings) -> Double {
         let settings = settings.sanitized
-        let duration = min(0.42, settings.duration * 0.72)
-        guard settings.pressCursor, age.isFinite, age > 0, age < duration else { return 1 }
+        let duration = pressDuration(settings: settings)
+        let style = settings.resolvedPressStyle
+        guard style != .none, age.isFinite, age > 0, age < duration else { return 1 }
+        let amount = settings.resolvedPressAmount
+        guard amount > 0 else { return 1 }
         let t = age / duration
-        if t < 0.24 {
-            return 1 - 0.14 * TimelineMath.smootherStep(t / 0.24)
+        switch style {
+        case .press:
+            if t < 0.24 {
+                return 1 - 0.14 * amount * TimelineMath.smootherStep(t / 0.24)
+            }
+            if t < 0.65 {
+                return 1 - 0.14 * amount
+                    + 0.17 * amount * TimelineMath.smootherStep((t - 0.24) / 0.41)
+            }
+            return 1 + 0.03 * amount
+                - 0.03 * amount * TimelineMath.smootherStep((t - 0.65) / 0.35)
+        case .pop:
+            if t < 0.26 {
+                return 1 + 0.20 * amount * TimelineMath.smootherStep(t / 0.26)
+            }
+            if t < 0.70 {
+                return 1 + 0.20 * amount
+                    - 0.24 * amount * TimelineMath.smootherStep((t - 0.26) / 0.44)
+            }
+            return 1 - 0.04 * amount
+                + 0.04 * amount * TimelineMath.smootherStep((t - 0.70) / 0.30)
+        case .none:
+            return 1
         }
-        if t < 0.65 {
-            return 0.86 + 0.17 * TimelineMath.smootherStep((t - 0.24) / 0.41)
-        }
-        return 1.03 - 0.03 * TimelineMath.smootherStep((t - 0.65) / 0.35)
     }
 }

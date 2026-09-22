@@ -7,20 +7,89 @@ import SwiftUI
 /// Owns a non-activating control panel on every connected display. Replicating
 /// the compact controller keeps Finish and Screenshot reachable when the user
 /// changes displays, Spaces, or enters another app's full-screen Space.
+/// The console shrinks to a bar once a take is under way, so it stops covering
+/// what is being demonstrated. Geometry lives here as pure functions so the
+/// window frame and the SwiftUI layout can never disagree.
+enum RecordingPanelLayout: Equatable {
+    case expanded
+    case compact
+
+    static let bottomInset: CGFloat = 22
+    static let edgeInset: CGFloat = 16
+
+    var preferredSize: NSSize {
+        switch self {
+        case .expanded: return NSSize(width: 760, height: 116)
+        case .compact: return NSSize(width: 324, height: 46)
+        }
+    }
+
+    var cornerRadius: CGFloat {
+        switch self {
+        case .expanded: return 22
+        case .compact: return 15
+        }
+    }
+
+    func size(in visibleFrame: NSRect) -> NSSize {
+        NSSize(
+            width: min(preferredSize.width, max(240, visibleFrame.width - 32)),
+            height: preferredSize.height
+        )
+    }
+
+    /// Anchored on the bottom centre of `current`, so a change of height keeps
+    /// the bar hugging the bottom and a panel the user dragged stays put.
+    func frame(in visibleFrame: NSRect, anchoredTo current: NSRect?) -> NSRect {
+        let size = size(in: visibleFrame)
+        let centerX = current?.midX ?? visibleFrame.midX
+        let bottom = current?.minY ?? (visibleFrame.minY + Self.bottomInset)
+        var origin = NSPoint(x: centerX - size.width / 2, y: bottom)
+        if visibleFrame.width > size.width + Self.edgeInset * 2 {
+            origin.x = min(
+                max(origin.x, visibleFrame.minX + Self.edgeInset),
+                visibleFrame.maxX - size.width - Self.edgeInset
+            )
+        }
+        if visibleFrame.height > size.height + Self.edgeInset * 2 {
+            origin.y = min(
+                max(origin.y, visibleFrame.minY + Self.bottomInset),
+                visibleFrame.maxY - size.height - Self.edgeInset
+            )
+        }
+        return NSRect(
+            x: origin.x.rounded(),
+            y: origin.y.rounded(),
+            width: size.width.rounded(),
+            height: size.height.rounded()
+        )
+    }
+}
+
 @MainActor
-final class RecordingControlPanelCoordinator {
+final class RecordingControlPanelCoordinator: ObservableObject {
     static let shared = RecordingControlPanelCoordinator()
+
+    @Published private(set) var layout: RecordingPanelLayout = .expanded
 
     private weak var model: StudioModel?
     private var panels: [RecordingControlPanel] = []
     private var screenObserver: NSObjectProtocol?
+    private var destinationObserver: AnyCancellable?
+    /// Expanding mid-take is deliberate but temporary: every take starts as a bar.
+    private var expandedWhileRecording = false
 
     private init() {}
 
     func show(model: StudioModel) {
-        if self.model === model, !panels.isEmpty { return }
+        if self.model === model, !panels.isEmpty {
+            // Already on screen; only the size may need to catch up.
+            updateLayout()
+            return
+        }
         hide()
         self.model = model
+        layout = desiredLayout(for: model)
         rebuildPanels()
 
         screenObserver = NotificationCenter.default.addObserver(
@@ -30,6 +99,11 @@ final class RecordingControlPanelCoordinator {
         ) { [weak self] _ in
             Task { @MainActor in self?.rebuildPanels() }
         }
+        // A @Published publisher delivers the incoming value, so the panel
+        // resizes in step with the SwiftUI layout instead of a frame later.
+        destinationObserver = model.$destination.sink { [weak self] destination in
+            Task { @MainActor in self?.updateLayout(for: destination) }
+        }
     }
 
     func hide() {
@@ -37,18 +111,80 @@ final class RecordingControlPanelCoordinator {
             NotificationCenter.default.removeObserver(screenObserver)
             self.screenObserver = nil
         }
+        destinationObserver?.cancel()
+        destinationObserver = nil
         closePanels()
         panels.removeAll()
+        expandedWhileRecording = false
+        layout = .expanded
         model = nil
+    }
+
+    /// Shrinking at the countdown means the morph has finished before the first
+    /// frame is captured, so the geometry is still when the take starts.
+    private func desiredLayout(for model: StudioModel) -> RecordingPanelLayout {
+        switch model.destination {
+        case .countdown, .recording:
+            return expandedWhileRecording ? .expanded : .compact
+        default:
+            return .expanded
+        }
+    }
+
+    func setExpandedWhileRecording(_ expanded: Bool) {
+        expandedWhileRecording = expanded
+        updateLayout()
+    }
+
+    func updateLayout(for destination: StudioModel.Destination? = nil, animated: Bool = true) {
+        guard let model else { return }
+        let current = destination ?? model.destination
+        if current != .countdown, current != .recording { expandedWhileRecording = false }
+        let desired: RecordingPanelLayout = {
+            switch current {
+            case .countdown, .recording: return expandedWhileRecording ? .expanded : .compact
+            default: return .expanded
+            }
+        }()
+        guard desired != layout else { return }
+        layout = desired
+        resizePanels(animated: animated)
+    }
+
+    /// `panel.screen` is nil for a panel that has drifted off screen, so each
+    /// panel remembers the frame it was built for.
+    private func resizePanels(animated: Bool) {
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        for panel in panels {
+            let visible = panel.homeVisibleFrame == .zero
+                ? (panel.screen ?? NSScreen.main)?.visibleFrame ?? .zero
+                : panel.homeVisibleFrame
+            guard visible != .zero else { continue }
+            let target = layout.frame(in: visible, anchoredTo: panel.frame)
+            guard animated, !reduceMotion else {
+                panel.setFrame(target, display: true)
+                panel.invalidateShadow()
+                continue
+            }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.22
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                panel.animator().setFrame(target, display: true)
+            } completionHandler: {
+                MainActor.assumeIsolated { panel.invalidateShadow() }
+            }
+        }
     }
 
     private func rebuildPanels() {
         guard let model else { return }
         closePanels()
+        layout = desiredLayout(for: model)
         panels = NSScreen.screens.map { screen in
-            let size = NSSize(width: min(760, screen.visibleFrame.width - 32), height: 116)
+            let visible = screen.visibleFrame
+            let frame = layout.frame(in: visible, anchoredTo: nil)
             let panel = RecordingControlPanel(
-                contentRect: NSRect(origin: .zero, size: size),
+                contentRect: NSRect(origin: .zero, size: frame.size),
                 styleMask: [.borderless, .nonactivatingPanel],
                 backing: .buffered,
                 defer: false
@@ -62,12 +198,8 @@ final class RecordingControlPanelCoordinator {
             panel.title = L10n.tr("Recording controls")
             panel.setAccessibilityLabel(L10n.tr("Recording controls"))
 
-            let visible = screen.visibleFrame
-            let origin = NSPoint(
-                x: visible.midX - size.width / 2,
-                y: visible.minY + 22
-            )
-            panel.setFrameOrigin(origin)
+            panel.homeVisibleFrame = visible
+            panel.setFrameOrigin(frame.origin)
             model.captureEngine.eventMonitor.ignoredWindowNumbers.insert(panel.windowNumber)
             panel.orderFrontRegardless()
             return panel
@@ -85,6 +217,9 @@ final class RecordingControlPanelCoordinator {
 private final class RecordingControlPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+    /// The visible frame this panel was built for; `screen` goes nil once a
+    /// panel drifts off the display it belongs to.
+    var homeVisibleFrame: NSRect = .zero
 
     override init(
         contentRect: NSRect,
@@ -121,11 +256,18 @@ struct FloatingRecordingControls: View {
     @ObservedObject private var model: StudioModel
     @ObservedObject private var captureEngine: CaptureEngine
     @ObservedObject private var localization = AppLocalization.shared
+    @ObservedObject private var coordinator = RecordingControlPanelCoordinator.shared
+    /// Two-step discard: the bar asks in place rather than raising an alert.
+    @State private var discardArmed = false
+    private let layoutOverride: RecordingPanelLayout?
 
-    init(model: StudioModel) {
+    init(model: StudioModel, layoutOverride: RecordingPanelLayout? = nil) {
         self.model = model
+        self.layoutOverride = layoutOverride
         _captureEngine = ObservedObject(wrappedValue: model.captureEngine)
     }
+
+    private var layout: RecordingPanelLayout { layoutOverride ?? coordinator.layout }
 
     private var isStopping: Bool {
         if case .stopping = captureEngine.state { return true }
@@ -142,7 +284,46 @@ struct FloatingRecordingControls: View {
         model.selectedTarget?.kind == model.recordingSourceKind
     }
 
+    private var cornerRadius: CGFloat { layout.cornerRadius }
+
     var body: some View {
+        Group {
+            if layout == .compact {
+                compactControls
+            } else {
+                consoleControls
+            }
+        }
+        .foregroundStyle(StudioTheme.text)
+        // The window frame is the single source of truth for size; a fixed
+        // height here would clip or float during the resize animation.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(Color(red: 0.065, green: 0.071, blue: 0.105).opacity(0.97))
+                .overlay(alignment: .topLeading) {
+                    RoundedRectangle(cornerRadius: cornerRadius)
+                        .fill(LinearGradient(colors: [StudioTheme.purple.opacity(0.14), .clear], startPoint: .topLeading, endPoint: .bottomTrailing))
+                }
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(LinearGradient(colors: [StudioTheme.purple.opacity(0.5), Color.white.opacity(0.10)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
+        }
+        .environment(\.locale, localization.locale)
+        .onChange(of: model.destination) { _, _ in discardArmed = false }
+        .onChange(of: captureEngine.isRecording) { _, isRecording in
+            if !isRecording { discardArmed = false }
+        }
+        .task(id: discardArmed) {
+            // An armed discard that the user walks away from disarms itself.
+            guard discardArmed else { return }
+            try? await Task.sleep(for: .seconds(6))
+            if !Task.isCancelled { discardArmed = false }
+        }
+    }
+
+    private var consoleControls: some View {
         VStack(spacing: 13) {
             consoleHeader
             HStack(spacing: 10) {
@@ -165,23 +346,169 @@ struct FloatingRecordingControls: View {
             }
             .frame(height: 38)
         }
-        .foregroundStyle(StudioTheme.text)
         .padding(.horizontal, 18)
-        .frame(maxWidth: .infinity)
-        .frame(height: 116)
-        .background {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(Color(red: 0.065, green: 0.071, blue: 0.105).opacity(0.97))
-                .overlay(alignment: .topLeading) {
-                    RoundedRectangle(cornerRadius: 22)
-                        .fill(LinearGradient(colors: [StudioTheme.purple.opacity(0.14), .clear], startPoint: .topLeading, endPoint: .bottomTrailing))
+        .padding(.vertical, 14)
+    }
+
+    /// Discarding throws the take away, so the bar asks once, in place, rather
+    /// than raising an alert that would pull focus off the app being demoed.
+    private var compactControls: some View {
+        HStack(spacing: 6) {
+            if discardArmed {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(StudioTheme.yellow)
+                Text("Discard recording?")
+                    .font(.system(size: 11, weight: .semibold))
+                    .lineLimit(1)
+                Spacer(minLength: 2)
+                Button("Keep") { discardArmed = false }
+                    .buttonStyle(FloatingControlButtonStyle(compact: true, height: 30))
+                    .accessibilityIdentifier("recording.toolbar.cancelDiscard")
+                Button("Discard") {
+                    discardArmed = false
+                    Task { await model.cancelRecording() }
                 }
+                .buttonStyle(FloatingControlButtonStyle(tint: StudioTheme.red, compact: true, height: 30))
+                .disabled(!canDiscard)
+                .accessibilityIdentifier("recording.toolbar.confirmDiscard")
+            } else {
+                statusDot
+                clock
+                Spacer(minLength: 0)
+                if model.destination == .countdown {
+                    Button("Cancel") { model.cancelRecordingCountdown() }
+                        .buttonStyle(FloatingControlButtonStyle(compact: true, height: 30))
+                        .accessibilityIdentifier("recording.toolbar.cancelCountdown")
+                } else {
+                    pauseButton(compact: true)
+                    finishButton(compact: true)
+                    discardButton
+                }
+                expandButton
+            }
         }
-        .overlay {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(LinearGradient(colors: [StudioTheme.purple.opacity(0.5), Color.white.opacity(0.10)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
+        .padding(.horizontal, 10)
+    }
+
+    @ViewBuilder
+    private var statusDot: some View {
+        if isStopping || captureEngine.isChangingPauseState {
+            ProgressView()
+                .controlSize(.mini)
+                .frame(width: 10, height: 10)
+                .accessibilityIdentifier("recording.toolbar.status")
+        } else {
+            Circle()
+                .fill(statusColor)
+                .frame(width: 8, height: 8)
+                .accessibilityIdentifier("recording.toolbar.status")
         }
-        .environment(\.locale, localization.locale)
+    }
+
+    /// A fixed width stops ticking digits reflowing the row every second.
+    private var clock: some View {
+        Group {
+            if model.destination == .countdown {
+                Text("\(model.recordingCountdown)")
+            } else if captureEngine.isChangingPauseState {
+                Text("Working…")
+            } else if isStopping {
+                Text("Saving…")
+            } else {
+                Text(verbatim: captureEngine.duration.formattedDuration)
+            }
+        }
+        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+        .monospacedDigit()
+        .lineLimit(1)
+        .frame(width: 48, alignment: .leading)
+        .help(LocalizedStringKey(statusTitle))
+        .accessibilityIdentifier("recording.floatingInteractionCounts")
+    }
+
+    /// A Codex-directed take cancels its plan instead of the recording, so one
+    /// button must not quietly mean two things.
+    private var canDiscard: Bool {
+        !locked && captureEngine.isRecording && !model.isRunningCodexPlan
+    }
+
+    private var discardButton: some View {
+        Button {
+            discardArmed = true
+        } label: {
+            Label("Cancel recording", systemImage: "xmark")
+                .labelStyle(.iconOnly)
+        }
+        .buttonStyle(FloatingControlButtonStyle(compact: true, height: 30))
+        .disabled(!canDiscard)
+        .help("Cancel and delete this recording")
+        .accessibilityLabel("Cancel recording")
+        .accessibilityIdentifier("recording.toolbar.cancel")
+    }
+
+    private var expandButton: some View {
+        Button {
+            RecordingControlPanelCoordinator.shared.setExpandedWhileRecording(true)
+        } label: {
+            Image(systemName: "chevron.up")
+                .font(.system(size: 10, weight: .bold))
+                .frame(width: 22, height: 30)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help("Show full controls")
+        .accessibilityLabel("Show full controls")
+        .accessibilityIdentifier("recording.toolbar.expand")
+    }
+
+    private var collapseButton: some View {
+        Button {
+            RecordingControlPanelCoordinator.shared.setExpandedWhileRecording(false)
+        } label: {
+            Image(systemName: "chevron.down")
+                .font(.system(size: 11, weight: .bold))
+                .frame(width: 26, height: 36)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help("Hide full controls")
+        .accessibilityLabel("Hide full controls")
+        .accessibilityIdentifier("recording.toolbar.collapse")
+    }
+
+    private func pauseButton(compact: Bool) -> some View {
+        Button {
+            Task { await model.toggleRecordingPause() }
+        } label: {
+            let title = LocalizedStringKey(captureEngine.isPaused ? "Resume recording" : "Pause recording")
+            let icon = captureEngine.isPaused ? "play.fill" : "pause.fill"
+            if compact {
+                Label(title, systemImage: icon).labelStyle(.iconOnly)
+            } else {
+                Label(title, systemImage: icon)
+            }
+        }
+        .buttonStyle(FloatingControlButtonStyle(compact: compact, height: compact ? 30 : 36))
+        .disabled(locked || !captureEngine.isRecording)
+        .help(LocalizedStringKey(captureEngine.isPaused ? "Resume recording" : "Pause recording"))
+        .accessibilityLabel(LocalizedStringKey(captureEngine.isPaused ? "Resume recording" : "Pause recording"))
+        .accessibilityIdentifier(captureEngine.isPaused ? "recording.toolbar.resume" : "recording.toolbar.pause")
+    }
+
+    private func finishButton(compact: Bool) -> some View {
+        Button {
+            Task { await model.stopRecording() }
+        } label: {
+            // Finish keeps its label even in the bar: it is the control a user
+            // must be able to hit without aiming.
+            Label("Finish", systemImage: "stop.fill")
+        }
+        .buttonStyle(FloatingControlButtonStyle(tint: StudioTheme.red, compact: compact, height: compact ? 30 : 36))
+        .disabled(locked || !captureEngine.isRecording)
+        .help("Finish recording and open the editor")
+        .accessibilityLabel("Finish")
+        .accessibilityIdentifier("recording.toolbar.stop")
     }
 
     private var consoleHeader: some View {
@@ -364,26 +691,12 @@ struct FloatingRecordingControls: View {
                 .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
             Spacer(minLength: 0)
 
-            Button {
-                Task { await model.toggleRecordingPause() }
-            } label: {
-                Label(LocalizedStringKey(captureEngine.isPaused ? "Resume recording" : "Pause recording"),
-                      systemImage: captureEngine.isPaused ? "play.fill" : "pause.fill")
+            pauseButton(compact: false)
+            finishButton(compact: false)
+            discardButton
+            if model.destination == .countdown || model.destination == .recording {
+                collapseButton
             }
-            .buttonStyle(FloatingControlButtonStyle())
-            .disabled(locked || !captureEngine.isRecording)
-            .accessibilityIdentifier(captureEngine.isPaused ? "recording.toolbar.resume" : "recording.toolbar.pause")
-
-            Button {
-                Task { await model.stopRecording() }
-            } label: {
-                Label("Finish", systemImage: "stop.fill")
-            }
-            .buttonStyle(FloatingControlButtonStyle(tint: StudioTheme.red))
-            .disabled(locked || !captureEngine.isRecording)
-            .accessibilityIdentifier("recording.toolbar.stop")
-            .help("Finish recording and open the editor")
-
         }
     }
 }
@@ -392,6 +705,7 @@ private struct FloatingControlButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     var tint: Color?
     var compact = false
+    var height: CGFloat = 36
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -399,7 +713,7 @@ private struct FloatingControlButtonStyle: ButtonStyle {
             .lineLimit(1)
             .foregroundStyle(Color.white.opacity(configuration.isPressed ? 0.72 : 0.96))
             .padding(.horizontal, compact ? 8 : 12)
-            .frame(height: 36)
+            .frame(height: height)
             .background(
                 (tint ?? Color.white.opacity(0.09))
                     .opacity(configuration.isPressed ? 0.68 : 1)

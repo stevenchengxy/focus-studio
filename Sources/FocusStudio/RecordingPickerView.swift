@@ -329,6 +329,22 @@ struct RecordingPickerView: View {
                 }
             }
         }
+        .task {
+            // SwiftUI cancels this when the picker goes away, so the poll only
+            // runs while the source list is actually on screen.
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(1500))
+                if Task.isCancelled { break }
+                await model.refreshRecordingSourcesQuietly()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSApplication.didBecomeActiveNotification
+        )) { _ in
+            // Coming back from the app being demoed is exactly when the list is
+            // most likely to be stale.
+            Task { await model.refreshRecordingSourcesQuietly() }
+        }
         .onAppear {
             model.refreshInteractionTrackingPermission()
             areaDisplayID = model.selectedAreaTarget.flatMap { area in
@@ -691,6 +707,7 @@ private struct SettingToggle: View {
 struct ActiveRecordingView: View {
     @EnvironmentObject private var model: StudioModel
     @ObservedObject private var localization = AppLocalization.shared
+    @State private var isConfirmingDiscard = false
 
     var body: some View {
         VStack(spacing: 24) {
@@ -711,7 +728,7 @@ struct ActiveRecordingView: View {
 
             HStack(spacing: 12) {
                 Button {
-                    Task { await model.cancelRecording() }
+                    isConfirmingDiscard = true
                 } label: {
                     Label("Cancel", systemImage: "xmark")
                         .padding(.horizontal, 16)
@@ -720,6 +737,19 @@ struct ActiveRecordingView: View {
                 .buttonStyle(.plain)
                 .background(Color.white.opacity(0.07))
                 .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .accessibilityIdentifier("recording.page.cancel")
+                // This window is key, unlike the floating bar, so a real dialog
+                // is the right guard for throwing a take away.
+                .confirmationDialog(
+                    "Discard recording?",
+                    isPresented: $isConfirmingDiscard,
+                    titleVisibility: .visible
+                ) {
+                    Button("Discard", role: .destructive) {
+                        Task { await model.cancelRecording() }
+                    }
+                    Button("Keep", role: .cancel) {}
+                }
 
                 Button {
                     Task { await model.takeScreenshot() }
