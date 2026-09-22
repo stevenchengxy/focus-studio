@@ -41,3 +41,11 @@
 - `RecordingLifecycleRegression` 新增：控制条切换来源类型、回到区域时复用已注册的区域、忙碌时忽略、在库页面时忽略、无显示器时无处可画。
 - `ToolbarSnapshotTests` 扩展到六张离屏快照：760/640 宽的空闲控制条、324×46 录制条、窗口模式控制条、光标检查器、背景检查器、区域框选浮层。
 - 实机验证壁纸枚举：改动前后分别枚举，本机从 10 张增加到 30 张全分辨率图片。
+
+## 4. 安装包与安装（1.11.0 / build 18）
+
+- Universal 2 打包通过：`dist/releases/Focus-Studio-1.11.0-universal-local.dmg`（SHA-256 `de00442e8db2febcc78d8ba2f7b044328f584c06a96194e0cb2a6f40dd0df0cc`）、`.zip`（`501b7c94d370146a87493ed8e9e9f9212628a7fb39cdb95986895e2fbbafa287`）。
+- `/Applications/Focus Studio.app` 1.10.0 在空闲时退出后安装 1.11.0 build 18，安装校验、`codesign --verify --deep --strict` 与 12 张背景图落包均已确认，应用已重新启动。
+- 旧版本清理：候选构建、`dist/Focus Studio.app`、1.10.0 的安装包与安装器恢复副本已移入废纸篓。本机只保留 `/Applications/Focus Studio.app` 1.11.0 与 1.11.0 的安装包。
+- 代码已作为 `b0e0c0d` 推送到 `main`。
+
