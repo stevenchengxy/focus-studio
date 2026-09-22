@@ -52,6 +52,13 @@
 - 用 `scripts/install-app.sh … --yes` 安装到 `/Applications/Focus Studio.app`（此前 1.7.1 build 13 先退出），安装校验通过。
 - 旧版本清理：所有 `dist/candidates/*`、`dist/Focus Studio.app`（1.1.2）、1.8.0 之前的 `dist/releases/*` 以及安装器保留的 `/Applications/.focusstudio-install-*` 恢复副本已移入废纸篓（`~/.Trash/focus-studio-old-versions-*`），本机只保留 `/Applications/Focus Studio.app` 1.8.0 与 1.8.0 的安装包。
 
+## 安装包与安装（1.9.0 / build 16）
+
+- Universal 2 构建与打包通过（`scripts/package-release.sh`，含 `verify-release.sh --require-universal`）：`dist/releases/Focus-Studio-1.9.0-universal-local.dmg`（SHA-256 `51f8da963dd3b65f1d92ec302ec8228dfb5934d09c80d0c3820b96c70d3bc9b9`）、`.zip`（`b0a703b6ca342fab74f71aea975b1c5ee0abe0b1fe3dd4d6f8fe6121f5119224`）、`.sha256`。
+- `/Applications/Focus Studio.app` 1.8.0 build 15 处于空闲（只读打开工程、无录制）时先退出，再用 `scripts/install-app.sh … --yes` 安装 1.9.0 build 16；安装校验与 `codesign --verify --deep --strict` 通过，已重新启动。
+- 旧版本清理：`dist/candidates/1.9.0-native`、`dist/Focus Studio.app`（本次 universal 构建副本）、1.8.0 的 `dist/releases/*` 以及安装器保留的 `/Applications/.focusstudio-install-*` 恢复副本（内含 1.8.0）已移入废纸篓 `~/.Trash/focus-studio-old-versions-20260922-225110`（275 MB），本机只保留 `/Applications/Focus Studio.app` 1.9.0 与 1.9.0 的安装包。
+
 ## 交付
 
 - 已随 1.8.0 一起提交并推送到 `main`（含此前工作树中的暂停/续录、缩放意图排序、助手面板等改动）。
+- 1.9.0 已作为 `a452b12` 提交并推送到 `main`；本安装记录随后续 docs 提交推送。
