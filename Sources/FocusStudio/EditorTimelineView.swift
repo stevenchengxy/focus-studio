@@ -336,18 +336,38 @@ private struct ZoomBlockView: View {
     @State private var moveOrigin: ZoomSegment?
     @State private var leadingOrigin: ZoomSegment?
     @State private var trailingOrigin: ZoomSegment?
+    @State private var fullZoomOrigin: ZoomSegment?
+    @State private var zoomOutOrigin: ZoomSegment?
 
     private let handleWidth = 14.0
+    private let innerHandleWidth = 10.0
 
     var body: some View {
         let startX = segment.start / duration * timelineWidth
         let width = min(timelineWidth, max(40, (segment.end - segment.start) / duration * timelineWidth))
         let displayedStart = startX.clamped(to: 0...max(0, timelineWidth - width))
+        let timing = ZoomTiming.resolve(segment, settings: settings)
+        let pixelsPerSecond = width / max(0.001, segment.end - segment.start)
+        let easeInWidth = min(width, timing.easeIn * pixelsPerSecond)
+        let easeOutWidth = min(width, timing.easeOut * pixelsPerSecond)
+        let showsInnerHandles = isSelected && !segment.isInstant && width >= 96
 
         ZStack {
             RoundedRectangle(cornerRadius: 5, style: .continuous)
                 .fill(segment.isEnabled ? StudioTheme.purple : Color.gray.opacity(0.45))
                 .shadow(color: StudioTheme.purple.opacity(isSelected ? 0.55 : 0), radius: isSelected ? 6 : 0)
+            // The transitions are shaded so their length is visible at a glance.
+            if !segment.isInstant {
+                HStack(spacing: 0) {
+                    LinearGradient(colors: [Color.black.opacity(0.28), Color.clear], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: easeInWidth)
+                    Spacer(minLength: 0)
+                    LinearGradient(colors: [Color.clear, Color.black.opacity(0.28)], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: easeOutWidth)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .allowsHitTesting(false)
+            }
             RoundedRectangle(cornerRadius: 5, style: .continuous)
                 .stroke(Color.white.opacity(isSelected ? 0.9 : 0), lineWidth: 1.5)
             HStack(spacing: 0) {
@@ -355,6 +375,13 @@ private struct ZoomBlockView: View {
                 moveHandle(showDuration: width >= 84)
                     .frame(maxWidth: .infinity)
                 resizeHandle(isLeading: false)
+            }
+            if showsInnerHandles {
+                // Inner boundaries: when the zoom-in completes and the zoom-out begins.
+                innerHandle(isFullZoom: true)
+                    .offset(x: (easeInWidth - width / 2).clamped(to: (-width / 2 + handleWidth)...(width / 2 - handleWidth)))
+                innerHandle(isFullZoom: false)
+                    .offset(x: (width / 2 - easeOutWidth).clamped(to: (-width / 2 + handleWidth)...(width / 2 - handleWidth)))
             }
         }
         .frame(width: width, height: 24)
@@ -414,6 +441,54 @@ private struct ZoomBlockView: View {
         .accessibilityAction { onSelect() }
         .accessibilityAdjustableAction { direction in
             adjust(direction) { .move(segment.start + $0) }
+        }
+    }
+
+    /// Drags the moment the zoom-in finishes (leading) or the zoom-out starts
+    /// (trailing) without moving the block's edges.
+    private func innerHandle(isFullZoom: Bool) -> some View {
+        ZStack {
+            Rectangle().fill(Color.white.opacity(0.001))
+            RoundedRectangle(cornerRadius: 1)
+                .fill(Color.white.opacity(0.85))
+                .frame(width: 2, height: 16)
+            Image(systemName: isFullZoom ? "arrowtriangle.right.fill" : "arrowtriangle.left.fill")
+                .font(.system(size: 6, weight: .bold))
+                .foregroundStyle(.white.opacity(0.95))
+                .offset(y: -9)
+        }
+        .frame(width: innerHandleWidth, height: 24)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 1, coordinateSpace: .named("zoom-timeline"))
+                .onChanged { value in
+                    onSelect()
+                    let origin = (isFullZoom ? fullZoomOrigin : zoomOutOrigin) ?? segment
+                    if isFullZoom { if fullZoomOrigin == nil { fullZoomOrigin = origin } }
+                    else if zoomOutOrigin == nil { zoomOutOrigin = origin }
+                    let originTiming = ZoomTiming.resolve(origin, settings: settings)
+                    let delta = timeDelta(value.translation.width)
+                    segment = ZoomTiming.applying(
+                        isFullZoom ? .fullZoomAt(originTiming.fullZoomStart + delta) : .zoomOutAt(originTiming.zoomOutStart + delta),
+                        to: origin,
+                        projectDuration: duration,
+                        settings: settings
+                    )
+                }
+                .onEnded { _ in
+                    if isFullZoom { fullZoomOrigin = nil } else { zoomOutOrigin = nil }
+                }
+        )
+        .help(LocalizedStringKey(isFullZoom ? "Drag to change when the zoom-in finishes" : "Drag to change when the zoom-out starts"))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(LocalizedStringKey(isFullZoom ? "Zoom in ends" : "Zoom out starts")))
+        .accessibilityValue("\(seconds(isFullZoom ? ZoomTiming.resolve(segment, settings: settings).fullZoomStart : ZoomTiming.resolve(segment, settings: settings).zoomOutStart)) seconds")
+        .accessibilityIdentifier("zoom.\(segment.id.uuidString).\(isFullZoom ? "fullZoom" : "zoomOut")")
+        .accessibilityAdjustableAction { direction in
+            adjust(direction) { delta in
+                let timing = ZoomTiming.resolve(segment, settings: settings)
+                return isFullZoom ? .fullZoomAt(timing.fullZoomStart + delta) : .zoomOutAt(timing.zoomOutStart + delta)
+            }
         }
     }
 

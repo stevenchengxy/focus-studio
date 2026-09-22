@@ -35,6 +35,8 @@ final class StudioModel: ObservableObject {
     @Published var recordSystemAudio = false
     @Published var recordMicrophone = false
     @Published var automaticZooms = true
+    @Published var showRecordingCursor = true
+    @Published var recordingSourceKind: CaptureTargetKind = .window
     @Published var browserContentOnly = true
     @Published var hideBrowserBookmarksBar = true
     @Published var frameRate = 60
@@ -73,6 +75,7 @@ final class StudioModel: ObservableObject {
     private var assistantObservers: Set<AnyCancellable> = []
     private var didCreateAssistantSession = false
     private let store: ProjectStore
+    private let assistantHistoryURL: URL?
     private let interactionTrackingAccess: @MainActor () -> Bool
     private let inputMonitoringAccess: @MainActor () -> Bool
     private var didBootstrap = false
@@ -94,9 +97,11 @@ final class StudioModel: ObservableObject {
     init(
         store: ProjectStore = ProjectStore(),
         interactionTrackingAccess: @escaping @MainActor () -> Bool = { AXIsProcessTrusted() },
-        inputMonitoringAccess: @escaping @MainActor () -> Bool = { CGPreflightListenEventAccess() }
+        inputMonitoringAccess: @escaping @MainActor () -> Bool = { CGPreflightListenEventAccess() },
+        assistantHistoryURL: URL? = nil
     ) {
         self.store = store
+        self.assistantHistoryURL = assistantHistoryURL
         self.interactionTrackingAccess = interactionTrackingAccess
         self.inputMonitoringAccess = inputMonitoringAccess
         refreshInteractionTrackingPermission()
@@ -107,6 +112,16 @@ final class StudioModel: ObservableObject {
             return selectedAreaTarget
         }
         return captureEngine.availableTargets.first { $0.id == selectedTargetID }
+    }
+
+    /// Install only from an idle library/chat page, never while an editor,
+    /// recording, pending confirmation or an asynchronous operation owns work.
+    var isInstallationBusy: Bool {
+        isBusy || isManagingProjects || isRunningCodexPlan || isSelectingArea
+            || captureEngine.isRecording
+            || (destination != .library && destination != .director)
+            || (assistantSessionIfLoaded?.isRunning ?? false)
+            || assistantSessionIfLoaded?.pendingConfirmation != nil
     }
 
     var selectedTargetSupportsBrowserContentCrop: Bool {
@@ -199,8 +214,16 @@ final class StudioModel: ObservableObject {
         )
         let session = AIAssistantSession(
             context: context,
-            completionResolver: { [weak self] in self?.assistantCompletion() }
+            completionResolver: { [weak self] in self?.assistantCompletion() },
+            historyURL: assistantHistoryURL,
+            providerIdentity: { [weak self] in self?.assistantProviderIdentity ?? "unavailable" }
         )
+        session.configureRecordingPlanRunner { [weak self] plan in
+            self?.startCodexPlan(plan)
+        }
+        session.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }.store(in: &assistantObservers)
         // `@Published` emits before the value changes; deliver on the next
         // run-loop pass so the resolver sees the new setting.
         let refresh: () -> Void = { [weak session] in session?.refreshModelAvailability() }
@@ -216,6 +239,18 @@ final class StudioModel: ObservableObject {
             refresh()
         }.store(in: &assistantObservers)
         return session
+    }
+
+    /// Only compared in memory. Never includes API keys or authentication data.
+    private var assistantProviderIdentity: String {
+        switch aiGateway.assistantBrain {
+        case .gatewayModel:
+            guard let model = aiGateway.defaultTextModel else { return "gateway:none" }
+            return "gateway:\(model.provider.rawValue):\(model.modelID):\(aiGateway.configuration(for: model.provider).effectiveBaseURL)"
+        case .codex:
+            let preferences = CodexConnectionPreferences.load()
+            return "codex:\(preferences.accountScope.rawValue):\(preferences.executablePath):\(preferences.modelID)"
+        }
     }
 
     /// The provider for the next assistant message, per the Settings brain.
@@ -462,7 +497,12 @@ final class StudioModel: ObservableObject {
             showMessage("Choose a display, window, or area to record.")
             return
         }
-        guard recordingCountdownTask == nil, !captureEngine.isRecording else { return }
+        guard recordingCountdownTask == nil, !captureEngine.isRecording, !isSelectingArea,
+              !isBusy, !isManagingProjects else { return }
+        guard recordingSourceKind != .area || target.kind == .area else {
+            showMessage("Choose a display, then draw the recording area")
+            return
+        }
         guard confirmInteractionTrackingBeforeRecording(allowUnavailable: allowUnavailableTracking) else { return }
 
         let targetSnapshot = target
@@ -586,6 +626,7 @@ final class StudioModel: ObservableObject {
     }
 
     func stopRecording() async {
+        guard !isBusy, captureEngine.isRecording else { return }
         if isRunningCodexPlan {
             codexFinishRequested = true
             codexPlanTask?.cancel()
@@ -594,13 +635,18 @@ final class StudioModel: ObservableObject {
         busy("Preparing your editable recording…")
         defer {
             isBusy = false
-            RecordingControlPanelCoordinator.shared.hide()
+            if destination == .recorder {
+                RecordingControlPanelCoordinator.shared.show(model: self)
+            } else {
+                RecordingControlPanelCoordinator.shared.hide()
+            }
         }
 
         do {
             let result = try await captureEngine.stopRecording()
             var settings = ProjectSettings()
             settings.autoZoomEnabled = automaticZooms
+            settings.showCursor = showRecordingCursor
             settings.frameRate = min(frameRate, 60)
             settings.sourceCropInsets = pendingSourceCropInsets
             let title = "Recording \(Date().formatted(date: .abbreviated, time: .shortened))"
@@ -628,15 +674,40 @@ final class StudioModel: ObservableObject {
     }
 
     func cancelRecording() async {
+        guard !isBusy, captureEngine.isRecording else { return }
         if isRunningCodexPlan {
             codexFinishRequested = false
             codexPlanTask?.cancel()
             return
         }
+        busy("Saving…")
+        defer { isBusy = false }
         await captureEngine.cancelRecording()
         pendingSourceCropInsets = nil
         RecordingControlPanelCoordinator.shared.hide()
         destination = .library
+    }
+
+    func toggleRecordingPause() async {
+        guard captureEngine.isRecording, !captureEngine.isChangingPauseState, !isBusy else { return }
+        do {
+            if captureEngine.isPaused { try await captureEngine.resumeRecording() }
+            else { try await captureEngine.pauseRecording() }
+        } catch { show(error) }
+    }
+
+    func handleCaptureStateChange(_ state: RecordingState) {
+        guard case let .failed(message) = state, destination == .recording,
+              !isBusy, !isRunningCodexPlan else { return }
+        pendingSourceCropInsets = nil
+        destination = .recorder
+        showMessage(message)
+    }
+
+    func selectToolbarTarget(_ target: CaptureTargetInfo) {
+        guard destination == .recorder, !isBusy, !isSelectingArea else { return }
+        selectedTargetID = target.id
+        recordingSourceKind = target.kind
     }
 
     func takeScreenshot() async {
@@ -658,7 +729,18 @@ final class StudioModel: ObservableObject {
             formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss.SSS"
             let filename = "Focus Studio \(formatter.string(from: Date())).png"
             let outputURL = directory.appendingPathComponent(filename)
-            try await captureEngine.captureScreenshot(to: outputURL)
+            let crop: SourceCropInsets?
+            if destination == .recorder, let target = selectedTarget {
+                try await captureEngine.captureScreenshot(target: target, to: outputURL)
+                crop = browserContentOnly ? defaultBrowserCrop(for: target) : nil
+            } else {
+                try await captureEngine.captureScreenshot(to: outputURL)
+                crop = pendingSourceCropInsets
+            }
+            if let crop {
+                // Decode first, then atomically replace this newly created screenshot.
+                _ = try cropScreenshot(at: outputURL, to: outputURL, insets: crop, maximumDimension: nil)
+            }
             lastScreenshotURL = outputURL
             showScreenshotNotice("Screenshot saved")
         } catch {
@@ -788,28 +870,44 @@ final class StudioModel: ObservableObject {
             RecordingControlPanelCoordinator.shared.show(model: self)
             isBusy = false
 
-            let fallbackStart = ProcessInfo.processInfo.systemUptime
+            let waitUntilReady: @MainActor () async throws -> Void = { [weak self] in
+                guard let self else { throw CancellationError() }
+                while self.captureEngine.isPaused || self.captureEngine.isChangingPauseState {
+                    try Task.checkCancellation()
+                    try await Task.sleep(for: .milliseconds(50))
+                }
+                try Task.checkCancellation()
+                guard self.captureEngine.isRecording else { throw CancellationError() }
+            }
+            var lastPlanClock: TimeInterval = 0
+            let activeClock: @MainActor () -> TimeInterval = { [weak self] in
+                // Flushing a segment can trim its last partial frame. Keep the
+                // scheduling clock monotonic while clicks use exact media time.
+                lastPlanClock = max(lastPlanClock, self?.captureEngine.duration ?? 0)
+                return lastPlanClock
+            }
             var plannedClicks: [ClickEvent] = []
             do {
-                try await Task.sleep(for: .milliseconds(700))
+                try await CodexPlanRunner.waitForDuration(0.7, waitUntilReady: waitUntilReady, activeClock: activeClock)
                 try await CodexPlanRunner.run(
                     actions: plan.actions,
                     in: target,
                     cropInsets: cropInsets,
-                    browserApplicationURL: prepared.browserApplicationURL
+                    browserApplicationURL: prepared.browserApplicationURL,
+                    waitUntilReady: waitUntilReady,
+                    activeClock: activeClock
                 ) { [weak self] x, y in
                     guard let self else { return }
-                    let zero = self.captureEngine.recordingStartUptime ?? fallbackStart
                     plannedClicks.append(
                         ClickEvent(
-                            time: max(0, ProcessInfo.processInfo.systemUptime - zero),
+                            time: self.captureEngine.duration,
                             x: x,
                             y: y,
                             button: .left
                         )
                     )
                 }
-                try await Task.sleep(for: .milliseconds(900))
+                try await CodexPlanRunner.waitForDuration(0.9, waitUntilReady: waitUntilReady, activeClock: activeClock)
             } catch let cancellation as CancellationError {
                 guard codexFinishRequested else { throw cancellation }
             }
@@ -820,6 +918,7 @@ final class StudioModel: ObservableObject {
 
             var settings = ProjectSettings()
             settings.autoZoomEnabled = false
+            settings.showCursor = showRecordingCursor
             settings.frameRate = min(max(frameRate, 30), 60)
             settings.sourceCropInsets = cropInsets
             settings.screenAnimation = .smooth
@@ -971,7 +1070,8 @@ final class StudioModel: ObservableObject {
     private func cropScreenshot(
         at sourceURL: URL,
         to outputURL: URL,
-        insets: SourceCropInsets
+        insets: SourceCropInsets,
+        maximumDimension: Double? = 1_600
     ) throws -> URL {
         guard let source = CGImageSourceCreateWithURL(sourceURL as CFURL, nil),
               let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
@@ -988,9 +1088,8 @@ final class StudioModel: ObservableObject {
         guard let cropped = image.cropping(to: rect)
         else { throw DirectorRunError.invalidScreenshot(sourceURL) }
 
-        let maximumContextDimension = 1_600.0
         let longestEdge = Double(max(cropped.width, cropped.height))
-        let scale = min(1, maximumContextDimension / longestEdge)
+        let scale = maximumDimension.map { min(1, $0 / longestEdge) } ?? 1
         let outputImage: CGImage
         if scale < 1 {
             let source = CIImage(cgImage: cropped)
@@ -1004,9 +1103,10 @@ final class StudioModel: ObservableObject {
             outputImage = cropped
         }
 
+        let encoded = NSMutableData()
         guard
-              let destination = CGImageDestinationCreateWithURL(
-                outputURL as CFURL,
+              let destination = CGImageDestinationCreateWithData(
+                encoded,
                 UTType.png.identifier as CFString,
                 1,
                 nil
@@ -1016,6 +1116,7 @@ final class StudioModel: ObservableObject {
         guard CGImageDestinationFinalize(destination) else {
             throw DirectorRunError.invalidScreenshot(sourceURL)
         }
+        try (encoded as Data).write(to: outputURL, options: .atomic)
         return outputURL
     }
 

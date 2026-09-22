@@ -43,7 +43,7 @@ struct LibraryView: View {
                 Button {
                     model.showDirector()
                 } label: {
-                    Label("Codex Director", systemImage: "sparkles.rectangle.stack")
+                    Label("Demo Director", systemImage: "sparkles.rectangle.stack")
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(StudioTheme.purple)
@@ -87,7 +87,7 @@ struct LibraryView: View {
                                 Button {
                                     model.showDirector()
                                 } label: {
-                                    Label("Create with Codex", systemImage: "sparkles")
+                                    Label("Create with AI", systemImage: "sparkles")
                                 }
                                 .buttonStyle(PrimaryButtonStyle())
 

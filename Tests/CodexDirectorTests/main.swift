@@ -202,6 +202,9 @@ struct CodexConnectionTests {
         check(second["schema"] as? Bool == false && second["thread"] as? String == first["thread"] as? String, "json: false sends no schema; the thread is reused: \(second)")
         let third = try object(await assistant.completeText(developerInstructions: "Different instructions.", prompt: "third", json: true))
         check(third["instructions"] as? String == "Different instructions." && third["thread"] as? String != first["thread"] as? String, "changed instructions start a new thread: \(third)")
+        await assistant.resetAssistantConversation()
+        let fresh = try object(await assistant.completeText(developerInstructions: "Different instructions.", prompt: "new chat", json: true))
+        check(fresh["thread"] as? String != third["thread"] as? String && assistant.canCreatePlan, "new chat drops server history without disconnecting authentication")
         let slowCompletion = Task { try await assistant.completeText(developerInstructions: "Different instructions.", prompt: "slow one", json: false) }
         try await Task.sleep(for: .milliseconds(150))
         slowCompletion.cancel()
@@ -218,6 +221,15 @@ struct CodexConnectionTests {
         } catch CodexDirectorServiceError.turnFailed(let message) {
             check(message.contains("fixture failure"), "a failed turn surfaces its error: \(message)")
         }
+        let preparing = Task { try await assistant.completeText(developerInstructions: "Slow preparation.", prompt: "cancel setup", json: true) }
+        try await Task.sleep(for: .milliseconds(100))
+        let cancelledAt = Date()
+        preparing.cancel()
+        switch await preparing.result {
+        case let .failure(error): check(error is CancellationError, "preparation cancellation surfaces cancellation")
+        case .success: fatalError("FAIL: cancelled preparation succeeded")
+        }
+        check(Date().timeIntervalSince(cancelledAt) < 1, "stopping preparation does not wait for protocol timeout")
         assistant.disconnect()
 
         setenv("FOCUS_STUDIO_CODEX_FIXTURE", "new-user", 1)

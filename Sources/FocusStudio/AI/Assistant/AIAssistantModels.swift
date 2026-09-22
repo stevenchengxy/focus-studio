@@ -4,8 +4,8 @@ import Foundation
 /// One row of the assistant transcript. Tool and status rows are rendered
 /// differently from chat bubbles but share the same list so the order in
 /// which things happened is preserved.
-struct AIAssistantMessage: Identifiable, Equatable, Sendable {
-    enum Role: String, Sendable {
+struct AIAssistantMessage: Identifiable, Equatable, Codable, Sendable {
+    enum Role: String, Codable, Sendable {
         case user
         case assistant
         /// A tool result (text plus generated files) that is also fed back to the model.
@@ -37,6 +37,12 @@ struct AIAssistantMessage: Identifiable, Equatable, Sendable {
         self.toolName = toolName
         self.timestamp = timestamp
     }
+}
+
+/// Providers with hidden server-side context must discard it when the local
+/// conversation or selected provider changes. Stateless HTTP providers need no hook.
+protocol AssistantConversationResetting: TextCompletionProviding {
+    func resetConversation() async
 }
 
 /// Shown before a paid call runs. Prices are budgeting estimates in 人民币;

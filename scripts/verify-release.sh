@@ -19,6 +19,7 @@ for app_language in en zh-Hans; do
     plutil -lint "$APP_DIR/Contents/Resources/$app_language.lproj/InfoPlist.strings"
 done
 swift "$SCRIPT_DIR/test-localization.swift" "$APP_DIR/Contents/Resources"
+[[ ! -e "$APP_DIR/Contents/Resources/Avatars" ]] || { echo "Removed digital-human assets must not ship." >&2; exit 1; }
 
 architecture_list="$(lipo -archs "$EXECUTABLE")"
 if [[ "$REQUIRE_UNIVERSAL" == "--require-universal" ]]; then
@@ -90,4 +91,4 @@ while IFS= read -r entry; do
 done < <(cd "$APP_DIR" && find Contents -type f -print)
 [[ -z "$(find "$APP_DIR/Contents" -type l -print)" ]] || { echo "App bundle contains external symlinks." >&2; exit 1; }
 
-echo "Verified app: macOS $minimum_macos+, architectures [$architecture_list], system frameworks only, icon and both language catalogs verified, $asset_count bundled audio assets verified."
+echo "Verified app: macOS $minimum_macos+, architectures [$architecture_list], system frameworks only, icon and both language catalogs verified, $asset_count audio assets, chat-only assistant (no digital-human resources)."

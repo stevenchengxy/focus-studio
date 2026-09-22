@@ -606,11 +606,17 @@ public struct ProjectSettings: Codable, Hashable, Sendable {
     /// Optional so projects saved before cursor themes were introduced decode
     /// with the native system cursor instead of failing migration.
     public var cursorAppearance: CursorAppearance?
+    /// Non-destructive pointer visibility. Missing in older recordings means
+    /// visible; click feedback, cursor metadata and automatic zoom are separate.
+    public var showCursor: Bool?
     public var screenAnimation: ScreenAnimationStyle = .cinematic
     /// Seconds after an automatic zoom ends during which a nearby click keeps
     /// the camera zoomed in and pans instead of zooming out and back in.
     /// Optional so projects saved before click chaining decode unchanged.
     public var zoomChainGap: Double?
+    /// How strongly the camera drifts after the pointer while zoomed in (0 off,
+    /// 1 full). Optional so earlier projects decode unchanged.
+    public var zoomFollowsCursor: Double?
     public var hideIdleCursor = true
     public var showClickRing = true
     /// Optional to keep recordings saved before editable click feedback readable.
@@ -657,6 +663,10 @@ public struct ProjectSettings: Codable, Hashable, Sendable {
         cursorAppearance ?? .system
     }
 
+    public var resolvedShowCursor: Bool {
+        showCursor ?? true
+    }
+
     public var resolvedClickAnimation: ClickAnimationSettings {
         (clickAnimation ?? ClickAnimationSettings()).sanitized
     }
@@ -667,6 +677,13 @@ public struct ProjectSettings: Codable, Hashable, Sendable {
 
     public static let defaultZoomChainGap = 1.0
     public static let maximumZoomChainGap = 2.5
+
+    public static let defaultZoomFollowsCursor = 0.6
+
+    public var resolvedZoomFollowsCursor: Double {
+        guard let zoomFollowsCursor, zoomFollowsCursor.isFinite else { return Self.defaultZoomFollowsCursor }
+        return zoomFollowsCursor.clamped(to: 0...1)
+    }
 
     public var resolvedZoomChainGap: Double {
         guard let zoomChainGap, zoomChainGap.isFinite else { return Self.defaultZoomChainGap }

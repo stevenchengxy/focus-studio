@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import FocusStudioCapture
+import FocusStudioCore
 import SwiftUI
 
 /// Owns a non-activating control panel on every connected display. Replicating
@@ -12,26 +13,15 @@ final class RecordingControlPanelCoordinator {
 
     private weak var model: StudioModel?
     private var panels: [RecordingControlPanel] = []
-    private var stateCancellable: AnyCancellable?
     private var screenObserver: NSObjectProtocol?
 
     private init() {}
 
     func show(model: StudioModel) {
+        if self.model === model, !panels.isEmpty { return }
         hide()
         self.model = model
         rebuildPanels()
-
-        stateCancellable = model.captureEngine.$state
-            .receive(on: RunLoop.main)
-            .sink { [weak self] state in
-                switch state {
-                case .idle, .completed, .failed:
-                    self?.hide()
-                case .preparing, .recording, .stopping:
-                    break
-                }
-            }
 
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
@@ -43,22 +33,20 @@ final class RecordingControlPanelCoordinator {
     }
 
     func hide() {
-        stateCancellable?.cancel()
-        stateCancellable = nil
         if let screenObserver {
             NotificationCenter.default.removeObserver(screenObserver)
             self.screenObserver = nil
         }
-        panels.forEach { $0.close() }
+        closePanels()
         panels.removeAll()
         model = nil
     }
 
     private func rebuildPanels() {
         guard let model else { return }
-        panels.forEach { $0.close() }
+        closePanels()
         panels = NSScreen.screens.map { screen in
-            let size = NSSize(width: 590, height: 72)
+            let size = NSSize(width: min(760, screen.visibleFrame.width - 32), height: 116)
             let panel = RecordingControlPanel(
                 contentRect: NSRect(origin: .zero, size: size),
                 styleMask: [.borderless, .nonactivatingPanel],
@@ -71,15 +59,25 @@ final class RecordingControlPanelCoordinator {
                         .preferredColorScheme(.dark)
                 }
             )
+            panel.title = L10n.tr("Recording controls")
+            panel.setAccessibilityLabel(L10n.tr("Recording controls"))
 
             let visible = screen.visibleFrame
             let origin = NSPoint(
                 x: visible.midX - size.width / 2,
-                y: visible.maxY - size.height - 14
+                y: visible.minY + 22
             )
             panel.setFrameOrigin(origin)
+            model.captureEngine.eventMonitor.ignoredWindowNumbers.insert(panel.windowNumber)
             panel.orderFrontRegardless()
             return panel
+        }
+    }
+
+    private func closePanels() {
+        for panel in panels {
+            model?.captureEngine.eventMonitor.ignoredWindowNumbers.remove(panel.windowNumber)
+            panel.close()
         }
     }
 }
@@ -119,7 +117,7 @@ private final class RecordingControlPanel: NSPanel {
     }
 }
 
-private struct FloatingRecordingControls: View {
+struct FloatingRecordingControls: View {
     @ObservedObject private var model: StudioModel
     @ObservedObject private var captureEngine: CaptureEngine
     @ObservedObject private var localization = AppLocalization.shared
@@ -134,11 +132,201 @@ private struct FloatingRecordingControls: View {
         return false
     }
 
+    private var locked: Bool {
+        model.isBusy || isStopping || captureEngine.isChangingPauseState
+    }
+
+    private var ready: Bool { model.destination == .recorder }
+
+    private var sourceReady: Bool {
+        model.selectedTarget?.kind == model.recordingSourceKind
+    }
+
     var body: some View {
-        HStack(spacing: 10) {
+        VStack(spacing: 13) {
+            consoleHeader
+            HStack(spacing: 10) {
+            if ready {
+                readyControls
+            } else if model.destination == .countdown {
+                Label("Get ready", systemImage: "record.circle")
+                Text("\(model.recordingCountdown)")
+                    .font(.system(size: 26, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                Text(model.selectedTarget?.title ?? L10n.tr("Selected source"))
+                    .lineLimit(1).foregroundStyle(.secondary)
+                Spacer()
+                Button("Cancel") { model.cancelRecordingCountdown() }
+                    .buttonStyle(FloatingControlButtonStyle())
+                    .accessibilityIdentifier("recording.toolbar.cancelCountdown")
+            } else {
+                activeControls
+            }
+            }
+            .frame(height: 38)
+        }
+        .foregroundStyle(StudioTheme.text)
+        .padding(.horizontal, 18)
+        .frame(maxWidth: .infinity)
+        .frame(height: 116)
+        .background {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(Color(red: 0.065, green: 0.071, blue: 0.105).opacity(0.97))
+                .overlay(alignment: .topLeading) {
+                    RoundedRectangle(cornerRadius: 22)
+                        .fill(LinearGradient(colors: [StudioTheme.purple.opacity(0.14), .clear], startPoint: .topLeading, endPoint: .bottomTrailing))
+                }
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(LinearGradient(colors: [StudioTheme.purple.opacity(0.5), Color.white.opacity(0.10)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
+        }
+        .environment(\.locale, localization.locale)
+    }
+
+    private var consoleHeader: some View {
+        HStack(spacing: 9) {
+            Image(systemName: "viewfinder")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Color.white)
+                .frame(width: 26, height: 26)
+                .background(LinearGradient(colors: [StudioTheme.purple, Color(red: 0.32, green: 0.45, blue: 0.94)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 8))
+            Text(verbatim: "FOCUS STUDIO")
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .tracking(1.8)
+            Text("Capture console")
+                .font(.system(size: 10)).foregroundStyle(.secondary)
+            Spacer(minLength: 4)
+            if let notice = model.screenshotNotice {
+                Button { model.revealLastScreenshot() } label: {
+                    Label(notice, systemImage: model.lastScreenshotURL == nil ? "exclamationmark.triangle" : "checkmark.circle")
+                        .font(.system(size: 10)).lineLimit(1)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(model.lastScreenshotURL == nil ? StudioTheme.yellow : Color.green)
+            }
+            HStack(spacing: 5) {
+                Circle().fill(statusColor).frame(width: 5, height: 5)
+                Text(LocalizedStringKey(statusTitle))
+                    .font(.system(size: 10, weight: .medium))
+            }
+            .padding(.horizontal, 9).padding(.vertical, 5)
+            .background(statusColor.opacity(0.09), in: Capsule())
+            .foregroundStyle(statusColor)
+            .accessibilityIdentifier("recording.toolbar.status")
+            if ready {
+                Button { model.destination = .library } label: {
+                    Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain).foregroundStyle(.secondary)
+                .disabled(locked)
+                .help("Back to library")
+                .accessibilityLabel("Back to library")
+            }
+        }
+        .frame(height: 26)
+    }
+
+    private var statusTitle: String {
+        if ready { return "Ready to record" }
+        if model.destination == .countdown { return "Get ready" }
+        if isStopping { return "Saving…" }
+        if captureEngine.isChangingPauseState { return "Working…" }
+        return captureEngine.isPaused ? "Paused" : "Recording"
+    }
+
+    private var statusColor: Color {
+        if ready || model.destination == .countdown { return Color(red: 0.72, green: 0.65, blue: 1) }
+        return captureEngine.isPaused ? StudioTheme.yellow : StudioTheme.red
+    }
+
+    private var sourceIcon: String {
+        model.recordingSourceKind == .display ? "display" : model.recordingSourceKind == .area ? "rectangle.dashed" : "macwindow"
+    }
+
+    private var readyControls: some View {
+        Group {
+            Menu {
+                ForEach([CaptureTargetKind.window, .area, .display], id: \.self) { kind in
+                    Section(LocalizedStringKey(kind == .display ? "Display" : kind == .window ? "Window" : "Area")) {
+                    ForEach(captureEngine.availableTargets.filter { $0.kind == (kind == .area ? .display : kind) }) { target in
+                        Button(target.title) {
+                            if kind == .area {
+                                model.recordingSourceKind = .area
+                                Task { await model.selectRecordingArea(on: target) }
+                            } else {
+                                model.selectToolbarTarget(target)
+                            }
+                        }
+                    }
+                    if captureEngine.availableTargets.isEmpty {
+                        Text("No sources available")
+                    }
+                    }
+                }
+            } label: {
+                HStack(spacing: 9) {
+                    Image(systemName: sourceIcon).foregroundStyle(StudioTheme.purple)
+                    Text(model.selectedTarget?.title ?? L10n.tr("Selected source"))
+                        .font(.system(size: 11, weight: .medium)).lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 8, weight: .bold)).foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 12).frame(height: 38)
+                .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 11))
+            }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden)
+            .accessibilityLabel("Choose recording source")
+            .accessibilityIdentifier("recording.toolbar.source")
+            Menu {
+                Toggle("Show cursor", isOn: $model.showRecordingCursor)
+                Toggle("Automatic zooms", isOn: $model.automaticZooms)
+                Toggle("Microphone", isOn: $model.recordMicrophone)
+                Toggle("System audio", isOn: $model.recordSystemAudio)
+                Toggle("Browser content only", isOn: $model.browserContentOnly)
+            } label: {
+                Label("Recording settings", systemImage: "slider.horizontal.3")
+                    .labelStyle(.iconOnly).frame(width: 32, height: 38)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Recording settings")
+            .accessibilityIdentifier("recording.toolbar.settings")
+            Rectangle().fill(Color.white.opacity(0.09)).frame(width: 1, height: 22)
+            screenshotButton
+            Button {
+                model.startRecordingCountdown()
+                if model.isShowingInteractionSetup { NSApp.activate(ignoringOtherApps: true) }
+            } label: {
+                Label("Start recording", systemImage: "record.circle")
+            }
+            .buttonStyle(FloatingControlButtonStyle(tint: StudioTheme.purple))
+            .disabled(!sourceReady)
+            .accessibilityIdentifier("recording.toolbar.start")
+        }
+        .disabled(locked || model.isSelectingArea)
+    }
+
+    private var screenshotButton: some View {
+        Button {
+            Task { await model.takeScreenshot() }
+        } label: {
+            Label(LocalizedStringKey(model.isTakingScreenshot ? "Capturing…" : "Screenshot"), systemImage: "camera")
+        }
+        .buttonStyle(FloatingControlButtonStyle())
+        .disabled(model.isTakingScreenshot || locked || (ready && !sourceReady))
+        .help("Save a PNG of the selected recording source")
+        .accessibilityIdentifier("recording.toolbar.screenshot")
+    }
+
+    private var activeControls: some View {
+        Group {
             HStack(spacing: 8) {
                 Circle()
-                    .fill(StudioTheme.red)
+                    .fill(captureEngine.isPaused ? StudioTheme.yellow : StudioTheme.red)
                     .frame(width: 9, height: 9)
                     .overlay {
                         Circle()
@@ -147,7 +335,9 @@ private struct FloatingRecordingControls: View {
                     }
                 VStack(alignment: .leading, spacing: 2) {
                     Group {
-                        if isStopping {
+                        if captureEngine.isChangingPauseState {
+                            Text("Working…")
+                        } else if isStopping {
                             Text("Saving…")
                         } else {
                             Text(verbatim: captureEngine.duration.formattedDuration)
@@ -155,8 +345,7 @@ private struct FloatingRecordingControls: View {
                     }
                     .font(.system(size: 14, weight: .semibold, design: .monospaced))
                     .monospacedDigit()
-                    let diagnostics = captureEngine.eventMonitor.diagnostics
-                    Text("\(diagnostics.storedClicks) clicks · \(diagnostics.storedTypingActivity) inputs")
+                    Text(LocalizedStringKey(captureEngine.isPaused ? "Paused" : "Recording"))
                         .font(.system(size: 8, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .accessibilityIdentifier("recording.floatingInteractionCounts")
@@ -169,31 +358,21 @@ private struct FloatingRecordingControls: View {
                 .overlay(Color.white.opacity(0.13))
                 .frame(height: 28)
 
+            screenshotButton
+
+            Text(model.selectedTarget?.title ?? L10n.tr("Selected source"))
+                .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+            Spacer(minLength: 0)
+
             Button {
-                Task { await model.takeScreenshot() }
+                Task { await model.toggleRecordingPause() }
             } label: {
-                Label(
-                    LocalizedStringKey(model.isTakingScreenshot ? "Capturing…" : "Screenshot"),
-                    systemImage: "camera"
-                )
+                Label(LocalizedStringKey(captureEngine.isPaused ? "Resume recording" : "Pause recording"),
+                      systemImage: captureEngine.isPaused ? "play.fill" : "pause.fill")
             }
             .buttonStyle(FloatingControlButtonStyle())
-            .disabled(model.isTakingScreenshot || isStopping)
-            .help("Save a PNG of the selected recording source")
-
-            if let notice = model.screenshotNotice {
-                Button {
-                    model.revealLastScreenshot()
-                } label: {
-                    Label(notice, systemImage: model.lastScreenshotURL == nil ? "exclamationmark.triangle" : "checkmark")
-                        .lineLimit(1)
-                }
-                .buttonStyle(FloatingControlButtonStyle(compact: true))
-                .help(model.lastScreenshotURL == nil ? notice : L10n.tr("Show screenshot in Finder"))
-                .transition(.opacity.combined(with: .scale(scale: 0.96)))
-            }
-
-            Spacer(minLength: 0)
+            .disabled(locked || !captureEngine.isRecording)
+            .accessibilityIdentifier(captureEngine.isPaused ? "recording.toolbar.resume" : "recording.toolbar.pause")
 
             Button {
                 Task { await model.stopRecording() }
@@ -201,39 +380,23 @@ private struct FloatingRecordingControls: View {
                 Label("Finish", systemImage: "stop.fill")
             }
             .buttonStyle(FloatingControlButtonStyle(tint: StudioTheme.red))
-            .disabled(isStopping)
+            .disabled(locked || !captureEngine.isRecording)
+            .accessibilityIdentifier("recording.toolbar.stop")
             .help("Finish recording and open the editor")
 
-            Button {
-                Task { await model.cancelRecording() }
-            } label: {
-                Image(systemName: "xmark")
-                    .frame(width: 20, height: 20)
-            }
-            .buttonStyle(FloatingControlButtonStyle(compact: true))
-            .disabled(isStopping)
-            .help("Cancel and delete this recording")
         }
-        .foregroundStyle(StudioTheme.text)
-        .padding(.horizontal, 12)
-        .frame(width: 590, height: 72)
-        .background(.ultraThickMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.white.opacity(0.16), lineWidth: 1)
-        }
-        .animation(.easeOut(duration: 0.18), value: model.screenshotNotice)
-        .environment(\.locale, localization.locale)
     }
 }
 
 private struct FloatingControlButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
     var tint: Color?
     var compact = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: compact ? 11 : 12, weight: .semibold))
+            .lineLimit(1)
             .foregroundStyle(Color.white.opacity(configuration.isPressed ? 0.72 : 0.96))
             .padding(.horizontal, compact ? 8 : 12)
             .frame(height: 36)
@@ -248,5 +411,6 @@ private struct FloatingControlButtonStyle: ButtonStyle {
                         .stroke(Color.white.opacity(0.08), lineWidth: 1)
                 }
             }
+            .opacity(isEnabled ? 1 : 0.38)
     }
 }

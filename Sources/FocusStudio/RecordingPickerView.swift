@@ -5,7 +5,10 @@ import SwiftUI
 struct RecordingPickerView: View {
     @EnvironmentObject private var model: StudioModel
     @ObservedObject private var localization = AppLocalization.shared
-    @State private var kind: CaptureTargetKind = .window
+    private var kind: CaptureTargetKind {
+        get { model.recordingSourceKind }
+        nonmutating set { model.recordingSourceKind = newValue }
+    }
     @State private var areaDisplayID: String?
 
     private var filteredTargets: [CaptureTargetInfo] {
@@ -69,7 +72,7 @@ struct RecordingPickerView: View {
                     Text("What would you like to record?")
                         .font(.system(size: 24, weight: .bold, design: .rounded))
 
-                    Picker("Source", selection: $kind) {
+                    Picker("Source", selection: Binding(get: { kind }, set: { kind = $0 })) {
                         Label("Display", systemImage: "display").tag(CaptureTargetKind.display)
                         Label("Window", systemImage: "macwindow").tag(CaptureTargetKind.window)
                         Label("Area", systemImage: "rectangle.dashed").tag(CaptureTargetKind.area)
@@ -193,6 +196,13 @@ struct RecordingPickerView: View {
                         icon: "plus.magnifyingglass",
                         isOn: $model.automaticZooms
                     )
+                    Divider().overlay(StudioTheme.line)
+                    SettingToggle(
+                        title: "Show cursor",
+                        subtitle: "Hiding the pointer keeps click effects and zooms. You can change this after recording.",
+                        icon: "cursorarrow",
+                        isOn: $model.showRecordingCursor
+                    )
                     if model.selectedTargetSupportsBrowserContentCrop {
                         Divider().overlay(StudioTheme.line)
                         SettingToggle(
@@ -299,6 +309,7 @@ struct RecordingPickerView: View {
         }
         .environment(\.locale, localization.locale)
         .onChange(of: kind) { _, newKind in
+            if newKind != .area, model.selectedTarget?.kind == newKind { return }
             switch newKind {
             case .display:
                 model.selectedTargetID = displayTargets.first?.id
@@ -343,7 +354,14 @@ struct RecordingPickerView: View {
         .onChange(of: model.isSelectingArea) { _, selecting in
             // The area selection overlay covers the display; pause previews
             // so the live stream never shows the selection UI itself.
-            if selecting { model.sourcePreview.stop() } else { syncSourcePreview() }
+            if selecting { model.sourcePreview.stop() }
+            else {
+                if let area = model.selectedAreaTarget, model.selectedTargetID == area.id {
+                    kind = .area
+                    areaDisplayID = displayTargets.first(where: { $0.nativeID == area.nativeID })?.id
+                }
+                syncSourcePreview()
+            }
         }
         .alert("Interaction tracking needs setup", isPresented: $model.isShowingInteractionSetup) {
             if !model.accessibilityAuthorized {
@@ -686,6 +704,7 @@ struct ActiveRecordingView: View {
                     .overlay(Circle().stroke(Color.white.opacity(0.65), lineWidth: 3))
             }
             RecordingDurationLabel(captureEngine: model.captureEngine)
+            RecordingPauseControl(model: model, captureEngine: model.captureEngine)
             Text("Recording \(model.selectedTarget?.title ?? L10n.tr("screen"))")
                 .font(.system(size: 14))
                 .foregroundStyle(StudioTheme.secondaryText)
@@ -794,5 +813,27 @@ private struct RecordingDurationLabel: View {
         Text(captureEngine.duration.formattedDuration)
             .font(.system(size: 52, weight: .medium, design: .monospaced))
             .monospacedDigit()
+    }
+}
+
+private struct RecordingPauseControl: View {
+    @ObservedObject var model: StudioModel
+    @ObservedObject var captureEngine: CaptureEngine
+
+    var body: some View {
+        VStack(spacing: 8) {
+            if captureEngine.isPaused {
+                Text("Paused — video, audio and interaction timing are paused.")
+                    .font(.system(size: 11)).foregroundStyle(StudioTheme.yellow)
+            }
+            Button {
+                Task { await model.toggleRecordingPause() }
+            } label: {
+                Label(LocalizedStringKey(captureEngine.isPaused ? "Resume recording" : "Pause recording"),
+                      systemImage: captureEngine.isPaused ? "play.fill" : "pause.fill")
+            }
+            .buttonStyle(.bordered)
+            .disabled(model.isBusy || captureEngine.isChangingPauseState || !captureEngine.isRecording)
+        }
     }
 }

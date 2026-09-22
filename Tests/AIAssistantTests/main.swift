@@ -23,6 +23,7 @@ struct AIAssistantTests {
         step("confirmation flow"); try await confirmationFlow(root: root)
         step("stop while thinking"); try await stopWhileThinking(root: root)
         step("model resolver"); try await modelResolver(root: root)
+        step("shared conversation and plan drafts"); try await conversationWorkflow(root: root)
         step("update_settings"); try await updateSettingsValidation(root: root)
         step("set_chapters"); try await setChaptersSanitization(root: root)
         step("app control: recording"); try await recordingControl(root: root)
@@ -143,13 +144,17 @@ struct AIAssistantTests {
 
     // MARK: - Scripted model and tools
 
-    final class ScriptedCompletion: TextCompletionProviding, @unchecked Sendable {
+    final class ScriptedCompletion: AssistantConversationResetting, @unchecked Sendable {
         private let lock = NSLock()
         private var responses: [String]
         private(set) var calls: [(system: String, user: String, json: Bool)] = []
         var delay: TimeInterval = 0
+        private(set) var resets = 0
 
         init(_ responses: [String]) { self.responses = responses }
+
+        private func recordReset() { lock.lock(); resets += 1; lock.unlock() }
+        func resetConversation() async { recordReset() }
 
         private func record(_ call: (system: String, user: String, json: Bool)) -> String? {
             lock.lock()
@@ -200,6 +205,103 @@ struct AIAssistantTests {
     static func reply(_ text: String, _ suggestions: [String] = []) -> String {
         let list = suggestions.map { "\"\($0)\"" }.joined(separator: ",")
         return "{\"thought\": \"answer\", \"reply\": \"\(text)\", \"suggestions\": [\(list)]}"
+    }
+
+    @MainActor
+    static func conversationWorkflow(root: URL) async throws {
+        let context = makeContext(root: root, box: ProjectBox(nil))
+        let history = root.appendingPathComponent("conversation/history.json")
+        var identity = "codex/model-a"
+        let provider = ScriptedCompletion([reply("Let's discuss."), reply("Refined."), reply("New model."), reply("Fresh chat.")])
+        let session = AIAssistantSession(context: context, completionResolver: { provider }, tools: [], historyURL: history, providerIdentity: { identity })
+        session.send("How should I present my product?")
+        try await waitUntil("ordinary conversation") { !session.isRunning }
+        check(session.recordingPlan == nil && session.messages.last?.text == "Let's discuss.", "ordinary question is a conversation, not a plan")
+        session.send("Make the introduction shorter")
+        try await waitUntil("follow-up") { !session.isRunning }
+        check(provider.calls[1].user.contains("How should I present") && provider.calls[1].user.contains("Let's discuss."), "follow-up includes prior user and assistant messages")
+        check(provider.resets == 1, "same provider keeps conversational context")
+        identity = "gateway/model-b"
+        session.send("Continue with this model")
+        try await waitUntil("model change") { !session.isRunning }
+        check(provider.resets == 2 && provider.calls.last!.user.contains("Make the introduction shorter"), "model switch resets hidden context while retaining visible history")
+        let restored = AIAssistantSession(context: context, completionResolver: { provider }, tools: [], historyURL: history)
+        check(restored.messages == session.messages && restored.conversationID == session.conversationID, "local history survives relaunch")
+        let previousID = session.conversationID
+        session.clearTranscript()
+        session.send("Start over")
+        try await waitUntil("new conversation") { !session.isRunning }
+        check(previousID != session.conversationID && provider.resets == 3 && !provider.calls.last!.user.contains("How should I present"), "new conversation resets transcript and provider context")
+        let messageID = session.messages.last!.id
+        check(session.claimSpeech(for: messageID) && !session.claimSpeech(for: messageID), "shared surfaces cannot read one reply twice")
+
+        let plan = CodexRecordingPlan(title: "Demo", summary: "A short draft", capture: CodexCaptureDirective(mode: .url, url: "https://example.com"), actions: [CodexRecordingAction(type: .wait, seconds: 3)])
+        let encoded = String(decoding: try JSONEncoder().encode(plan), as: UTF8.self)
+        let planProvider = ScriptedCompletion(["{\"reply\":\"Here is a draft.\",\"recordingPlan\":\(encoded)}"])
+        let planner = AIAssistantSession(context: context, completion: planProvider, tools: [])
+        var runs = 0
+        planner.configureRecordingPlanRunner { received in check(received == plan, "runner receives reviewed plan"); runs += 1 }
+        planner.send("Draft a short demo")
+        try await waitUntil("draft") { !planner.isRunning }
+        check(planner.recordingPlan == plan && runs == 0, "plan generation never executes")
+        planner.runRecordingPlan()
+        planner.runRecordingPlan()
+        check(runs == 1 && planner.planWasRun, "explicit Run submits only once across shared views")
+        var unsafe = plan
+        unsafe.actions = [CodexRecordingAction(type: .click, x: 0.5, y: 0.5)]
+        let unsafeJSON = String(decoding: try JSONEncoder().encode(unsafe), as: UTF8.self)
+        let unsafeSession = AIAssistantSession(context: context, completion: ScriptedCompletion(["{\"recordingPlan\":\(unsafeJSON)}"]), tools: [])
+        unsafeSession.send("Click on my live page")
+        try await waitUntil("ungrounded plan rejection") { !unsafeSession.isRunning }
+        check(unsafeSession.recordingPlan == nil && unsafeSession.messages.last?.role == .error, "unguarded live click coordinates never become executable drafts")
+        // Simulate an older saved draft that predates the text-only safety gate.
+        var saved = try JSONSerialization.jsonObject(with: Data(contentsOf: history)) as! [String: Any]
+        saved["plan"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(unsafe))
+        saved["planWasRun"] = false
+        let unsafeHistory = root.appendingPathComponent("unsafe-history.json")
+        try JSONSerialization.data(withJSONObject: saved).write(to: unsafeHistory)
+        let restoredUnsafe = AIAssistantSession(context: context, completionResolver: { provider }, tools: [], historyURL: unsafeHistory)
+        var unsafeRuns = 0
+        restoredUnsafe.configureRecordingPlanRunner { _ in unsafeRuns += 1 }
+        check(restoredUnsafe.recordingPlan == unsafe, "fixture restored the legacy live-click draft")
+        restoredUnsafe.runRecordingPlan(expectedPlan: unsafe)
+        check(unsafeRuns == 0 && !restoredUnsafe.planWasRun && restoredUnsafe.messages.last?.role == .error, "execution boundary also rejects a restored live-click draft")
+
+        let missingHistory = root.appendingPathComponent("missing-model.json")
+        let missing = AIAssistantSession(context: context, completionResolver: { nil }, tools: [], historyURL: missingHistory)
+        missing.send("Keep this question until I configure a model")
+        let configuredProvider = ScriptedCompletion([reply("Your question was preserved.")])
+        let configured = AIAssistantSession(context: context, completionResolver: { configuredProvider }, tools: [], historyURL: missingHistory)
+        check(configured.canRetry && configured.messages.first?.text == "Keep this question until I configure a model", "missing model retains the question and retry state on disk")
+        configured.retryLastTurn()
+        try await waitUntil("retry after model setup") { !configured.isRunning }
+        check(configuredProvider.calls.first?.user.contains("Keep this question") == true && configured.messages.filter { $0.role == .user }.count == 1, "configured model can answer retained question without duplicate user messages")
+
+        let log = ToolLog()
+        let record = RecordingTool(name: "start_recording", summary: "record fixture", cost: nil, log: log)
+        let recorder = AIAssistantSession(context: context, completion: ScriptedCompletion([action("start_recording"), reply("Recording.")]), tools: [record])
+        recorder.send("Start recording")
+        try await waitUntil("recording confirmation") { recorder.pendingConfirmation != nil }
+        check(log.runs.isEmpty && recorder.pendingConfirmation?.isPaid == false, "recording is gated even without a paid estimate")
+        recorder.confirmPending()
+        try await waitUntil("recording accepted") { !recorder.isRunning }
+        check(log.runs.count == 1, "confirmed recording runs once")
+
+        let paid = RecordingTool(name: "fake_paid", summary: "paid fixture", cost: AIToolCostEstimate(yuan: 1, summary: "fixture"), log: log)
+        let retryHistory = root.appendingPathComponent("retry/history.json")
+        let failedProvider = ScriptedCompletion([action("fake_paid")])
+        let failed = AIAssistantSession(context: context, completionResolver: { failedProvider }, tools: [paid], historyURL: retryHistory)
+        failed.send("Make one paid clip")
+        try await waitUntil("paid gate") { failed.pendingConfirmation != nil }
+        failed.confirmPending()
+        try await waitUntil("reply fails after paid tool") { !failed.isRunning }
+        check(failed.canRetry && log.runs.filter { $0.hasPrefix("fake_paid") }.count == 1, "failed final reply permits retry after one completed tool")
+        let retryProvider = ScriptedCompletion([action("fake_paid"), reply("The clip was already made.")])
+        let retry = AIAssistantSession(context: context, completionResolver: { retryProvider }, tools: [paid], historyURL: retryHistory)
+        retry.retryLastTurn()
+        try await waitUntil("retry without duplicate paid call") { !retry.isRunning }
+        check(log.runs.filter { $0.hasPrefix("fake_paid") }.count == 1 && retry.messages.filter { $0.role == .user }.count == 1, "relaunch plus Retry never repeats paid generation or duplicates user message")
+        check(retry.messages.last?.text == "The clip was already made.", "retry finishes from preserved receipt")
     }
 
     @MainActor

@@ -41,6 +41,10 @@ public final class EventMonitor: ObservableObject {
     /// Activity locations/times only; typed content and key codes are never stored.
     public private(set) var typingActivity: [TypingActivity] = []
 
+    /// Recording controls are excluded from the movie and must not create cues.
+    /// The app layer supplies its floating panel's NSWindow.windowNumber.
+    public var ignoredWindowNumbers: Set<Int> = []
+
     /// The monotonic timestamp used as zero for all emitted event times.
     public private(set) var monotonicStartTimestamp: TimeInterval?
 
@@ -63,6 +67,8 @@ public final class EventMonitor: ObservableObject {
     private var monitorGeneration = UUID()
     private var eventDiagnostics = EventMonitorDiagnostics()
     private var accessibilityTypingMonitor: AccessibilityTypingMonitor?
+    private var pauseClock = RecordingPauseClock()
+    public private(set) var isPaused = false
 
     public var diagnostics: EventMonitorDiagnostics {
         var value = eventDiagnostics
@@ -158,8 +164,16 @@ public final class EventMonitor: ObservableObject {
         monitorTokens.localMouse = NSEvent.addLocalMonitorForEvents(matching: Self.mouseEventMask) { [weak self] event in
             let payload = MouseEventPayload(event: event)
             let nativeUptime = event.timestamp
+            let windowNumber = event.windowNumber
+            // Local AppKit monitors run on the main thread. Snapshot before the
+            // event's action can dismiss/rebuild the panel and unregister its ID.
+            // Keep the deferred check as a fallback if delivered off-main.
+            let wasIgnored = Thread.isMainThread ? MainActor.assumeIsolated {
+                self?.ignoredWindowNumbers.contains(windowNumber) ?? false
+            } : false
             Task { @MainActor [weak self] in
                 guard let self, self.monitorGeneration == generation, self.isMonitoring else { return }
+                guard !wasIgnored, !self.ignoredWindowNumbers.contains(windowNumber) else { return }
                 self.eventDiagnostics.localMouseEvents += 1
                 self.observeMouse(payload, nativeUptime: nativeUptime)
             }
@@ -167,8 +181,13 @@ public final class EventMonitor: ObservableObject {
         }
         monitorTokens.localKeyboard = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             let uptime = event.timestamp
+            let windowNumber = event.windowNumber
+            let wasIgnored = Thread.isMainThread ? MainActor.assumeIsolated {
+                self?.ignoredWindowNumbers.contains(windowNumber) ?? false
+            } : false
             Task { @MainActor [weak self] in
                 guard let self, self.monitorGeneration == generation, self.isMonitoring else { return }
+                guard !wasIgnored, !self.ignoredWindowNumbers.contains(windowNumber) else { return }
                 self.eventDiagnostics.localKeyboardEvents += 1
                 self.consumeTyping(at: uptime)
             }
@@ -219,6 +238,47 @@ public final class EventMonitor: ObservableObject {
     public func anchor(at timestamp: TimeInterval) {
         guard isMonitoring, monotonicStartTimestamp == nil else { return }
         monotonicStartTimestamp = timestamp
+        pauseClock.anchor(at: timestamp)
+        seedCursor(at: timestamp)
+    }
+
+    /// Keeps monitors registered but drops all interaction while media is paused.
+    public func pause(at timestamp: TimeInterval) {
+        guard !isPaused else { return }
+        pauseClock.pause(at: timestamp)
+        isPaused = true
+    }
+
+    public func reconcilePausedDuration(segmentDuration: TimeInterval) {
+        guard isPaused else { return }
+        pauseClock.reconcileLastSegment(duration: segmentDuration)
+        let end = pauseClock.completedDuration
+        cursorSamples.removeAll { $0.time > end }
+        clickEvents.removeAll { $0.time > end }
+        typingActivity.removeAll { $0.time > end }
+    }
+
+    /// A window can move while paused. Existing normalized metadata stays valid;
+    /// only newly resumed events use the refreshed WindowServer geometry.
+    public func updatePausedCaptureRect(_ rect: CaptureRect, targetProcessID: Int32?, targetWindowID: UInt32?) {
+        guard isPaused, rect.width > 0, rect.height > 0 else { return }
+        captureRect = rect
+        typingResolver = TypingActivityResolver(
+            captureRect: rect, targetProcessID: targetProcessID, targetWindowID: targetWindowID,
+            excludedProcessID: targetWindowID == nil ? ProcessInfo.processInfo.processIdentifier : nil
+        )
+        focusedTypingDetector.reset()
+    }
+
+    /// Resume is anchored to the first real video frame, not the button click.
+    public func resume(at timestamp: TimeInterval) {
+        guard isMonitoring, isPaused, pauseClock.anchor(at: timestamp) else { return }
+        isPaused = false
+        lastCursorSampleTime = -.infinity
+        seedCursor(at: timestamp)
+    }
+
+    private func seedCursor(at timestamp: TimeInterval) {
 
         // Seed the trace so renderers have a cursor position at time zero even if
         // the user does not move the mouse immediately after recording begins.
@@ -257,6 +317,8 @@ public final class EventMonitor: ObservableObject {
         cursorKindDetector.reset()
         focusedTypingDetector.reset()
         typingResolver = nil
+        pauseClock = .init()
+        isPaused = false
         eventDiagnostics = .init()
         lastError = nil
     }
@@ -306,7 +368,7 @@ public final class EventMonitor: ObservableObject {
         context: TypingFocusContext? = nil,
         isAccessibilityActivity: Bool = false
     ) {
-        guard isMonitoring else { return }
+        guard isMonitoring, !isPaused else { return }
         guard let start = monotonicStartTimestamp else {
             if isAccessibilityActivity { eventDiagnostics.axActivitiesBeforeAnchor += 1 }
             else { eventDiagnostics.keyboardEventsBeforeAnchor += 1 }
@@ -322,7 +384,9 @@ public final class EventMonitor: ObservableObject {
             return
         }
         let focus = context ?? focusedTypingDetector.context(uptime: uptime)
-        if let activity = typingResolver?.activity(uptime: uptime, startUptime: start, context: focus) {
+        guard let mediaTime = pauseClock.mediaTime(at: uptime) else { return }
+        if var activity = typingResolver?.activity(uptime: uptime, startUptime: start, context: focus) {
+            activity.time = mediaTime
             typingActivity.append(activity)
         } else {
             if isAccessibilityActivity { eventDiagnostics.axActivitiesRejectedByFocusOrThrottle += 1 }
@@ -343,7 +407,7 @@ public final class EventMonitor: ObservableObject {
     }
 
     private func consume(_ payload: MouseEventPayload, forceCursorSample: Bool = false) {
-        guard isMonitoring || forceCursorSample, let captureRect else { return }
+        guard !isPaused, isMonitoring || forceCursorSample, let captureRect else { return }
         guard let start = monotonicStartTimestamp else {
             eventDiagnostics.mouseEventsBeforeAnchor += 1
             return
@@ -364,7 +428,7 @@ public final class EventMonitor: ObservableObject {
             return
         }
 
-        let relativeTime = max(0, payload.uptime - start)
+        guard let relativeTime = pauseClock.mediaTime(at: payload.uptime) else { return }
         guard payload.uptime >= start else { return }
         let cursorKind = payload.cursorKind ?? cursorKindDetector.kind(
             at: CGPoint(x: payload.x, y: payload.y),

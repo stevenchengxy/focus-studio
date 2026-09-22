@@ -13,6 +13,7 @@ struct AssistantWindowView: View {
     @ObservedObject var model: StudioModel
     @ObservedObject var gateway: AIGatewayStore
     @ObservedObject var codexDirector: CodexDirectorService
+    @ObservedObject private var installation = AppInstallationCoordinator.shared
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.openSettings) private var openSettings
 
@@ -21,10 +22,14 @@ struct AssistantWindowView: View {
             session: model.assistantSession,
             modelLabel: model.assistantModelLabel,
             onClose: { dismissWindow(id: AssistantWindow.id) },
-            openSettings: { openSettings() }
+            openSettings: {
+                AppSettingsNavigation.shared.selection = .aiModels
+                openSettings()
+            }
         )
         .frame(minWidth: AssistantWindow.minimumSize.width, minHeight: AssistantWindow.minimumSize.height)
         .background(StudioTheme.window)
         .preferredColorScheme(.dark)
+        .disabled(installation.isWorking)
     }
 }

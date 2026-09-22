@@ -5,6 +5,7 @@ import Foundation
 enum AIAssistantDecision {
     case reply(text: String, suggestions: [String])
     case action(tool: String, arguments: [String: Any], thought: String?)
+    case recordingPlan(CodexRecordingPlan, reply: String)
 }
 
 /// The strict JSON protocol between the session and the text model, parsed
@@ -26,6 +27,11 @@ enum AIAssistantProtocol {
     }
 
     static func decision(from object: [String: Any]) -> AIAssistantDecision? {
+        if let value = object["recordingPlan"] as? [String: Any],
+           let data = try? JSONSerialization.data(withJSONObject: value),
+           let plan = try? JSONDecoder().decode(CodexRecordingPlan.self, from: data) {
+            return .recordingPlan(plan, reply: string(object["reply"]) ?? plan.summary)
+        }
         let thought = string(object["thought"])
         if let action = object["action"] as? [String: Any],
            let tool = string(action["tool"]) ?? string(action["name"]) {
@@ -140,6 +146,7 @@ final class AIAssistantSession: ObservableObject {
         let tool: any AIAssistantTool
         let arguments: [String: Any]
         let estimate: AIToolCostEstimate
+        let isPaid: Bool
 
         var toolName: String { tool.name }
     }
@@ -157,6 +164,12 @@ final class AIAssistantSession: ObservableObject {
     /// Whether a text model (or Codex) can answer right now. Re-evaluated with
     /// ``refreshModelAvailability()`` whenever the app's AI settings change.
     @Published private(set) var hasModel: Bool
+    @Published private(set) var recordingPlan: CodexRecordingPlan?
+    @Published private(set) var canRetry = false
+    @Published private(set) var historyWarning: String?
+    @Published private(set) var conversationID = UUID()
+    @Published private(set) var planWasRun = false
+    @Published private(set) var hasPlanRunner = false
 
     let context: AIAssistantContext
     let tools: [any AIAssistantTool]
@@ -167,6 +180,27 @@ final class AIAssistantSession: ObservableObject {
     private var confirmationContinuation: CheckedContinuation<Bool, Never>?
     private var statusMessageID: UUID?
     private var declinedMessageIDs: Set<UUID> = []
+    private let historyURL: URL?
+    private let providerIdentity: @MainActor () -> String
+    private var lastProviderIdentity: String?
+    private var needsProviderReset = true
+    private var planRunner: ((CodexRecordingPlan) -> Void)?
+    /// Fingerprints are scoped to the latest user request, including retries.
+    /// An uncertain tool is not replayed automatically after a failure/crash.
+    private var toolAttempts: [String: String] = [:]
+    private var spokenMessages: Set<UUID> = []
+    private var turnGeneration = UUID()
+
+    private struct SavedConversation: Codable {
+        var version = 1
+        var id: UUID
+        var messages: [AIAssistantMessage]
+        var plan: CodexRecordingPlan?
+        var planWasRun: Bool
+        var canRetry: Bool
+        var toolAttempts: [String: String]
+        var declinedMessageIDs: Set<UUID>
+    }
 
     convenience init(
         context: AIAssistantContext,
@@ -181,13 +215,18 @@ final class AIAssistantSession: ObservableObject {
     init(
         context: AIAssistantContext,
         completionResolver: @escaping @MainActor () -> (any TextCompletionProviding)?,
-        tools: [any AIAssistantTool] = AIAssistantToolCatalog.standard
+        tools: [any AIAssistantTool] = AIAssistantToolCatalog.standard,
+        historyURL: URL? = nil,
+        providerIdentity: @escaping @MainActor () -> String = { "default" }
     ) {
         self.context = context
         self.completionResolver = completionResolver
         self.tools = tools
+        self.historyURL = historyURL
+        self.providerIdentity = providerIdentity
         toolCatalogJSON = Self.renderToolCatalog(tools)
         hasModel = completionResolver() != nil
+        restoreHistory()
     }
 
     /// The provider that would answer the next message.
@@ -204,19 +243,53 @@ final class AIAssistantSession: ObservableObject {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !isRunning, !trimmed.isEmpty || !attachments.isEmpty else { return }
         refreshModelAvailability()
+        suggestions = []
+        toolAttempts = [:]
+        canRetry = false
+        messages.append(AIAssistantMessage(role: .user, text: trimmed, attachments: attachments))
         guard let completion = completionResolver() else {
             messages.append(AIAssistantMessage(role: .error, text: L10n.tr("Set up an AI model in Settings")))
+            canRetry = true
+            persistHistory()
             return
         }
-        suggestions = []
-        messages.append(AIAssistantMessage(role: .user, text: trimmed, attachments: attachments))
+        beginTurn(completion: completion)
+    }
+
+    /// Continues from factual tool receipts; never appends the request twice.
+    func retryLastTurn() {
+        guard !isRunning, canRetry, let completion = completionResolver() else { return }
+        canRetry = false
+        beginTurn(completion: completion)
+    }
+
+    private func beginTurn(completion: any TextCompletionProviding) {
         isRunning = true
+        let generation = UUID()
+        turnGeneration = generation
+        let identity = providerIdentity()
+        let resetsContext = needsProviderReset || lastProviderIdentity != identity
+        needsProviderReset = false
+        lastProviderIdentity = identity
+        persistHistory(interrupted: true)
         runningTask = Task { [weak self] in
             guard let self else { return }
+            if resetsContext, let contextual = completion as? any AssistantConversationResetting {
+                await contextual.resetConversation()
+            }
+            guard !Task.isCancelled else {
+                self.appendStopped()
+                self.isRunning = false
+                self.runningTask = nil
+                self.persistHistory()
+                return
+            }
             await self.runTurn(completion: completion)
+            guard self.turnGeneration == generation else { return }
             self.clearStatus()
             self.isRunning = false
             self.runningTask = nil
+            self.persistHistory()
         }
     }
 
@@ -236,7 +309,41 @@ final class AIAssistantSession: ObservableObject {
         messages = []
         suggestions = []
         declinedMessageIDs = []
+        toolAttempts = [:]
+        spokenMessages = []
+        recordingPlan = nil
+        planWasRun = false
+        canRetry = false
+        conversationID = UUID()
+        needsProviderReset = true
+        persistHistory()
     }
+
+    func configureRecordingPlanRunner(_ runner: @escaping (CodexRecordingPlan) -> Void) {
+        planRunner = runner
+        hasPlanRunner = true
+    }
+
+    /// Only a user's Run button can reach this; model replies merely set a draft.
+    func runRecordingPlan(expectedPlan: CodexRecordingPlan? = nil) {
+        guard !isRunning, !planWasRun, let plan = recordingPlan,
+              plan.validationIssues.isEmpty, expectedPlan == nil || expectedPlan == plan,
+              let planRunner else { return }
+        // Repeat the boundary at execution: persisted drafts are data, not
+        // trusted authorization or proof that live click coordinates were seen.
+        guard plan.capture.mode == .screenshot || !plan.actions.contains(where: { $0.type == .click }) else {
+            messages.append(AIAssistantMessage(role: .error, text: L10n.tr("Live clicks need a freshly observed target. This chat can draft navigation, scrolling, and waiting; use manual recording for clicks.")))
+            persistHistory()
+            return
+        }
+        planWasRun = true
+        messages.append(AIAssistantMessage(role: .status, text: L10n.tr("Recording plan approved. See the recorder for progress.")))
+        persistHistory()
+        planRunner(plan)
+    }
+
+    /// Two visible shells share one speech receipt to avoid duplicate playback.
+    func claimSpeech(for messageID: UUID) -> Bool { spokenMessages.insert(messageID).inserted }
 
     // MARK: - Agent loop
 
@@ -254,15 +361,34 @@ final class AIAssistantSession: ObservableObject {
                 if Task.isCancelled { appendStopped(); return }
                 clearStatus()
                 messages.append(AIAssistantMessage(role: .error, text: error.localizedDescription))
+                canRetry = true
                 return
             }
             if Task.isCancelled { appendStopped(); return }
             clearStatus()
 
             switch AIAssistantProtocol.parse(raw) {
+            case let .recordingPlan(plan, reply):
+                // A text-only chat has no fresh observed desktop geometry.
+                // Do not turn plausible model coordinates into real clicks.
+                guard plan.capture.mode == .screenshot || !plan.actions.contains(where: { $0.type == .click }) else {
+                    messages.append(AIAssistantMessage(role: .error, text: L10n.tr("Live clicks need a freshly observed target. This chat can draft navigation, scrolling, and waiting; use manual recording for clicks.")))
+                    canRetry = true
+                    return
+                }
+                guard plan.validationIssues.isEmpty else {
+                    messages.append(AIAssistantMessage(role: .error, text: plan.validationIssues.joined(separator: "\n")))
+                    canRetry = true
+                    return
+                }
+                recordingPlan = plan
+                planWasRun = false
+                messages.append(AIAssistantMessage(role: .assistant, text: reply))
+                return
             case let .reply(text, replySuggestions):
                 guard !text.isEmpty else {
                     messages.append(AIAssistantMessage(role: .error, text: L10n.tr("The model returned an empty reply.")))
+                    canRetry = true
                     return
                 }
                 messages.append(AIAssistantMessage(role: .assistant, text: text))
@@ -278,24 +404,44 @@ final class AIAssistantSession: ObservableObject {
                     ))
                     continue
                 }
-                if let estimate = tool.costEstimate(arguments: arguments) {
-                    let confirmed = await requestConfirmation(tool: tool, arguments: arguments, estimate: estimate)
+                let fingerprint = Self.fingerprint(tool: toolName, arguments: arguments)
+                if let previous = toolAttempts[fingerprint] {
+                    messages.append(AIAssistantMessage(role: .tool, text: L10n.tr("This action was already attempted for this request. It was not run again. Review its earlier result; send a new message to explicitly try the action again.") + " (\(previous))", toolName: toolName))
+                    continue
+                }
+                let cost = tool.costEstimate(arguments: arguments)
+                let controlsRecording = ["start_recording", "stop_recording"].contains(toolName)
+                if cost != nil || controlsRecording {
+                    let estimate = cost ?? AIToolCostEstimate(yuan: 0, summary: L10n.format("Allow %@? Recording only changes after you confirm.", toolName) + "\n" + Self.argumentSummary(arguments))
+                    let confirmed = await requestConfirmation(tool: tool, arguments: arguments, estimate: estimate, isPaid: cost != nil)
                     if Task.isCancelled { appendStopped(); return }
                     guard confirmed else {
                         let declined = AIAssistantMessage(role: .tool, text: L10n.tr("Cancelled — nothing was generated."), toolName: tool.name)
                         declinedMessageIDs.insert(declined.id)
                         messages.append(declined)
+                        toolAttempts[fingerprint] = "declined"
+                        persistHistory(interrupted: true)
                         continue
                     }
                 }
+                // Persist before invoking a side effect, so interrupted/unknown
+                // outcomes cannot be replayed by a Retry after relaunch.
+                toolAttempts[fingerprint] = "outcome unknown"
+                persistHistory(interrupted: true)
                 setStatus(L10n.format("Running %@…", tool.name))
+                let generation = turnGeneration
                 let progress: @Sendable (String) -> Void = { [weak self] text in
-                    Task { @MainActor in self?.setStatus(text) }
+                    Task { @MainActor in
+                        guard let self, self.isRunning, self.turnGeneration == generation else { return }
+                        self.setStatus(text)
+                    }
                 }
                 do {
                     let result = try await tool.run(arguments: arguments, context: context, progress: progress)
                     clearStatus()
                     messages.append(AIAssistantMessage(role: .tool, text: result.text, attachments: result.attachments, toolName: tool.name))
+                    toolAttempts[fingerprint] = "completed"
+                    persistHistory(interrupted: true)
                 } catch is CancellationError {
                     appendStopped()
                     return
@@ -303,11 +449,13 @@ final class AIAssistantSession: ObservableObject {
                     clearStatus()
                     if Task.isCancelled { appendStopped(); return }
                     messages.append(AIAssistantMessage(role: .error, text: error.localizedDescription, toolName: tool.name))
+                    persistHistory(interrupted: true)
                 }
             }
         }
         clearStatus()
         messages.append(AIAssistantMessage(role: .error, text: L10n.format("Stopped after %lld steps.", Self.maximumStepsPerTurn)))
+        canRetry = true
     }
 
     // MARK: - Confirmation
@@ -315,12 +463,13 @@ final class AIAssistantSession: ObservableObject {
     private func requestConfirmation(
         tool: any AIAssistantTool,
         arguments: [String: Any],
-        estimate: AIToolCostEstimate
+        estimate: AIToolCostEstimate,
+        isPaid: Bool
     ) async -> Bool {
         clearStatus()
         return await withCheckedContinuation { continuation in
             confirmationContinuation = continuation
-            pendingConfirmation = PendingToolCall(tool: tool, arguments: arguments, estimate: estimate)
+            pendingConfirmation = PendingToolCall(tool: tool, arguments: arguments, estimate: estimate, isPaid: isPaid)
         }
     }
 
@@ -352,6 +501,7 @@ final class AIAssistantSession: ObservableObject {
     private func appendStopped() {
         clearStatus()
         messages.append(AIAssistantMessage(role: .status, text: L10n.tr("Stopped")))
+        canRetry = true
     }
 
     // MARK: - Prompts
@@ -365,6 +515,9 @@ final class AIAssistantSession: ObservableObject {
         \(toolCatalogJSON)
 
         Rules:
+        - This is a conversation, not a plan generator: answer ordinary questions directly. Discuss and refine product-demo ideas across messages. Never open a URL, take a screenshot, start recording, or operate the computer just to answer or draft a plan.
+        - For a request to automate a demo, return a recordingPlan draft using the schema below. A draft never runs. The user must inspect it and click Run recording plan; revise the draft when asked. Do not use start_recording instead of a requested automation plan. This text-only conversation has no fresh observed desktop geometry: live URL/window plans MUST NOT contain clicks, even if the user supplied coordinates. Offer manual recording for interaction, or use wait/scroll/navigation. Screenshot plans may use non-interactive click cues as zooms, not desktop actions.
+        - start_recording and stop_recording always require a separate confirmation in the app. A suggestion or discussion is not authorization. Tool receipts are authoritative: never repeat an already attempted action in the same request, including after Retry. If an outcome is unknown, explain it and ask the user to check it before sending a new explicit request.
         - Think briefly in "thought", then either call exactly one tool or reply to the user.
         - Multi-step requests ("record Safari and export it") are executed step by step: call the next tool after each result, and keep the user informed with brief replies when a step takes time or needs their action (for example, the demo itself happens while recording — reply after start_recording, then call stop_recording when the user says they are done, unless they asked for a fixed duration).
         - A recording captures what the user does on screen; do not stop it until the user says the demo is finished, and never start a second recording while one is in progress.
@@ -383,12 +536,17 @@ final class AIAssistantSession: ObservableObject {
         Reply format, strict JSON and nothing else:
         To call a tool: {"thought": "...", "action": {"tool": "<name>", "arguments": {...}}}
         To answer or ask: {"thought": "...", "reply": "...", "suggestions": ["...", "..."]}
+        To draft or revise a recording plan: {"reply":"Brief explanation; user must click Run to execute.","recordingPlan":{"title":"...","summary":"...","capture":{"mode":"url|window|screenshot","url":"https://... or null","windowTitle":"title or null","screenshotPath":"absolute path or null"},"actions":[{"type":"wait|click|scroll|navigate","seconds":3,"x":0.5,"y":0.5,"deltaX":0,"deltaY":300,"url":"https://...","label":"..."}]}}
+        Omit irrelevant action fields. Plans allow at most 32 actions, 12 clicks, 4 navigations, 75 total waiting seconds, 0–30 seconds per wait, scroll deltas within ±1200. Screenshot plans cannot navigate. Use http/https URLs only. Capture mode must be one literal value, not a pipe-separated list.
         """
     }
 
     func userContent() -> String {
         var sections: [String] = []
         if let app = appSummary() { sections.append("[App]\n" + app) }
+        if let plan = recordingPlan, let data = try? JSONEncoder().encode(plan) {
+            sections.append("[Current recording plan — \(planWasRun ? "submitted by user; do not rerun" : "draft only, not executed")]\n" + String(decoding: data, as: UTF8.self))
+        }
         sections.append("[Project]\n" + projectSummary())
         sections.append("[Conversation]\n" + transcript())
         return sections.joined(separator: "\n\n")
@@ -454,8 +612,9 @@ final class AIAssistantSession: ObservableObject {
                 truncated = true
                 break
             }
-            entries.append(entry)
-            used += entry.count
+            let bounded = String(entry.prefix(max(0, Self.transcriptCharacterBudget - used - 40)))
+            entries.append(bounded)
+            used += bounded.count + 2
         }
         if truncated { entries.append("(earlier messages omitted)") }
         return entries.reversed().joined(separator: "\n\n")
@@ -474,7 +633,7 @@ final class AIAssistantSession: ObservableObject {
         case .tool:
             let name = message.toolName ?? "tool"
             if declinedMessageIDs.contains(message.id) {
-                return "Tool \(name): the user declined the paid call, so it did not run. Ask what to change or continue without it."
+                return "Tool \(name): the user declined this action, so it did not run. Ask what to change or continue without it."
             }
             var text = "Tool \(name) result:\n\(message.text)"
             let extra = message.attachments.filter { !message.text.contains($0.path) }
@@ -489,6 +648,62 @@ final class AIAssistantSession: ObservableObject {
     }
 
     // MARK: - Helpers
+
+    private static func argumentSummary(_ arguments: [String: Any]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: arguments, options: [.sortedKeys]) else { return "" }
+        return String(String(decoding: data, as: UTF8.self).prefix(1_000))
+    }
+
+    private static func fingerprint(tool: String, arguments: [String: Any]) -> String {
+        let data = (try? JSONSerialization.data(withJSONObject: arguments, options: [.sortedKeys])) ?? Data()
+        return tool + ":" + data.base64EncodedString()
+    }
+
+    private func restoreHistory() {
+        guard let historyURL, FileManager.default.fileExists(atPath: historyURL.path) else { return }
+        do {
+            let size = try historyURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            guard size <= 4_000_000 else { throw CocoaError(.fileReadTooLarge) }
+            let saved = try JSONDecoder().decode(SavedConversation.self, from: Data(contentsOf: historyURL))
+            guard saved.version == 1 else { throw CocoaError(.coderReadCorrupt) }
+            conversationID = saved.id
+            messages = Self.boundedMessages(saved.messages)
+            recordingPlan = saved.plan?.validationIssues.isEmpty == true ? saved.plan : nil
+            planWasRun = saved.planWasRun
+            canRetry = saved.canRetry
+            toolAttempts = saved.toolAttempts
+            declinedMessageIDs = saved.declinedMessageIDs
+        } catch {
+            historyWarning = L10n.tr("Saved conversation could not be read. Start a new conversation to replace it.")
+        }
+    }
+
+    private static func boundedMessages(_ source: [AIAssistantMessage]) -> [AIAssistantMessage] {
+        var remaining = 180_000
+        var result: [AIAssistantMessage] = []
+        for var message in source.suffix(240).reversed() where message.role != .status {
+            guard remaining > 0 else { break }
+            message.text = String(message.text.prefix(min(24_000, remaining)))
+            message.attachments = Array(message.attachments.prefix(12))
+            remaining -= message.text.count
+            result.append(message)
+        }
+        return result.reversed()
+    }
+
+    private func persistHistory(interrupted: Bool = false) {
+        guard let historyURL else { return }
+        do {
+            let saved = SavedConversation(id: conversationID, messages: Self.boundedMessages(messages), plan: recordingPlan, planWasRun: planWasRun, canRetry: canRetry || interrupted, toolAttempts: toolAttempts, declinedMessageIDs: declinedMessageIDs)
+            let data = try JSONEncoder().encode(saved)
+            try FileManager.default.createDirectory(at: historyURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: historyURL, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: historyURL.path)
+            historyWarning = nil
+        } catch {
+            historyWarning = L10n.tr("Conversation is available in this window, but could not be saved locally.")
+        }
+    }
 
     private static func renderToolCatalog(_ tools: [any AIAssistantTool]) -> String {
         let entries: [[String: Any]] = tools.map { tool in

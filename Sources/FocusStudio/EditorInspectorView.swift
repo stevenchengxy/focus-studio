@@ -157,6 +157,8 @@ struct EditorInspectorView: View {
                 NumberField(title: "End", value: segmentTimingBinding(zoom, value: \.end, edit: ZoomTimingEdit.end), range: 0...max(0, project.duration), suffix: "s")
                 NumberField(title: "Total duration", value: segmentTimingBinding(zoom, value: \.duration, edit: ZoomTimingEdit.duration), range: 0...max(0, project.duration), suffix: "s")
                 NumberField(title: "Hold at full zoom", value: segmentTimingBinding(zoom, value: \.hold, edit: ZoomTimingEdit.hold), range: 0...max(0, project.duration), suffix: "s")
+                NumberField(title: "Zoom in ends", value: segmentTimingBinding(zoom, value: \.fullZoomStart, edit: ZoomTimingEdit.fullZoomAt), range: 0...max(0, project.duration), suffix: "s")
+                NumberField(title: "Zoom out starts", value: segmentTimingBinding(zoom, value: \.zoomOutStart, edit: ZoomTimingEdit.zoomOutAt), range: 0...max(0, project.duration), suffix: "s")
                 Toggle("Instant animation", isOn: zoom.isInstant)
                     .font(.system(size: 11))
                 Toggle("Enabled", isOn: zoom.isEnabled)
@@ -427,14 +429,27 @@ struct EditorInspectorView: View {
     private var cursorInspector: some View {
         Group {
             InspectorSection("Appearance") {
+                Toggle("Show cursor", isOn: Binding(
+                    get: { project.settings.resolvedShowCursor },
+                    set: { project.settings.showCursor = $0 }
+                ))
+                .font(.system(size: 11))
+                .accessibilityIdentifier("cursor.showCursor")
+                .help("Does not erase a pointer already baked into an imported video or screenshot.")
+                Text("Hiding the pointer keeps click effects and zooms. You can change this after recording.")
+                    .font(.system(size: 9))
+                    .foregroundStyle(StudioTheme.secondaryText)
                 Picker("Style", selection: cursorAppearanceBinding) {
                     ForEach(CursorAppearance.allCases, id: \.self) { appearance in
                         Text(LocalizedStringKey(appearance.title)).tag(appearance)
                     }
                 }
+                .disabled(!project.settings.resolvedShowCursor)
                 LabeledSlider(value: $project.settings.cursorScale, range: 0.5...3, label: "Size", suffix: "×", decimals: 2)
+                    .disabled(!project.settings.resolvedShowCursor)
                 Toggle("Hide cursor while idle", isOn: $project.settings.hideIdleCursor)
                     .font(.system(size: 11))
+                    .disabled(!project.settings.resolvedShowCursor)
             }
             InspectorSection("Click feedback") {
                 Toggle("Animate clicks", isOn: $project.settings.showClickRing)
@@ -454,6 +469,7 @@ struct EditorInspectorView: View {
                     LabeledSlider(value: clickAnimationBinding(\.intensity), range: 0...1, label: "Intensity", suffix: "%", multiplier: 100, decimals: 0)
                     Toggle("Press and release cursor", isOn: clickAnimationBinding(\.pressCursor))
                         .font(.system(size: 11))
+                        .disabled(!project.settings.resolvedShowCursor)
                 }
                 Text(LocalizedStringKey(project.clickEvents.isEmpty
                      ? "This recording has no captured clicks. Enable Input Monitoring before recording to capture clicks in other apps."
@@ -468,6 +484,7 @@ struct EditorInspectorView: View {
                         Text(LocalizedStringKey(style.rawValue.capitalized)).tag(style)
                     }
                 }
+                .disabled(!project.settings.resolvedShowCursor)
             }
         }
     }
@@ -653,6 +670,7 @@ struct EditorInspectorView: View {
                 LabeledSlider(value: zoomHoldBinding, range: 0.2...3, label: "Click hold", suffix: "s", decimals: 2)
                 LabeledSlider(value: zoomTimingBinding(\.zoomEaseOut), range: 0.05...1.4, label: "Zoom out", suffix: "s", decimals: 2)
                 LabeledSlider(value: zoomChainGapBinding, range: 0...ProjectSettings.maximumZoomChainGap, label: "Link nearby clicks", suffix: "s", decimals: 1)
+                LabeledSlider(value: zoomFollowBinding, range: 0...1, label: "Follow cursor", suffix: "%", multiplier: 100, decimals: 0)
             }
             InspectorSection("Typing focus") {
                 Toggle("Hold zoom while typing", isOn: typingZoomBinding(\.enabled))
@@ -804,6 +822,13 @@ struct EditorInspectorView: View {
                 project.settings.zoomHold = newValue
                 TimelineMath.adjustAutomaticClickHold(in: &project, by: newValue - oldValue)
             }
+        )
+    }
+
+    private var zoomFollowBinding: Binding<Double> {
+        Binding(
+            get: { project.settings.resolvedZoomFollowsCursor },
+            set: { project.settings.zoomFollowsCursor = $0 }
         )
     }
 

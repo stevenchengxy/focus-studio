@@ -15,6 +15,21 @@ APP_PARENT="${APP_DIR:h}"
 AUDIO_DIR="$PROJECT_DIR/Resources/Audio"
 AUDIO_GENERATOR="$PROJECT_DIR/scripts/generate-audio-assets.swift"
 BUILD_ARCHITECTURES="${FOCUS_STUDIO_ARCHS:-universal}"
+INSTALL_AFTER_BUILD=false
+case "${1:-}" in
+    "") ;;
+    --install) INSTALL_AFTER_BUILD=true ;;
+    *) echo "Usage: build-app.sh [--install]" >&2; exit 1 ;;
+esac
+
+app_is_running() {
+    ps -axo args= | awk -v executable="$APP_DIR/Contents/MacOS/FocusStudio" \
+        '$0 == executable || index($0, executable " ") == 1 { found = 1 } END { exit !found }'
+}
+if app_is_running; then
+    echo "The output app is running and will not be replaced. Quit it yourself or select a separate FOCUS_STUDIO_APP_DIR candidate." >&2
+    exit 1
+fi
 
 case "$BUILD_ARCHITECTURES" in
     universal) ARCHITECTURES=(arm64 x86_64) ;;
@@ -177,8 +192,17 @@ else
 fi
 
 "$SCRIPT_DIR/verify-release.sh" "$STAGED_APP"
+if app_is_running; then
+    echo "The output app was opened during the build. It was not replaced." >&2
+    exit 1
+fi
 if [[ -e "$APP_DIR" ]]; then
     mv "$APP_DIR" "$BUILD_STAGE/previous.app"
 fi
 mv "$STAGED_APP" "$APP_DIR"
 echo "$APP_DIR"
+if [[ "$INSTALL_AFTER_BUILD" == true ]]; then
+    zsh "$SCRIPT_DIR/install-app.sh" "$APP_DIR" --yes
+else
+    echo "To explicitly install or update the canonical app, run: zsh scripts/install-app.sh '$APP_DIR' --yes"
+fi

@@ -20,6 +20,15 @@ case "${1:-}" in
 esac
 "$SCRIPT_DIR/verify-release.sh" "$APP_DIR" --require-universal
 
+for version_key in CFBundleShortVersionString CFBundleVersion; do
+    bundle_value="$(/usr/libexec/PlistBuddy -c "Print :$version_key" "$APP_DIR/Contents/Info.plist")"
+    source_value="$(/usr/libexec/PlistBuddy -c "Print :$version_key" "$PROJECT_DIR/Resources/Info.plist")"
+    [[ "$bundle_value" == "$source_value" ]] || {
+        echo "Refusing to package a stale app ($version_key: $bundle_value; source: $source_value). Build the current release first." >&2
+        exit 1
+    }
+done
+
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_DIR/Contents/Info.plist")"
 SIGNATURE_DETAILS="$(codesign -dv --verbose=4 "$APP_DIR" 2>&1)"
 RELEASE_KIND="local"

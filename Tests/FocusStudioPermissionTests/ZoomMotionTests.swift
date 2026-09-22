@@ -135,6 +135,115 @@ func zoomMotionFailures() -> [String] {
     expect(far.count == 2 && abs(far[0].end - 2.42) < 1e-9,
            "distant clicks are not chained so the pan never races across the frame")
 
+    // --- Event ordering and focus ownership ----------------------------------
+    let rapidClicks = [
+        ClickEvent(time: 1, x: 0.2, y: 0.5, button: .left),
+        ClickEvent(time: 1.2, x: 0.8, y: 0.5, button: .left),
+    ]
+    let rapid = TimelineMath.generateZoomSegments(from: rapidClicks, duration: 8, settings: settings)
+    expect(rapid.count == 2, "rapid clicks at distinct targets must not be collapsed into the future target")
+    expect(rapid.first?.targetX == 0.2, "the first click's target must not be retroactively rewritten")
+    expect(TimelineMath.zoomState(at: 1.05, segments: rapid, settings: settings).centerX < 0.5,
+           "before the second lead-in, camera movement must still point toward the first click")
+    expect(Set(rapid.flatMap { $0.automaticSource?.clickIDs ?? [] }) == Set(rapidClicks.map(\.id)),
+           "rapid-click splitting must retain exact source-event ownership")
+
+    let jitterClicks = [
+        ClickEvent(time: 1, x: 0.4, y: 0.5, button: .left),
+        ClickEvent(time: 1.2, x: 0.415, y: 0.51, button: .left),
+    ]
+    let jitter = TimelineMath.generateZoomSegments(from: jitterClicks, duration: 8, settings: settings)
+    expect(jitter.count == 1 && jitter[0].targetX == 0.4 && jitter[0].targetY == 0.5,
+           "a same-control double click should extend one stable focus, not chase pointer jitter")
+    var legacyJitter = RecordingProject(title: "Old moving anchor", sourceVideoPath: "synthetic.mp4", duration: 8,
+        sourceWidth: 960, sourceHeight: 540, clickEvents: jitterClicks, zoomSegments: jitter, settings: settings)
+    let jitterID = legacyJitter.zoomSegments[0].id
+    legacyJitter.zoomSegments[0].targetX = jitterClicks[1].x
+    legacyJitter.zoomSegments[0].targetY = jitterClicks[1].y
+    legacyJitter.zoomSegments[0].scale = 2.3
+    legacyJitter.zoomSegments[0].isEnabled = false
+    TimelineMath.regenerateAutomaticZoomSegments(in: &legacyJitter)
+    expect(legacyJitter.zoomSegments.count == 1 && legacyJitter.zoomSegments[0].id == jitterID
+           && legacyJitter.zoomSegments[0].scale == 2.3 && !legacyJitter.zoomSegments[0].isEnabled,
+           "regenerating an older moving-anchor cue must keep source-matched IDs, custom scale, and disabled state")
+
+    let partialOverlap = TimelineMath.generateZoomSegments(from: [
+        ClickEvent(time: 1, x: 0.3, y: 0.5, button: .left),
+        ClickEvent(time: 2.35, x: 0.5, y: 0.5, button: .left),
+    ], duration: 8, settings: chainSettings)
+    let overlapMinimum = stride(from: 1.5, through: 2.8, by: 0.01).map {
+        TimelineMath.zoomState(at: $0, segments: partialOverlap, settings: chainSettings).scale
+    }.min() ?? 0
+    expect(overlapMinimum >= chainSettings.zoomScale - 1e-9,
+           "nearby partially overlapping clicks should stay committed instead of pulsing between cues")
+
+    let differentScales = [
+        ZoomSegment(start: 0, end: 4, targetX: 0.3, targetY: 0.5, scale: 2.4),
+        ZoomSegment(start: 1, end: 5, targetX: 0.6, targetY: 0.5, scale: 1.4),
+    ]
+    expect(abs(TimelineMath.zoomState(at: 2, segments: differentScales, settings: settings).scale - 1.4) < 1e-9,
+           "a settled newer cue must reach its own scale even while an older cue overlaps")
+    let early = TimelineMath.generateZoomSegments(from: [
+        ClickEvent(time: 0.02, x: 0.2, y: 0.5, button: .left),
+        ClickEvent(time: 0.04, x: 0.8, y: 0.5, button: .left),
+    ], duration: 8, settings: settings)
+    expect(TimelineMath.zoomState(at: 0.6, segments: early, settings: settings).centerX > 0.7,
+           "cues whose lead-in is clamped to zero must be ordered by captured event time, not random generated UUID")
+
+    let typed = stride(from: 0.8, through: 5.8, by: 0.2).map { TypingActivity(time: $0, x: 0.3, y: 0.65) }
+    let interruptedClicks = [
+        ClickEvent(time: 0.7, x: 0.3, y: 0.65, button: .left),
+        ClickEvent(time: 2.5, x: 0.75, y: 0.3, button: .left),
+    ]
+    let resumedTyping = TimelineMath.generateZoomSegments(from: interruptedClicks, duration: 10, settings: settings, typingActivity: typed)
+    expect(resumedTyping.count == 3, "typing that resumes after a different-target click needs a new chronological focus cue")
+    let resumed = TimelineMath.zoomState(at: 3.2, segments: resumedTyping, settings: settings)
+    expect(abs(resumed.centerX - 0.3) < 1e-9 && abs(resumed.scale - settings.zoomScale) < 1e-9,
+           "resumed typing must reclaim input focus promptly instead of waiting for the intervening click to expire")
+    expect(resumedTyping.flatMap { $0.automaticSource?.typingActivity ?? [] }.count == typed.count
+           && Set(resumedTyping.flatMap { $0.automaticSource?.typingActivity ?? [] }) == Set(typed),
+           "chronological typing handoffs must retain every metadata sample exactly once")
+    let whileTyping = TimelineMath.generateZoomSegments(from: [
+        interruptedClicks[0], ClickEvent(time: 2.5, x: 0.31, y: 0.65, button: .left),
+    ], duration: 10, settings: settings, typingActivity: typed)
+    expect(whileTyping.count == 1 && abs(whileTyping[0].end - (typed.last!.time + settings.resolvedTypingZoom.idleDelay + settings.zoomEaseOut)) < 1e-9,
+           "a click inside the same input must not shorten an ongoing long typing hold")
+
+    let switchedAway = TimelineMath.generateZoomSegments(from: [ClickEvent(time: 2.1, x: 0.75, y: 0.3, button: .left)], duration: 8, settings: settings,
+        typingActivity: [TypingActivity(time: 1, x: 0.3, y: 0.65), TypingActivity(time: 2, x: 0.3, y: 0.65)])
+    let newerEnd = switchedAway.last?.end ?? 0
+    expect(TimelineMath.zoomState(at: newerEnd + 0.01, segments: switchedAway, settings: settings).scale == 1,
+           "an older input hold must not spring back after a newer focus cue has finished")
+
+    let edgeTyping = TimelineMath.generateZoomSegments(from: [], duration: 50, settings: settings,
+        typingActivity: stride(from: 1.0, through: 40.0, by: 0.1).map { TypingActivity(time: $0, x: 0.98, y: 0.99) })
+    expect(edgeTyping.count == 1, "long uninterrupted typing should remain one editable hold")
+    let edge = TimelineMath.zoomState(at: 35, segments: edgeTyping, settings: settings)
+    expect(abs(edge.scale - settings.zoomScale) < 1e-9
+           && edge.centerX + 0.5 / edge.scale <= 1.000_000_1
+           && edge.centerY + 0.5 / edge.scale <= 1.000_000_1,
+           "long typing near source edges must stay zoomed without exposing outside the source")
+    var authored = RecordingProject(title: "Manual motion ownership fixture", sourceVideoPath: "synthetic.mp4", duration: 10, sourceWidth: 960, sourceHeight: 540,
+        clickEvents: interruptedClicks, typingActivity: typed, zoomSegments: resumedTyping, settings: settings)
+    authored.zoomSegments = authored.zoomSegments.map {
+        ZoomTiming.applying(.move(min(8, $0.start + 0.5)), to: $0, projectDuration: 10, settings: settings)
+    }
+    let preserved = authored.zoomSegments
+    authored.settings.zoomHold = 3
+    authored.settings.typingZoom = TypingZoomSettings(idleDelay: 0.4)
+    TimelineMath.regenerateAutomaticZoomSegments(in: &authored)
+    expect(Set(authored.zoomSegments) == Set(preserved),
+           "global regeneration after new handoff grouping must preserve all manual blocks and suppress all their source events")
+    var malformed = settings
+    malformed.zoomLeadIn = .nan
+    malformed.zoomHold = -.infinity
+    malformed.zoomEaseIn = .infinity
+    malformed.zoomEaseOut = .nan
+    malformed.zoomScale = .nan
+    let sanitized = TimelineMath.generateZoomSegments(from: rapidClicks, duration: 8, settings: malformed, typingActivity: typed)
+    expect(!sanitized.isEmpty && sanitized.allSatisfy { $0.start.isFinite && $0.end.isFinite && $0.end > $0.start && $0.scale.isFinite },
+           "malformed timing settings must not create NaN or empty camera intervals")
+
     // --- Compatibility --------------------------------------------------------
     // A project saved by 1.1.x has every legacy key but no chain gap and a
     // "smooth" curve. Round-trip through JSON to build that exact document.

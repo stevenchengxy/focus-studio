@@ -115,6 +115,7 @@ extension StudioModel: AppControlling {
         if let value = options.browserContentOnly { browserContentOnly = value }
         if let value = options.frameRate { frameRate = value }
         selectedTargetID = target.id
+        recordingSourceKind = target.kind
         destination = .recorder
         isShowingError = false
         startRecordingCountdown(allowUnavailableTracking: true)

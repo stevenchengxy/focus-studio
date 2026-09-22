@@ -125,6 +125,7 @@ struct AppRegression {
         model.closeEditor()
         await model.flushProjectEdits()
         try await ProjectLibraryRegression.run()
+        try await RecordingLifecycleRegression.run()
         print("FocusStudioAppRegression: PASS (interaction preflight, 50 open/edit/back cycles, stale binding reads/writes, autosave, zoom timing edit/save/reload/regeneration)")
     }
 }

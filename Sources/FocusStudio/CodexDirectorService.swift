@@ -156,6 +156,7 @@ final class CodexDirectorService: ObservableObject {
     /// One-shot completions for the AI assistant run on their own thread so the
     /// Director's planning thread and its output schema stay untouched.
     private struct AssistantTurn {
+        let token = UUID()
         var id: String?
         var continuation: CheckedContinuation<String, Error>?
         var streamed = ""
@@ -169,7 +170,11 @@ final class CodexDirectorService: ObservableObject {
 
     private var assistantThreadID: String?
     private var assistantThreadInstructions: String?
+    private var assistantContextGeneration = UUID()
+    private var completingAssistantRequest = false
+    private var assistantRequestID: UUID?
     private var assistantTurn: AssistantTurn?
+    private var interruptingAssistantTurns: Set<UUID> = []
     /// Whether preferences saved by another service instance (Settings › Codex)
     /// are re-read before connecting. Off when the caller supplied explicit
     /// preferences or configuration overrides, as tests do.
@@ -538,12 +543,43 @@ final class CodexDirectorService: ObservableObject {
     /// asks for any JSON object via `outputSchema`. Times out after
     /// ``assistantTurnTimeout``; cancelling the calling task interrupts the turn.
     func completeText(developerInstructions: String, prompt: String, json: Bool) async throws -> String {
-        guard assistantTurn == nil else { throw CodexDirectorServiceError.turnAlreadyRunning }
+        guard assistantRequestID == nil else { throw CodexDirectorServiceError.turnAlreadyRunning }
+        let requestID = UUID()
+        assistantRequestID = requestID
+        defer { assistantRequestID = nil }
+        return try await withTaskCancellationHandler {
+            do {
+                return try await performAssistantCompletion(developerInstructions: developerInstructions, prompt: prompt, json: json)
+            } catch {
+                if Task.isCancelled { throw CancellationError() }
+                throw error
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                guard let self, self.assistantRequestID == requestID else { return }
+                if self.assistantTurn?.id == nil {
+                    // No interruptible turn exists yet. Closing this dedicated
+                    // transport cancels preparation requests, not the account.
+                    self.disconnect()
+                } else {
+                    await self.interruptAssistantTurn()
+                }
+            }
+        }
+    }
+
+    private func performAssistantCompletion(developerInstructions: String, prompt: String, json: Bool) async throws -> String {
+        guard assistantTurn == nil, !completingAssistantRequest else { throw CodexDirectorServiceError.turnAlreadyRunning }
+        completingAssistantRequest = true
+        defer { completingAssistantRequest = false }
+        let contextGeneration = assistantContextGeneration
         if syncsPreferencesWithStore { reloadPreferencesFromStore() }
         try await ensureConnectedForCompletion()
+        guard contextGeneration == assistantContextGeneration else { throw CancellationError() }
         if assistantThreadID == nil || assistantThreadInstructions != developerInstructions {
             try await startAssistantThread(instructions: developerInstructions)
         }
+        guard contextGeneration == assistantContextGeneration else { throw CancellationError() }
         guard let threadID = assistantThreadID, process?.isRunning == true else {
             throw CodexDirectorServiceError.processUnavailable
         }
@@ -580,25 +616,21 @@ final class CodexDirectorService: ObservableObject {
             throw CancellationError()
         }
 
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
-                if let result = assistantTurn?.pendingResult {
-                    assistantTurn = nil
-                    continuation.resume(with: result)
-                    return
-                }
-                assistantTurn?.continuation = continuation
-                assistantTurn?.deadline = Task { [weak self] in
-                    do {
-                        try await Task.sleep(for: .seconds(Self.assistantTurnTimeout))
-                        await self?.timeoutAssistantTurn()
-                    } catch {
-                        // The turn finished and cancelled its deadline.
-                    }
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+            if let result = assistantTurn?.pendingResult {
+                assistantTurn = nil
+                continuation.resume(with: result)
+                return
+            }
+            assistantTurn?.continuation = continuation
+            assistantTurn?.deadline = Task { [weak self] in
+                do {
+                    try await Task.sleep(for: .seconds(Self.assistantTurnTimeout))
+                    await self?.timeoutAssistantTurn()
+                } catch {
+                    // The turn finished and cancelled its deadline.
                 }
             }
-        } onCancel: {
-            Task { @MainActor [weak self] in await self?.interruptAssistantTurn() }
         }
     }
 
@@ -634,6 +666,7 @@ final class CodexDirectorService: ObservableObject {
     private func startAssistantThread(instructions: String) async throws {
         guard accountReady else { throw CodexDirectorServiceError.assistantSignInRequired }
         let generation = connectionGeneration
+        let contextGeneration = assistantContextGeneration
         var params: [String: CodexJSONValue] = [
             "cwd": .string(configuration.workingDirectoryURL.path),
             "developerInstructions": .string(instructions),
@@ -643,7 +676,7 @@ final class CodexDirectorService: ObservableObject {
         ]
         if let activeModel { params["model"] = .string(activeModel.id) }
         let result = try await request(method: "thread/start", params: .object(params))
-        guard generation == connectionGeneration else { throw CancellationError() }
+        guard generation == connectionGeneration, contextGeneration == assistantContextGeneration else { throw CancellationError() }
         guard let id = result.objectValue?["thread"]?.objectValue?["id"]?.stringValue else {
             throw CodexDirectorServiceError.malformedResponse("thread/start omitted thread.id")
         }
@@ -721,24 +754,36 @@ final class CodexDirectorService: ObservableObject {
     }
 
     private func interruptAssistantTurn() async {
-        guard let turn = assistantTurn else { return }
+        guard let turn = assistantTurn, interruptingAssistantTurns.insert(turn.token).inserted else { return }
+        defer { interruptingAssistantTurns.remove(turn.token) }
         if let threadID = assistantThreadID, let turnID = turn.id, process?.isRunning == true {
             _ = try? await request(
                 method: "turn/interrupt",
                 params: .object(["threadId": .string(threadID), "turnId": .string(turnID)])
             )
         }
+        guard assistantTurn?.token == turn.token else { return }
         resolveAssistantTurn(.failure(CancellationError()))
     }
 
+    /// New chat/provider switches must not retain hidden server-side messages.
+    /// Authentication remains connected; the next message starts a fresh thread.
+    func resetAssistantConversation() async {
+        assistantContextGeneration = UUID()
+        await interruptAssistantTurn()
+        assistantThreadID = nil
+        assistantThreadInstructions = nil
+    }
+
     private func timeoutAssistantTurn() async {
-        guard assistantTurn != nil else { return }
+        guard let token = assistantTurn?.token else { return }
         if let threadID = assistantThreadID, let turnID = assistantTurn?.id, process?.isRunning == true {
             _ = try? await request(
                 method: "turn/interrupt",
                 params: .object(["threadId": .string(threadID), "turnId": .string(turnID)])
             )
         }
+        guard assistantTurn?.token == token else { return }
         resolveAssistantTurn(.failure(CodexDirectorServiceError.requestTimedOut("turn/completed")))
     }
 

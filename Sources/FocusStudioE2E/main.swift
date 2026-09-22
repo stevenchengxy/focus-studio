@@ -85,6 +85,8 @@ enum FocusStudioE2E {
                 outputURL: cleanBrowserRenderedURL
             )
             try await validateClickFeedback(project: project, outputURL: clickFeedbackURL)
+            try await CursorVisibilityValidation.run(project: project, outputDirectory: outputDirectory)
+            try await PauseRecordingValidation.run(sourceURL: sourceURL, outputDirectory: outputDirectory)
             try await validateZoomTimingRendering(project: project, outputDirectory: outputDirectory)
             let chapterCaptionDifference = try await validateChapterCaptionRendering(
                 project: project,
@@ -92,6 +94,7 @@ enum FocusStudioE2E {
                 outputDirectory: outputDirectory
             )
             try await validateTypingFocusRendering(outputDirectory: outputDirectory)
+            try await validateInputHandoffRendering(outputDirectory: outputDirectory)
             try await validateAudioFinishing(
                 project: project,
                 audioFixtureURL: audioFixtureURL,
@@ -462,8 +465,10 @@ enum FocusStudioE2E {
         let secondStart = overlapping[1].start
         let handoff = TimelineMath.zoomState(at: secondStart, segments: overlapping, settings: settings)
         try require(handoff.scale > 1.9, "overlapping zooms must not snap back to 1x at handoff")
+        // Hand-off pans take up to handoffPanExtension longer than the ease-in
+        // when the regions are far apart (these are 0.5 apart).
         let settledHandoff = TimelineMath.zoomState(
-            at: secondStart + settings.zoomEaseIn,
+            at: secondStart + settings.zoomEaseIn + TimelineMath.handoffPanExtension,
             segments: overlapping,
             settings: settings
         )
@@ -1766,6 +1771,84 @@ enum FocusStudioE2E {
         }
         CGImageDestinationAddImage(destination, held, nil)
         try require(CGImageDestinationFinalize(destination), "could not save typing focus review frame")
+    }
+
+    /// Pure synthetic evidence for rapid-click target ownership and resuming
+    /// typing after a toolbar click. Never loads or rewrites user recordings.
+    private static func validateInputHandoffRendering(outputDirectory: URL) async throws {
+        var specification = SyntheticVideoSpecification()
+        specification.duration = 7
+        specification.includesAudio = false
+        let sourceURL = outputDirectory.appendingPathComponent("synthetic-typing-input.mp4")
+        let outputURL = outputDirectory.appendingPathComponent("focus-studio-input-handoff.mp4")
+        if FileManager.default.fileExists(atPath: outputURL.path) { try FileManager.default.removeItem(at: outputURL) }
+        var project = makeProject(sourceURL: sourceURL, specification: specification)
+        project.title = "Synthetic rapid clicks and resumed input focus"
+        project.settings.zoomEaseIn = 0.42
+        project.settings.zoomEaseOut = 0.60
+        project.settings.zoomHold = 0.9
+        project.settings.typingZoom = TypingZoomSettings()
+        project.settings.motionBlur = 0
+        project.clickEvents = [
+            ClickEvent(time: 0.35, x: 0.30, y: 0.65, button: .left),
+            ClickEvent(time: 0.55, x: 0.76, y: 0.28, button: .left),
+            ClickEvent(time: 2.20, x: 0.76, y: 0.28, button: .left),
+        ]
+        project.typingActivity = stride(from: 0.85, through: 4.0, by: 0.2).map {
+            TypingActivity(time: $0, x: 0.30, y: 0.65)
+        }
+        project.cursorSamples = [
+            CursorSample(time: 0, x: 0.3, y: 0.65),
+            CursorSample(time: 0.35, x: 0.3, y: 0.65),
+            CursorSample(time: 0.55, x: 0.76, y: 0.28),
+            CursorSample(time: 0.85, x: 0.3, y: 0.65, cursorKind: .iBeam),
+            CursorSample(time: 2.0, x: 0.3, y: 0.65, cursorKind: .iBeam),
+            CursorSample(time: 2.2, x: 0.76, y: 0.28),
+            CursorSample(time: 2.8, x: 0.85, y: 0.18),
+            CursorSample(time: 7, x: 0.85, y: 0.18),
+        ]
+        project.chapters = [
+            DemoChapter(start: 0, end: 0.85, title: "快速点击", caption: "每次点击保留自己的焦点"),
+            DemoChapter(start: 0.85, end: 2.2, title: "持续输入", caption: "光标离开，输入框仍保持放大"),
+            DemoChapter(start: 2.2, end: 4.6, title: "焦点交接", caption: "点击工具栏后继续输入，镜头回到输入框"),
+            DemoChapter(start: 5.9, end: 7, title: "回到全景", caption: "停止输入后平滑收回"),
+        ]
+        TimelineMath.regenerateAutomaticZoomSegments(in: &project)
+        try require(project.zoomSegments.count == 5, "synthetic input handoff needs separate rapid clicks and resumed typing cues")
+        _ = try await ProjectVideoRenderer.export(project: project, to: outputURL)
+        let exported = AVAssetImageGenerator(asset: AVURLAsset(url: outputURL))
+        exported.requestedTimeToleranceBefore = .zero
+        exported.requestedTimeToleranceAfter = .zero
+        let preview = makeImageGenerator(for: try await ProjectVideoRenderer.prepare(project: project))
+        var overviewProject = project
+        overviewProject.zoomSegments = []
+        let overview = makeImageGenerator(for: try await ProjectVideoRenderer.prepare(project: overviewProject))
+        var probes: [[String: Any]] = []
+        for (name, frame): (String, CMTimeValue) in [("first-click", 9), ("resumed-input", 72), ("returned", 156)] {
+            let time = CMTime(value: frame, timescale: 24)
+            let state = TimelineMath.zoomState(at: time.seconds, segments: project.zoomSegments, settings: project.settings)
+            let (actual, _) = try await exported.image(at: time)
+            let (expected, _) = try await preview.image(at: time)
+            let (wide, _) = try await overview.image(at: time)
+            let parity = imageDifference(actual, expected).meanAbsolute
+            let overviewDifference = imageDifference(actual, wide).meanAbsolute
+            try require(parity < 3, "input handoff preview and MP4 must share the same camera math at \(time.seconds)s")
+            if name == "first-click" {
+                try require(state.centerX < 0.5, "a future rapid click must not rewrite the first rendered camera target")
+            } else if name == "resumed-input" {
+                try require(abs(state.centerX - 0.3) < 0.0001 && state.scale > 1.8 && overviewDifference > 8,
+                    "resumed input must promptly own both focus and full zoom in the actual output")
+            } else {
+                try require(state.scale == 1 && overviewDifference < 3, "input handoff must finally restore the overview")
+            }
+            try writeReviewFrame(actual, to: outputDirectory.appendingPathComponent("focus-studio-input-handoff-\(name).png"))
+            probes.append(["name": name, "time": time.seconds, "scale": state.scale, "centerX": state.centerX,
+                           "previewExportDifference": parity, "overviewDifference": overviewDifference])
+        }
+        let report: [String: Any] = ["status": "PASS", "synthetic": true, "outputPath": outputURL.path,
+                                    "zoomSegmentCount": project.zoomSegments.count, "probes": probes]
+        try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+            .write(to: outputDirectory.appendingPathComponent("focus-studio-input-handoff-report.json"), options: .atomic)
     }
 
     private static func validateCropRendering(

@@ -18,6 +18,7 @@ swiftc -parse-as-library -g \
   -target "$(uname -m)-apple-macosx15.0" \
   -I "$BUILD_DIR/Modules" \
   Sources/FocusStudio/AppLocalization.swift \
+  Sources/FocusStudio/CodexDirectorModels.swift \
   Sources/FocusStudio/AI/Assistant/AIAssistantModels.swift \
   Sources/FocusStudio/AI/Assistant/ArkMediaClient.swift \
   Sources/FocusStudio/AI/Assistant/AIAssistantTools.swift \

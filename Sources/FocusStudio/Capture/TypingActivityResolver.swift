@@ -28,12 +28,20 @@ public struct TypingActivityResolver: Sendable {
         var processID: Int32
         var windowID: UInt32?
     }
+    private struct EditableAnchor: Sendable {
+        var point: CGPoint
+        var bounds: CaptureRect
+        var processID: Int32
+        var windowID: UInt32?
+    }
 
     private let captureRect: CaptureRect
     private let targetProcessID: Int32?
     private let targetWindowID: UInt32?
     private let excludedProcessID: Int32?
     private var lastClick: ClickAnchor?
+    private var editableAnchor: EditableAnchor?
+    private var lastStoredPoint: CGPoint?
     private var lastStoredUptime = -Double.infinity
 
     public init(
@@ -52,7 +60,11 @@ public struct TypingActivityResolver: Sendable {
             // Clicking away invalidates the fallback even when the pointer later
             // returns to the recorded region without clicking into a field.
             lastClick = nil
+            editableAnchor = nil
             return
+        }
+        if let editableAnchor, !contains(CGPoint(x: x, y: y), in: editableAnchor.bounds) {
+            self.editableAnchor = nil
         }
         lastClick = ClickAnchor(point: CGPoint(x: x, y: y), processID: processID, windowID: context.windowID)
     }
@@ -62,9 +74,12 @@ public struct TypingActivityResolver: Sendable {
         startUptime: TimeInterval,
         context: TypingFocusContext
     ) -> TypingActivity? {
-        guard uptime.isFinite, startUptime.isFinite, uptime >= startUptime,
-              uptime - lastStoredUptime >= 0.099,
-              identityMatches(context), let processID = context.processID else { return nil }
+        guard uptime.isFinite, startUptime.isFinite, uptime >= startUptime, valid(captureRect) else { return nil }
+        guard identityMatches(context), let processID = context.processID else {
+            lastClick = nil
+            editableAnchor = nil
+            return nil
+        }
         let anchor = lastClick.flatMap { click -> ClickAnchor? in
             guard click.processID == processID,
                   click.windowID == nil || context.windowID == nil || click.windowID == context.windowID else { return nil }
@@ -73,21 +88,38 @@ public struct TypingActivityResolver: Sendable {
         let point: CGPoint
         switch context.semantics {
         case let .editable(bounds):
-            if let anchor, contains(anchor.point, in: bounds) {
+            guard valid(bounds) else { return nil }
+            if let previous = editableAnchor,
+               previous.processID == processID, previous.windowID == context.windowID,
+               sameEditableRegion(previous.bounds, bounds),
+               contains(previous.point, in: bounds), contains(previous.point, in: captureRect) {
+                // Auto-growing chat boxes must not pull the camera after every
+                // line. Keep a visible point in the same input until focus really
+                // moves to a different field, even without an initial click.
+                point = previous.point
+            } else if let anchor, contains(anchor.point, in: bounds) {
                 point = anchor.point
             } else {
                 let intersection = rectangle(bounds).intersection(rectangle(captureRect))
                 guard !intersection.isNull, intersection.width > 0, intersection.height > 0 else { return nil }
                 point = CGPoint(x: intersection.midX, y: intersection.midY)
             }
+            editableAnchor = EditableAnchor(point: point, bounds: bounds, processID: processID, windowID: context.windowID)
         case .notEditable:
+            lastClick = nil
+            editableAnchor = nil
             return nil
         case .unavailable:
             guard let anchor else { return nil }
             point = anchor.point
         }
         guard contains(point, in: captureRect), captureRect.width > 0, captureRect.height > 0 else { return nil }
+        let changedFocus = lastStoredPoint.map { hypot(point.x - $0.x, point.y - $0.y) > 1 } ?? false
+        // Do not drop the only keystroke in a newly focused field merely because
+        // it arrived inside the previous field's 100 ms repeat throttle.
+        guard uptime - lastStoredUptime >= 0.099 || changedFocus else { return nil }
         lastStoredUptime = uptime
+        lastStoredPoint = point
         return TypingActivity(
             time: uptime - startUptime,
             x: min(1, max(0, (point.x - captureRect.x) / captureRect.width)),
@@ -108,8 +140,25 @@ public struct TypingActivityResolver: Sendable {
     }
 
     private func contains(_ point: CGPoint, in rect: CaptureRect) -> Bool {
-        point.x.isFinite && point.y.isFinite && rect.width > 0 && rect.height > 0
+        point.x.isFinite && point.y.isFinite && valid(rect)
             && point.x >= rect.x && point.x <= rect.x + rect.width
             && point.y >= rect.y && point.y <= rect.y + rect.height
+    }
+
+    private func valid(_ rect: CaptureRect) -> Bool {
+        rect.x.isFinite && rect.y.isFinite && rect.width.isFinite && rect.height.isFinite
+            && rect.width > 0 && rect.height > 0
+    }
+
+    private func sameEditableRegion(_ previous: CaptureRect, _ current: CaptureRect) -> Bool {
+        guard valid(previous), valid(current) else { return false }
+        let old = rectangle(previous)
+        let new = rectangle(current)
+        let overlap = old.intersection(new)
+        guard !overlap.isNull else { return false }
+        let shared = overlap.width * overlap.height / min(old.width * old.height, new.width * new.height)
+        // Both top-growing and bottom-anchored message inputs are supported.
+        return shared >= 0.7 && abs(old.minX - new.minX) <= 3
+            && (abs(old.minY - new.minY) <= 3 || abs(old.maxY - new.maxY) <= 3)
     }
 }

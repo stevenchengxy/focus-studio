@@ -2,7 +2,10 @@ import SwiftUI
 
 @main
 struct FocusStudioApp: App {
-    @StateObject private var model = StudioModel()
+    @StateObject private var model = StudioModel(
+        assistantHistoryURL: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?.appendingPathComponent("FocusStudio/Assistant/conversation.json")
+    )
 
     var body: some Scene {
         WindowGroup {
@@ -31,13 +34,7 @@ struct FocusStudioApp: App {
 
         Settings {
             AppLocalizedView {
-                TabView {
-                    AIGatewaySettingsView(store: model.aiGateway)
-                        .tabItem { Label("AI models", systemImage: "sparkles") }
-                    CodexConnectionSettingsView(director: model.codexDirector, showsDoneButton: false)
-                        .tabItem { Label("Codex", systemImage: "terminal") }
-                }
-                .preferredColorScheme(.dark)
+                StudioSettingsView(model: model)
             }
         }
     }
@@ -45,6 +42,7 @@ struct FocusStudioApp: App {
 
 struct StudioRootView: View {
     @EnvironmentObject private var model: StudioModel
+    @ObservedObject private var installation = AppInstallationCoordinator.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openWindow) private var openWindow
@@ -61,13 +59,13 @@ struct StudioRootView: View {
                     LibraryView()
                 case .director:
                     CodexDirectorView(
+                        session: model.assistantSession,
                         director: model.codexDirector,
+                        modelLabel: model.assistantModelLabel,
                         onClose: { model.closeDirector() },
-                        onCreatePlan: { prompt in
-                            Task { await model.createCodexPlan(from: prompt) }
-                        },
-                        onRunPlan: { plan in
-                            model.startCodexPlan(plan)
+                        openSettings: {
+                            AppSettingsNavigation.shared.selection = .aiModels
+                            openSettings()
                         }
                     )
                 case .recorder:
@@ -90,6 +88,7 @@ struct StudioRootView: View {
             }
             .id(model.destination)
             .transition(StudioMotion.page(reduceMotion: reduceMotion))
+            .disabled(installation.isWorking)
 
             if model.isBusy {
                 Color.black.opacity(0.32).ignoresSafeArea()
@@ -106,8 +105,18 @@ struct StudioRootView: View {
                 .transition(.opacity.combined(with: .scale(scale: 0.96)))
             }
         }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if model.destination == .library || model.destination == .director {
+                InstallationNoticeView(isBusy: model.isInstallationBusy)
+            }
+        }
         .animation(reduceMotion ? nil : StudioMotion.pageAnimation, value: model.destination)
         .animation(StudioMotion.fade, value: model.isBusy)
+        .onChange(of: model.destination) { _, _ in syncRecordingToolbar() }
+        .onChange(of: model.isSelectingArea) { _, _ in syncRecordingToolbar() }
+        .onReceive(model.captureEngine.$state) { state in
+            model.handleCaptureStateChange(state)
+        }
         .foregroundStyle(StudioTheme.text)
         .task {
             await model.bootstrap()
@@ -127,6 +136,15 @@ struct StudioRootView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(model.errorMessage)
+        }
+    }
+
+    private func syncRecordingToolbar() {
+        if !model.isSelectingArea,
+           [.recorder, .countdown, .recording].contains(model.destination) {
+            RecordingControlPanelCoordinator.shared.show(model: model)
+        } else {
+            RecordingControlPanelCoordinator.shared.hide()
         }
     }
 }
