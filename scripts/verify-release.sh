@@ -31,6 +31,7 @@ fi
 
 minimum_macos="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$PLIST")"
 bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST")"
+background_count="$(find "$APP_DIR/Contents/Resources/Backgrounds" -name '*.jpg' -type f 2>/dev/null | wc -l | tr -d ' ')"
 [[ "$minimum_macos" == "15.0" && "$bundle_id" == "com.local.focusstudio" ]] || {
     echo "Unexpected app platform or bundle identity." >&2
     exit 1
@@ -86,9 +87,13 @@ while IFS= read -r entry; do
         Contents/Resources/Audio/product-demo-bed.wav|Contents/Resources/Audio/calm-gradient-bed.wav|Contents/Resources/Audio/bright-launch-bed.wav|Contents/Resources/Audio/midnight-focus-bed.wav) ;;
         Contents/Resources/Audio/ui-click.wav|Contents/Resources/Audio/soft-tap.wav|Contents/Resources/Audio/typing-key.wav|Contents/Resources/Audio/zoom-whoosh.wav) ;;
         Contents/Resources/Audio/city-loop.mp3|Contents/Resources/Audio/overworld.mp3|Contents/Resources/Audio/calm-loop.mp3|Contents/Resources/Audio/loading-screen-loop.wav) ;;
+        Contents/Resources/Backgrounds/catalog.json) ;;
+        Contents/Resources/Backgrounds/aurora-drift.jpg|Contents/Resources/Backgrounds/deep-ocean.jpg|Contents/Resources/Backgrounds/sunset-haze.jpg|Contents/Resources/Backgrounds/blossom.jpg) ;;
+        Contents/Resources/Backgrounds/citrus-fold.jpg|Contents/Resources/Backgrounds/midnight-ink.jpg|Contents/Resources/Backgrounds/graphite.jpg|Contents/Resources/Backgrounds/cloud-deck.jpg) ;;
+        Contents/Resources/Backgrounds/emerald-dusk.jpg|Contents/Resources/Backgrounds/copper-sand.jpg|Contents/Resources/Backgrounds/arctic.jpg|Contents/Resources/Backgrounds/plum-velvet.jpg) ;;
         *) echo "Unexpected release file: $entry" >&2; exit 1 ;;
     esac
 done < <(cd "$APP_DIR" && find Contents -type f -print)
 [[ -z "$(find "$APP_DIR/Contents" -type l -print)" ]] || { echo "App bundle contains external symlinks." >&2; exit 1; }
 
-echo "Verified app: macOS $minimum_macos+, architectures [$architecture_list], system frameworks only, icon and both language catalogs verified, $asset_count audio assets, chat-only assistant (no digital-human resources)."
+echo "Verified app: macOS $minimum_macos+, architectures [$architecture_list], system frameworks only, icon and both language catalogs verified, $asset_count audio assets, $background_count backgrounds, chat-only assistant (no digital-human resources)."

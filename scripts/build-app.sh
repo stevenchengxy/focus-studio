@@ -13,6 +13,7 @@ APP_DIR="${REQUESTED_APP_DIR:A}"
 }
 APP_PARENT="${APP_DIR:h}"
 AUDIO_DIR="$PROJECT_DIR/Resources/Audio"
+BACKGROUND_DIR="$PROJECT_DIR/Resources/Backgrounds"
 AUDIO_GENERATOR="$PROJECT_DIR/scripts/generate-audio-assets.swift"
 BUILD_ARCHITECTURES="${FOCUS_STUDIO_ARCHS:-universal}"
 INSTALL_AFTER_BUILD=false
@@ -152,6 +153,24 @@ for app_language in en zh-Hans; do
     ditto "$PROJECT_DIR/Resources/$app_language.lproj" "$CONTENTS_DIR/Resources/$app_language.lproj"
 done
 ditto "$AUDIO_DIR" "$CONTENTS_DIR/Resources/Audio"
+ditto "$BACKGROUND_DIR" "$CONTENTS_DIR/Resources/Backgrounds"
+
+# Every bundled background is output of scripts/generate-background-assets.swift.
+# The digests recorded in its catalog are re-checked here so a swapped-in
+# third-party image cannot reach a build unnoticed.
+python3 - "$CONTENTS_DIR/Resources/Backgrounds" <<'PYCHECK'
+import hashlib, json, os, sys
+directory = sys.argv[1]
+catalog = json.load(open(os.path.join(directory, "catalog.json")))
+for asset in catalog["assets"]:
+    path = os.path.join(directory, asset["relativePath"])
+    if not os.path.isfile(path):
+        sys.exit("Missing bundled background: %s" % asset["relativePath"])
+    digest = hashlib.sha256(open(path, "rb").read()).hexdigest()
+    if digest != asset["sha256"]:
+        sys.exit("Background digest mismatch for %s" % asset["relativePath"])
+print("Verified %d bundled backgrounds." % len(catalog["assets"]))
+PYCHECK
 
 for required_resource in catalog.json README.md "${BUNDLED_AUDIO_ASSETS[@]}"; do
     if [[ ! -f "$CONTENTS_DIR/Resources/Audio/$required_resource" ]]; then

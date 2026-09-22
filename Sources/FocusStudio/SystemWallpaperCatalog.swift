@@ -13,10 +13,27 @@ struct SystemWallpaper: Identifiable, Hashable, Sendable {
 }
 
 enum SystemWallpaperCatalog {
-    static let searchDirectories = [
-        URL(fileURLWithPath: "/System/Library/Desktop Pictures", isDirectory: true),
-        URL(fileURLWithPath: "/Library/Desktop Pictures", isDirectory: true),
-    ]
+    /// Recent macOS releases keep only `.madesktop` stubs in the public folder
+    /// and put the real images in a hidden `.wallpapers` directory or in the
+    /// per-user asset download folder, which is why the old two-directory
+    /// search found a fraction of what is installed.
+    static let searchDirectories: [URL] = {
+        var directories = [
+            URL(fileURLWithPath: "/System/Library/Desktop Pictures", isDirectory: true),
+            URL(fileURLWithPath: "/System/Library/Desktop Pictures/.wallpapers", isDirectory: true),
+            URL(fileURLWithPath: "/Library/Desktop Pictures", isDirectory: true),
+        ]
+        if let home = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first {
+            directories.append(
+                home.appendingPathComponent("Application Support/com.apple.mobileAssetDesktop", isDirectory: true)
+            )
+        }
+        return directories
+    }()
+
+    /// Thumbnails sit beside the full-resolution files and would otherwise
+    /// appear as duplicate, unusably small backgrounds.
+    static let minimumFileSize = 200 * 1024
 
     /// Enumerating the nested system wallpaper folders can be comparatively
     /// expensive, so the editor reuses one immutable snapshot per app launch.
@@ -31,16 +48,24 @@ enum SystemWallpaperCatalog {
         var results: [SystemWallpaper] = []
 
         for directory in searchDirectories {
+            // The hidden wallpaper folders have to be walked explicitly, so
+            // skipsHiddenFiles cannot be used for them.
+            let isHiddenRoot = directory.lastPathComponent.hasPrefix(".")
+            var options: FileManager.DirectoryEnumerationOptions = [.skipsPackageDescendants]
+            if !isHiddenRoot { options.insert(.skipsHiddenFiles) }
             guard let enumerator = fileManager.enumerator(
                 at: directory,
-                includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
-                options: [.skipsHiddenFiles, .skipsPackageDescendants],
+                includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey],
+                options: options,
                 errorHandler: { _, _ in true }
             ) else { continue }
 
             for case let candidate as URL in enumerator {
                 guard supportedExtensions.contains(candidate.pathExtension.lowercased()),
                       fileManager.isReadableFile(atPath: candidate.path) else { continue }
+                if candidate.lastPathComponent.localizedCaseInsensitiveContains("thumbnail") { continue }
+                let size = (try? candidate.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                guard size >= minimumFileSize else { continue }
 
                 let canonicalPath = candidate
                     .standardizedFileURL

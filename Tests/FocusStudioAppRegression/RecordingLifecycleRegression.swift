@@ -20,6 +20,17 @@ enum RecordingLifecycleRegression {
         precondition(model.selectedTargetID == area.id && model.recordingSourceKind == .area,
                      "Toolbar selection must synchronize picker mode and source ID")
 
+        // The floating console's mode segments go through the model, under the
+        // same guards as selectToolbarTarget.
+        model.selectToolbarSourceKind(.window)
+        precondition(model.recordingSourceKind == .window,
+                     "The floating toolbar must be able to change source kind from the console")
+        model.selectToolbarSourceKind(.area)
+        precondition(model.recordingSourceKind == .area && model.selectedTargetID == area.id,
+                     "Returning to Area must reuse the registered area, not clear the selection")
+        precondition(model.areaDisplays.isEmpty && model.areaDrawDisplay() == nil,
+                     "With no display targets there is nowhere to draw an area")
+
         model.isBusy = true
         model.startRecordingCountdown()
         precondition(model.destination == .recorder && !model.captureEngine.isRecording,
@@ -29,10 +40,16 @@ enum RecordingLifecycleRegression {
         model.selectToolbarTarget(other)
         precondition(model.selectedTargetID == area.id && model.recordingSourceKind == .area,
                      "A busy toolbar cannot replace the selected source")
+        model.selectToolbarSourceKind(.display)
+        precondition(model.recordingSourceKind == .area,
+                     "A busy model must ignore a toolbar mode switch")
         model.isBusy = false
         model.destination = .library
         model.selectToolbarTarget(other)
         precondition(model.selectedTargetID == area.id, "A stale toolbar callback cannot change library state")
+        model.selectToolbarSourceKind(.window)
+        precondition(model.recordingSourceKind == .area,
+                     "A mode switch sent while the library is on screen must be ignored")
         model.destination = .recorder
 
         precondition(model.showRecordingCursor, "New recording pointer visibility defaults to on")

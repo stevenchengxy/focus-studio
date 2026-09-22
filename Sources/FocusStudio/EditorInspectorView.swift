@@ -38,6 +38,8 @@ struct EditorInspectorView: View {
     @State private var isGeneratingChapters = false
     @State private var captionsMessage: String?
     private let systemWallpapers = SystemWallpaperCatalog.installed
+    private let bundledBackgrounds = (try? BackgroundCatalog.loadBundled())?.assets ?? []
+    private let bundledBackgroundCatalog = try? BackgroundCatalog.loadBundled()
 
     private var selectedZoomIndex: Int? {
         guard let selectedZoomID else { return nil }
@@ -345,6 +347,31 @@ struct EditorInspectorView: View {
                     Text("Image").tag(BackgroundStyle.image)
                 }
                 if project.settings.backgroundStyle == .image {
+                    if let catalog = bundledBackgroundCatalog, !bundledBackgrounds.isEmpty {
+                        Text("FOCUS STUDIO BACKGROUNDS")
+                            .font(.system(size: 8, weight: .bold))
+                            .tracking(0.55)
+                            .foregroundStyle(StudioTheme.secondaryText)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(bundledBackgrounds) { asset in
+                                    let path = catalog.fileURL(for: asset).path
+                                    Button {
+                                        project.settings.backgroundStyle = .image
+                                        project.settings.backgroundImagePath = path
+                                    } label: {
+                                        BackgroundAssetSwatch(
+                                            url: catalog.fileURL(for: asset),
+                                            isSelected: project.settings.backgroundImagePath == path
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help(Text(verbatim: "\(asset.title) · \(asset.mood)"))
+                                    .accessibilityLabel(Text(verbatim: asset.title))
+                                }
+                            }
+                        }
+                    }
                     if systemWallpapers.isEmpty {
                         Text("No readable macOS wallpapers were found on this Mac.")
                             .font(.system(size: 9))
@@ -1363,6 +1390,51 @@ private enum ContentCropPreset: String, CaseIterable, Identifiable {
     }
 }
 
+/// The same treatment as a system wallpaper swatch, for an image that ships
+/// with the app rather than one found on the Mac.
+private struct BackgroundAssetSwatch: View {
+    let url: URL
+    let isSelected: Bool
+    @State private var thumbnail: NSImage?
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+            if let thumbnail {
+                Image(nsImage: thumbnail)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Image(systemName: "photo")
+                    .foregroundStyle(StudioTheme.secondaryText)
+            }
+        }
+        .frame(width: 82, height: 48)
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(
+                    isSelected ? Color.white : Color.white.opacity(0.13),
+                    lineWidth: isSelected ? 2 : 1
+                )
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if isSelected {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.55), radius: 2, y: 1)
+                    .padding(4)
+            }
+        }
+        .task(id: url.path) {
+            guard thumbnail == nil else { return }
+            thumbnail = WallpaperSwatch.loadThumbnail(from: url)
+        }
+    }
+}
+
 private struct WallpaperSwatch: View {
     let wallpaper: SystemWallpaper
     let isSelected: Bool
@@ -1405,7 +1477,7 @@ private struct WallpaperSwatch: View {
         }
     }
 
-    private static func loadThumbnail(from url: URL) -> NSImage? {
+    static func loadThumbnail(from url: URL) -> NSImage? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,

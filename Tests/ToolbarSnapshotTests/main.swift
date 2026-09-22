@@ -38,6 +38,8 @@ struct ToolbarSnapshotTests {
         model.destination = .recorder
         model.selectToolbarTarget(target)
         precondition(!model.captureEngine.isRecording && model.selectedTarget?.id == target.id)
+        precondition(model.recordingSourceKind == .area && model.selectedAreaTarget == nil,
+                     "The idle console fixture must reach area mode through selectedTarget, not selectedAreaTarget")
 
         var reports: [[String: Any]] = []
         for width in [760, 640] {
@@ -63,6 +65,32 @@ struct ToolbarSnapshotTests {
             reports.append(["path": url.path, "width": image.width, "height": image.height,
                             "distinctColors": variedPixels, "bytes": size])
         }
+        // Window mode, so the idle row's other branch (source chip, no area
+        // controls) is covered too. Restored immediately afterwards.
+        do {
+            let restoreKind = model.recordingSourceKind
+            model.recordingSourceKind = .window
+            defer { model.recordingSourceKind = restoreKind }
+            let view = FloatingRecordingControls(model: model)
+                .preferredColorScheme(.dark)
+                .frame(width: 760, height: 116)
+            let image = try renderOffscreen(view, width: 760, height: 116)
+            precondition(image.width == 760 && image.height == 116,
+                         "Window-mode toolbar must use its real logical layout dimensions")
+            let variedPixels = countDistinctColors(image)
+            precondition(variedPixels > 100,
+                         "The window-mode snapshot must contain rendered controls")
+            let url = output.appendingPathComponent("toolbar-ready-window.png")
+            guard let destination = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) else {
+                throw SnapshotError.renderFailed
+            }
+            CGImageDestinationAddImage(destination, image, nil)
+            guard CGImageDestinationFinalize(destination) else { throw SnapshotError.renderFailed }
+            reports.append(["path": url.path, "width": image.width, "height": image.height,
+                            "distinctColors": variedPixels,
+                            "bytes": try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0])
+        }
+
         // The recording bar, rendered through the same view with its layout
         // forced. No capture is started; only geometry and controls are checked.
         for (width, height) in [(324, 46)] {
@@ -126,6 +154,38 @@ struct ToolbarSnapshotTests {
             reports.append(["path": url.path, "width": image.width, "height": image.height,
                             "distinctColors": variedPixels, "bytes": size])
         }
+        // The design inspector in image-background mode, which is where the
+        // bundled background set and the macOS wallpapers are offered.
+        do {
+            var designProject = inspectorProject
+            designProject.settings.backgroundStyle = .image
+            let binding = Binding<RecordingProject>(
+                get: { designProject },
+                set: { designProject = $0 }
+            )
+            let view = EditorInspectorView(
+                project: binding,
+                selectedZoomID: .constant(nil),
+                selectedChapterID: .constant(nil),
+                tool: .design
+            )
+            .environmentObject(model)
+            .preferredColorScheme(.dark)
+            .frame(width: 330, height: 900)
+            let image = try renderOffscreen(view, width: 330, height: 900)
+            let variedPixels = countDistinctColors(image)
+            precondition(variedPixels > 80, "The design inspector snapshot must contain rendered controls")
+            let url = output.appendingPathComponent("inspector-background.png")
+            guard let destination = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) else {
+                throw SnapshotError.renderFailed
+            }
+            CGImageDestinationAddImage(destination, image, nil)
+            guard CGImageDestinationFinalize(destination) else { throw SnapshotError.renderFailed }
+            reports.append(["path": url.path, "width": image.width, "height": image.height,
+                            "distinctColors": variedPixels,
+                            "bytes": try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0])
+        }
+
         // The area overlay's own controls, which are AppKit rather than SwiftUI.
         do {
             let bounds = NSRect(x: 0, y: 0, width: 900, height: 560)
@@ -161,7 +221,7 @@ struct ToolbarSnapshotTests {
         try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
             .write(to: output.appendingPathComponent("toolbar-snapshots.json"), options: .atomic)
         precondition(!model.captureEngine.isRecording && model.destination == .recorder)
-        print("ToolbarSnapshotTests: PASS (real SwiftUI ready toolbar at 760×116 and 640×116, the 324×46 recording bar, the cursor inspector and the area overlay; isolated fixture, no live app or screen capture)")
+        print("ToolbarSnapshotTests: PASS (real SwiftUI ready toolbar at 760×116 and 640×116, the 324×46 recording bar, window mode, the cursor and background inspectors and the area overlay; isolated fixture, no live app or screen capture)")
     }
 
     enum SnapshotError: Error { case renderFailed }

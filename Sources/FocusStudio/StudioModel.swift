@@ -762,6 +762,68 @@ final class StudioModel: ObservableObject {
         recordingSourceKind = target.kind
     }
 
+    var areaDisplays: [CaptureTargetInfo] {
+        captureEngine.availableTargets.filter { $0.kind == .display }
+    }
+
+    func displayTarget(withNativeID nativeID: UInt32) -> CaptureTargetInfo? {
+        areaDisplays.first { $0.nativeID == nativeID }
+    }
+
+    /// Which display a new rectangle should be drawn on: the one the current
+    /// area already lives on, then the screen whose panel was clicked, then any.
+    func areaDrawDisplay(preferring hostDisplayID: UInt32? = nil) -> CaptureTargetInfo? {
+        let existing = selectedAreaTarget
+            ?? (selectedTarget?.kind == .area ? selectedTarget : nil)
+            ?? captureEngine.availableTargets.first { $0.kind == .area }
+        if let existing, let display = displayTarget(withNativeID: existing.nativeID) {
+            return display
+        }
+        if let hostDisplayID, let display = displayTarget(withNativeID: hostDisplayID) {
+            return display
+        }
+        return areaDisplays.first
+    }
+
+    /// The floating console's source-kind switch. It mirrors the picker page's
+    /// segmented control and carries the same guards as ``selectToolbarTarget``,
+    /// so a busy or off-page model ignores it.
+    func selectToolbarSourceKind(
+        _ kind: CaptureTargetKind,
+        preferredDisplayID: UInt32? = nil
+    ) {
+        guard destination == .recorder, !isBusy, !isSelectingArea else { return }
+        recordingSourceKind = kind
+        guard selectedTarget?.kind != kind else { return }
+        switch kind {
+        case .display:
+            selectedTargetID = areaDisplays.first?.id
+        case .window:
+            selectedTargetID = captureEngine.availableTargets.first { $0.kind == .window }?.id
+        case .area:
+            // Returning to Area reuses the rectangle that is already registered,
+            // so Start stays enabled instead of silently resetting. The engine's
+            // list is authoritative: an area drawn through the picker and one
+            // restored by selectToolbarTarget both live there.
+            let existing = selectedAreaTarget
+                ?? captureEngine.availableTargets.first { $0.kind == .area }
+            selectedTargetID = existing?.id
+                ?? areaDrawDisplay(preferring: preferredDisplayID)?.id
+        }
+    }
+
+    func beginAreaSelection(preferredDisplayID: UInt32? = nil) async {
+        guard destination == .recorder, !isBusy, !isSelectingArea else { return }
+        guard let display = areaDrawDisplay(preferring: preferredDisplayID) else { return }
+        await beginAreaSelection(on: display)
+    }
+
+    func beginAreaSelection(on display: CaptureTargetInfo) async {
+        guard destination == .recorder, !isBusy, !isSelectingArea else { return }
+        recordingSourceKind = .area
+        await selectRecordingArea(on: display)
+    }
+
     func takeScreenshot() async {
         guard !isTakingScreenshot else { return }
         isTakingScreenshot = true

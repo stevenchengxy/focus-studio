@@ -450,7 +450,9 @@ struct RecordingPickerView: View {
 
     private func chooseRecordingArea() {
         guard let display = selectedAreaDisplay else { return }
-        Task { await model.selectRecordingArea(on: display) }
+        // Same entry point the floating toolbar uses, so the two surfaces
+        // cannot drift apart.
+        Task { await model.beginAreaSelection(on: display) }
     }
 
     /// The selected card streams live; every other visible card refreshes

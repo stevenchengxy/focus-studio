@@ -189,9 +189,10 @@ final class RecordingControlPanelCoordinator: ObservableObject {
                 backing: .buffered,
                 defer: false
             )
+            let hostDisplayID = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
             panel.contentView = NSHostingView(
                 rootView: AppLocalizedView {
-                    FloatingRecordingControls(model: model)
+                    FloatingRecordingControls(model: model, hostDisplayID: hostDisplayID)
                         .preferredColorScheme(.dark)
                 }
             )
@@ -260,10 +261,18 @@ struct FloatingRecordingControls: View {
     /// Two-step discard: the bar asks in place rather than raising an alert.
     @State private var discardArmed = false
     private let layoutOverride: RecordingPanelLayout?
+    /// The display this panel belongs to, so a first area drag starts on the
+    /// screen whose toolbar was clicked.
+    private let hostDisplayID: UInt32?
 
-    init(model: StudioModel, layoutOverride: RecordingPanelLayout? = nil) {
+    init(
+        model: StudioModel,
+        layoutOverride: RecordingPanelLayout? = nil,
+        hostDisplayID: UInt32? = nil
+    ) {
         self.model = model
         self.layoutOverride = layoutOverride
+        self.hostDisplayID = hostDisplayID
         _captureEngine = ObservedObject(wrappedValue: model.captureEngine)
     }
 
@@ -521,8 +530,6 @@ struct FloatingRecordingControls: View {
             Text(verbatim: "FOCUS STUDIO")
                 .font(.system(size: 10, weight: .bold, design: .rounded))
                 .tracking(1.8)
-            Text("Capture console")
-                .font(.system(size: 10)).foregroundStyle(.secondary)
             Spacer(minLength: 4)
             if let notice = model.screenshotNotice {
                 Button { model.revealLastScreenshot() } label: {
@@ -532,14 +539,28 @@ struct FloatingRecordingControls: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(model.lastScreenshotURL == nil ? StudioTheme.yellow : Color.green)
             }
-            HStack(spacing: 5) {
-                Circle().fill(statusColor).frame(width: 5, height: 5)
-                Text(LocalizedStringKey(statusTitle))
-                    .font(.system(size: 10, weight: .medium))
+            Group {
+                if ready {
+                    // Idle state spends no words on itself; the colour carries
+                    // the state and hover or VoiceOver spells it out.
+                    Circle()
+                        .fill(statusColor)
+                        .frame(width: 7, height: 7)
+                        .frame(width: 20, height: 20)
+                        .background(statusColor.opacity(0.12), in: Circle())
+                } else {
+                    HStack(spacing: 5) {
+                        Circle().fill(statusColor).frame(width: 5, height: 5)
+                        Text(LocalizedStringKey(statusTitle))
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    .padding(.horizontal, 9).padding(.vertical, 5)
+                    .background(statusColor.opacity(0.09), in: Capsule())
+                    .foregroundStyle(statusColor)
+                }
             }
-            .padding(.horizontal, 9).padding(.vertical, 5)
-            .background(statusColor.opacity(0.09), in: Capsule())
-            .foregroundStyle(statusColor)
+            .help(LocalizedStringKey(statusTitle))
+            .accessibilityLabel(LocalizedStringKey(statusTitle))
             .accessibilityIdentifier("recording.toolbar.status")
             if ready {
                 Button { model.destination = .library } label: {
@@ -556,7 +577,7 @@ struct FloatingRecordingControls: View {
     }
 
     private var statusTitle: String {
-        if ready { return "Ready to record" }
+        if ready { return areaNeedsDrawing ? "Select recording area" : "Ready to record" }
         if model.destination == .countdown { return "Get ready" }
         if isStopping { return "Saving…" }
         if captureEngine.isChangingPauseState { return "Working…" }
@@ -564,85 +585,240 @@ struct FloatingRecordingControls: View {
     }
 
     private var statusColor: Color {
+        if ready, areaNeedsDrawing { return StudioTheme.yellow }
         if ready || model.destination == .countdown { return Color(red: 0.72, green: 0.65, blue: 1) }
         return captureEngine.isPaused ? StudioTheme.yellow : StudioTheme.red
     }
 
-    private var sourceIcon: String {
-        model.recordingSourceKind == .display ? "display" : model.recordingSourceKind == .area ? "rectangle.dashed" : "macwindow"
+    private func icon(for kind: CaptureTargetKind) -> String {
+        switch kind {
+        case .display: return "display"
+        case .window: return "macwindow"
+        case .area: return "rectangle.dashed"
+        }
+    }
+
+    private func hint(for kind: CaptureTargetKind) -> String {
+        switch kind {
+        case .display:
+            return "Entire display includes the macOS menu bar and Dock. Window or Area is cleaner for a product demo."
+        case .window:
+            return "Recommended for product demos: other apps and the macOS menu bar stay out. Browser controls can be hidden below."
+        case .area:
+            return "Draw an exact fixed region. Only that rectangle is encoded, including screenshots and cursor coordinates."
+        }
+    }
+
+    /// The rectangle currently in play, whether it arrived through the picker
+    /// or through `selectToolbarTarget` on a registered area target.
+    private var drawnArea: CaptureTargetInfo? {
+        if let area = model.selectedAreaTarget, area.id == model.selectedTargetID { return area }
+        if let selected = model.selectedTarget, selected.kind == .area { return selected }
+        return nil
+    }
+
+    private var areaNeedsDrawing: Bool {
+        model.recordingSourceKind == .area && drawnArea == nil
     }
 
     private var readyControls: some View {
         Group {
-            Menu {
-                ForEach([CaptureTargetKind.window, .area, .display], id: \.self) { kind in
-                    Section(LocalizedStringKey(kind == .display ? "Display" : kind == .window ? "Window" : "Area")) {
-                    ForEach(captureEngine.availableTargets.filter { $0.kind == (kind == .area ? .display : kind) }) { target in
-                        Button(target.title) {
-                            if kind == .area {
-                                model.recordingSourceKind = .area
-                                Task { await model.selectRecordingArea(on: target) }
-                            } else {
-                                model.selectToolbarTarget(target)
-                            }
-                        }
-                    }
-                    if captureEngine.availableTargets.isEmpty {
-                        Text("No sources available")
-                    }
-                    }
-                }
-            } label: {
-                HStack(spacing: 9) {
-                    Image(systemName: sourceIcon).foregroundStyle(StudioTheme.purple)
-                    Text(model.selectedTarget?.title ?? L10n.tr("Selected source"))
-                        .font(.system(size: 11, weight: .medium)).lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 8, weight: .bold)).foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 12).frame(height: 38)
-                .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 11))
+            sourceModePicker
+            if model.recordingSourceKind == .area {
+                if model.areaDisplays.count > 1 { areaDisplayMenu }
+                if let area = drawnArea { areaRedrawChip(area) }
+            } else {
+                sourceChip
             }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden)
-            .accessibilityLabel("Choose recording source")
-            .accessibilityIdentifier("recording.toolbar.source")
-            Menu {
-                Toggle("Show cursor", isOn: $model.showRecordingCursor)
-                Toggle("Automatic zooms", isOn: $model.automaticZooms)
-                Toggle("Microphone", isOn: $model.recordMicrophone)
-                Toggle("System audio", isOn: $model.recordSystemAudio)
-                Toggle("Browser content only", isOn: $model.browserContentOnly)
-            } label: {
-                Label("Recording settings", systemImage: "slider.horizontal.3")
-                    .labelStyle(.iconOnly).frame(width: 32, height: 38)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Recording settings")
-            .accessibilityIdentifier("recording.toolbar.settings")
+            Spacer(minLength: 8)
+            settingsMenu
+            screenshotButton(iconOnly: true)
             Rectangle().fill(Color.white.opacity(0.09)).frame(width: 1, height: 22)
-            screenshotButton
-            Button {
-                model.startRecordingCountdown()
-                if model.isShowingInteractionSetup { NSApp.activate(ignoringOtherApps: true) }
-            } label: {
-                Label("Start recording", systemImage: "record.circle")
-            }
-            .buttonStyle(FloatingControlButtonStyle(tint: StudioTheme.purple))
-            .disabled(!sourceReady)
-            .accessibilityIdentifier("recording.toolbar.start")
+            primaryButton
         }
         .disabled(locked || model.isSelectingArea)
     }
 
-    private var screenshotButton: some View {
+    /// Three icons replace a menu whose "Area" rows were indistinguishable from
+    /// its "Display" rows. The current mode is now visible without opening it.
+    private var sourceModePicker: some View {
+        HStack(spacing: 2) {
+            ForEach([CaptureTargetKind.display, .window, .area], id: \.self) { kind in
+                let isSelected = model.recordingSourceKind == kind
+                Button {
+                    model.selectToolbarSourceKind(kind, preferredDisplayID: hostDisplayID)
+                } label: {
+                    Image(systemName: icon(for: kind))
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(isSelected ? Color.white : StudioTheme.secondaryText)
+                        .frame(width: 34, height: 30)
+                        .background {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(isSelected ? StudioTheme.purple.opacity(0.9) : Color.clear)
+                        }
+                }
+                .buttonStyle(.plain)
+                .help(LocalizedStringKey(hint(for: kind)))
+                .accessibilityLabel(LocalizedStringKey(kind == .display ? "Display" : kind == .window ? "Window" : "Area"))
+                .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+                .accessibilityIdentifier("recording.toolbar.mode.\(kind.rawValue)")
+            }
+        }
+        .padding(4)
+        .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+    }
+
+    private var sourceChip: some View {
+        Menu {
+            ForEach(captureEngine.availableTargets.filter { $0.kind == model.recordingSourceKind }) { target in
+                Button(target.title) { model.selectToolbarTarget(target) }
+            }
+            if captureEngine.availableTargets.allSatisfy({ $0.kind != model.recordingSourceKind }) {
+                Text("No sources available")
+            }
+        } label: {
+            HStack(spacing: 9) {
+                Image(systemName: icon(for: model.recordingSourceKind)).foregroundStyle(StudioTheme.purple)
+                Text(model.selectedTarget?.title ?? L10n.tr("Selected source"))
+                    .font(.system(size: 11, weight: .medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 8, weight: .bold)).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12).frame(height: 38)
+            .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 11))
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden)
+        .frame(minWidth: 120, maxWidth: 240)
+        .accessibilityLabel("Choose recording source")
+        .accessibilityIdentifier("recording.toolbar.source")
+    }
+
+    /// Which screen to draw on. Icon only, because the rows themselves say it.
+    private var areaDisplayMenu: some View {
+        Menu {
+            ForEach(model.areaDisplays) { display in
+                Button {
+                    Task { await model.beginAreaSelection(on: display) }
+                } label: {
+                    Label(display.title, systemImage: "rectangle.dashed")
+                }
+            }
+            if model.areaDisplays.isEmpty {
+                Text("No sources available")
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "display")
+                    .font(.system(size: 13, weight: .medium))
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 8, weight: .bold)).foregroundStyle(.secondary)
+            }
+            .foregroundStyle(StudioTheme.secondaryText)
+            .padding(.horizontal, 10).frame(height: 38)
+            .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 11))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .disabled(model.areaDisplays.isEmpty)
+        .help("Choose a display, then draw the recording area")
+        .accessibilityLabel("Choose recording source")
+        .accessibilityIdentifier("recording.toolbar.source")
+    }
+
+    /// The point of the redesign: redoing a rectangle is one click here instead
+    /// of a 9pt link on another page. The size doubles as the label.
+    private func areaRedrawChip(_ area: CaptureTargetInfo) -> some View {
+        let size = "\(Int(area.frame.width.rounded())) × \(Int(area.frame.height.rounded()))"
+        return Button {
+            Task { await model.beginAreaSelection(preferredDisplayID: hostDisplayID) }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark.rectangle")
+                    .font(.system(size: 13, weight: .semibold))
+                Text(verbatim: size)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .monospacedDigit()
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.secondary)
+            }
+            .foregroundStyle(StudioTheme.purple)
+            .padding(.horizontal, 11).frame(height: 38)
+            .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 11))
+        }
+        .buttonStyle(.plain)
+        .disabled(model.areaDrawDisplay(preferring: hostDisplayID) == nil)
+        .help("Reselect area")
+        .accessibilityLabel("Reselect area")
+        .accessibilityValue(Text(verbatim: size))
+        .accessibilityIdentifier("recording.toolbar.area.redraw")
+    }
+
+    private var settingsMenu: some View {
+        Menu {
+            Toggle("Show cursor", isOn: $model.showRecordingCursor)
+            Toggle("Automatic zooms", isOn: $model.automaticZooms)
+            Toggle("Microphone", isOn: $model.recordMicrophone)
+            Toggle("System audio", isOn: $model.recordSystemAudio)
+            Toggle("Browser content only", isOn: $model.browserContentOnly)
+        } label: {
+            Label("Recording settings", systemImage: "slider.horizontal.3")
+                .labelStyle(.iconOnly).frame(width: 32, height: 38)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Recording settings")
+        .accessibilityLabel("Recording settings")
+        .accessibilityIdentifier("recording.toolbar.settings")
+    }
+
+    /// In Area mode with nothing drawn, Start used to be silently disabled with
+    /// no way out of the toolbar. It now carries the missing step instead.
+    private var primaryButton: some View {
+        Button {
+            if areaNeedsDrawing {
+                Task { await model.beginAreaSelection(preferredDisplayID: hostDisplayID) }
+            } else {
+                model.startRecordingCountdown()
+                if model.isShowingInteractionSetup { NSApp.activate(ignoringOtherApps: true) }
+            }
+        } label: {
+            Label(
+                LocalizedStringKey(primaryTitle),
+                systemImage: areaNeedsDrawing ? "rectangle.dashed" : "record.circle"
+            )
+        }
+        .buttonStyle(FloatingControlButtonStyle(tint: StudioTheme.purple))
+        .disabled(areaNeedsDrawing
+            ? model.areaDrawDisplay(preferring: hostDisplayID) == nil
+            : !sourceReady)
+        .accessibilityIdentifier("recording.toolbar.start")
+    }
+
+    private var primaryTitle: String {
+        if model.isSelectingArea { return "Selecting area…" }
+        return areaNeedsDrawing ? "Select recording area" : "Start recording"
+    }
+
+    /// Icon only in the idle row, where space buys clarity elsewhere; the
+    /// recording bar keeps its word because that row was just shipped.
+    private func screenshotButton(iconOnly: Bool) -> some View {
         Button {
             Task { await model.takeScreenshot() }
         } label: {
-            Label(LocalizedStringKey(model.isTakingScreenshot ? "Capturing…" : "Screenshot"), systemImage: "camera")
+            let title = LocalizedStringKey(model.isTakingScreenshot ? "Capturing…" : "Screenshot")
+            if iconOnly {
+                Label(title, systemImage: "camera").labelStyle(.iconOnly)
+            } else {
+                Label(title, systemImage: "camera")
+            }
         }
+        .accessibilityLabel(LocalizedStringKey(model.isTakingScreenshot ? "Capturing…" : "Screenshot"))
         .buttonStyle(FloatingControlButtonStyle())
         .disabled(model.isTakingScreenshot || locked || (ready && !sourceReady))
         .help("Save a PNG of the selected recording source")
@@ -685,7 +861,7 @@ struct FloatingRecordingControls: View {
                 .overlay(Color.white.opacity(0.13))
                 .frame(height: 28)
 
-            screenshotButton
+            screenshotButton(iconOnly: false)
 
             Text(model.selectedTarget?.title ?? L10n.tr("Selected source"))
                 .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
