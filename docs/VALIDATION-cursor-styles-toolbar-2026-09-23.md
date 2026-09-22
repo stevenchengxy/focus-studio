@@ -44,3 +44,10 @@
 ## 5. 需要你确认的一件事
 
 `~/Library/Application Support/FocusStudio/Projects` 在 2026-09-22 23:11 被清空，只剩 `Incoming`。这些工程都在废纸篓里（`mdfind` 在 `~/.Trash` 找到 36 个 `raw.mp4` 和对应的 `project.json`，含 `F785D0E7…` 与 QA 用的 `E881BD7E…`），可以直接从废纸篓拖回原目录恢复。删除动作来自 App 自身的删除流程（`ProjectStore.deleteProject` 用 `trashItem`），测试套件不会碰真实目录：所有测试都用 `ProjectStore(projectsDirectory:)` 指向隔离的临时目录。
+
+## 6. 安装包与安装（1.10.0 / build 17）
+
+- Universal 2 打包通过：`dist/releases/Focus-Studio-1.10.0-universal-local.dmg`（SHA-256 `88332ac3d5b479e7cb1eb45f4039b7bcf6acaf3b15e28fc990321674540ea445`）、`.zip`（`bd8dec2cd6c008197bdf133985111d8c929bf4bf5a1cb50692c18f8a51210c15`）、`.sha256`。
+- `/Applications/Focus Studio.app` 1.9.0 在空闲（无录制）时退出后安装 1.10.0 build 17，安装校验与 `codesign --verify --deep --strict` 通过，已重新启动。
+- 旧版本清理：`dist/candidates/1.10.0-native`、`dist/Focus Studio.app`、1.9.0 的安装包与安装器恢复副本已移入 `~/.Trash/focus-studio-old-versions-20260923-003002`（276 MB）。本机只保留 `/Applications/Focus Studio.app` 1.10.0 与 1.10.0 的安装包。
+- 代码已作为 `2e3f3c4` 推送到 `main`。
