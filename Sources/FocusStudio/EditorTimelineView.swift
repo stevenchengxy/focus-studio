@@ -11,6 +11,7 @@ struct EditorTimelineView: View {
 
     private let labelWidth = 76.0
     private let rowHeight = 31.0
+    @FocusState private var isTimelineFocused: Bool
 
     var body: some View {
         GeometryReader { proxy in
@@ -26,7 +27,19 @@ struct EditorTimelineView: View {
                 )
                 Divider().overlay(StudioTheme.line)
 
-                timelineRow(label: "Zoom", icon: "plus.magnifyingglass") {
+                timelineRow(label: "Zoom", icon: "plus.magnifyingglass", accessory: {
+                    Button {
+                        insertZoom(at: currentTime, duration: duration)
+                    } label: {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(StudioTheme.purple)
+                    .help("Add zoom at playhead")
+                    .accessibilityLabel("Add zoom at playhead")
+                    .accessibilityIdentifier("timeline.addZoom")
+                }) {
                     ZStack(alignment: .leading) {
                         RoundedRectangle(cornerRadius: 5, style: .continuous)
                             .fill(Color.white.opacity(0.025))
@@ -36,6 +49,13 @@ struct EditorTimelineView: View {
                                     addZoom(at: value.location.x, timelineWidth: timelineWidth, duration: duration)
                                 }
                             )
+                            .contextMenu {
+                                Button("Add zoom at playhead") { insertZoom(at: currentTime, duration: duration) }
+                                if selectedZoomID != nil {
+                                    Button("Duplicate zoom") { duplicateSelectedZoom(duration: duration) }
+                                    Button("Remove zoom", role: .destructive) { removeSelectedZoom() }
+                                }
+                            }
 
                         ForEach($project.zoomSegments) { $segment in
                             ZoomBlockView(
@@ -166,6 +186,14 @@ struct EditorTimelineView: View {
         .frame(height: 194)
         .padding(.vertical, 8)
         .background(StudioTheme.panel)
+        .focusable()
+        .focused($isTimelineFocused)
+        .focusEffectDisabled()
+        .onDeleteCommand { removeSelectedZoom() }
+        .onChange(of: selectedZoomID) { _, id in
+            // A freshly selected block should answer the Delete key right away.
+            if id != nil { isTimelineFocused = true }
+        }
     }
 
     /// Nil and empty chapter lists are equivalent; the lane edits a plain array.
@@ -198,7 +226,35 @@ struct EditorTimelineView: View {
 
     private func addZoom(at x: CGFloat, timelineWidth: Double, duration: Double) {
         guard duration > 0, timelineWidth > 0 else { return }
-        let time = (Double(x) / timelineWidth * duration).clamped(to: 0...duration)
+        insertZoom(at: (Double(x) / timelineWidth * duration).clamped(to: 0...duration), duration: duration)
+    }
+
+    private func removeSelectedZoom() {
+        guard let id = selectedZoomID else { return }
+        project.zoomSegments.removeAll { $0.id == id }
+        selectedZoomID = nil
+    }
+
+    /// Copies the selected block right after itself, keeping its look and timing.
+    private func duplicateSelectedZoom(duration: Double) {
+        guard let source = project.zoomSegments.first(where: { $0.id == selectedZoomID }) else { return }
+        var copy = source
+        copy.id = UUID()
+        copy.kind = .manual
+        copy.automaticSource = nil
+        let length = source.end - source.start
+        let start = min(source.end, max(0, duration - length))
+        copy.start = start
+        copy.end = min(duration, start + length)
+        guard copy.end > copy.start else { return }
+        project.zoomSegments.append(copy)
+        selectedZoomID = copy.id
+        selectedTool = .zoom
+    }
+
+    private func insertZoom(at time: Double, duration: Double) {
+        guard duration > 0 else { return }
+        let time = time.clamped(to: 0...duration)
         let length = min(duration, 1.25)
         let start = (time - 0.1).clamped(to: 0...max(0, duration - length))
         let segment = ZoomSegment(
@@ -220,10 +276,22 @@ struct EditorTimelineView: View {
         icon: String,
         @ViewBuilder content: () -> Content
     ) -> some View {
+        timelineRow(label: label, icon: icon, accessory: { EmptyView() }, content: content)
+    }
+
+    @ViewBuilder
+    private func timelineRow<Accessory: View, Content: View>(
+        label: String,
+        icon: String,
+        @ViewBuilder accessory: () -> Accessory,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
         HStack(spacing: 7) {
             HStack(spacing: 5) {
                 Image(systemName: icon).frame(width: 13)
                 Text(LocalizedStringKey(label))
+                Spacer(minLength: 0)
+                accessory()
             }
             .font(.system(size: 9, weight: .medium))
             .foregroundStyle(StudioTheme.secondaryText)
@@ -398,7 +466,7 @@ private struct ZoomBlockView: View {
                 onSelect()
                 segment.isEnabled.toggle()
             }
-            Button("Remove", role: .destructive, action: onDelete)
+            Button("Remove zoom", role: .destructive, action: onDelete)
         }
     }
 

@@ -539,7 +539,6 @@
 "Finish the current library operation before starting another." = "请等待当前项目库操作完成后再进行下一项操作。";
 "Return to the project library before managing projects." = "请先返回项目库，再管理项目。";
 "Project “%@” could not be renamed: %@" = "无法重命名项目“%@”：%@";
-"Moved %lld of %lld selected projects to Trash. The remaining projects were kept.\n%@" = "已将所选项目中的 %lld / %lld 个移到废纸篓，其余项目已保留。\n%@";
 "“%@”: %@" = "“%@”：%@";
 "%lld selected projects are no longer in the library." = "所选项目中有 %lld 个已不在项目库中。";
 
@@ -811,3 +810,8 @@
 "Zoom out starts" = "缩小开始于";
 "Drag to change when the zoom-in finishes" = "拖动以改变放大完成的时刻";
 "Drag to change when the zoom-out starts" = "拖动以改变缩小开始的时刻";
+
+/* timeline zoom actions */
+"Add zoom at playhead" = "在播放头处添加缩放";
+"Duplicate zoom" = "复制缩放";
+"Moved %lld of %lld selected projects to Trash. The remaining projects were kept.\n%@" = "已将所选项目中的 %lld / %lld 个移到废纸篓，其余项目已保留。\n%@";

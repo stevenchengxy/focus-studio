@@ -147,11 +147,13 @@ public enum CursorMotion {
     }
 }
 
-/// While the camera is zoomed in, keeps the pointer inside a comfortable
-/// central zone of the viewport by drifting the focus after it. The offsets
-/// are precomputed from the same data preview and export share, smoothed with
-/// a zero-phase Gaussian, and scaled by the zoom envelope so they vanish
-/// exactly when the camera returns to the overview.
+/// While the camera is zoomed in, the focus tracks the pointer the way a
+/// camera operator would: small moves inside a soft central zone are ignored,
+/// larger moves pull the framing after the pointer, and the pointer is never
+/// allowed past the outer edge of the viewport. The response is a critically
+/// damped spring (no overshoot, a short natural lag), precomputed from the
+/// same data preview and export share and scaled by the zoom envelope so it
+/// vanishes exactly when the camera returns to the overview.
 public enum CursorFollow {
     public struct Sample: Hashable, Sendable {
         public var time: Double
@@ -165,9 +167,12 @@ public enum CursorFollow {
     }
 
     public static let sampleRate = 60.0
-    /// Fraction of the visible half-size the pointer may roam before the camera follows.
-    public static let safeZone = 0.62
-    public static let smoothingSigma = 0.22
+    /// Fraction of the visible half-size inside which the pointer may roam freely.
+    public static let softZone = 0.62
+    /// Fraction of the visible half-size the pointer is never allowed to leave.
+    public static let hardZone = 0.9
+    /// Seconds for the spring to settle (about 98%) after the pointer stops.
+    public static let response = 0.5
 
     public static func offsets(
         duration: Double,
@@ -181,45 +186,40 @@ public enum CursorFollow {
               segments.contains(where: { $0.isEnabled }) else { return [] }
         let step = 1 / sampleRate
         let count = Int((duration / step).rounded(.up)) + 1
-        var rawX = [Double](repeating: 0, count: count)
-        var rawY = [Double](repeating: 0, count: count)
-        var progress = [Double](repeating: 0, count: count)
+        let omega = 5.8 / response
+        var positionX = 0.0, positionY = 0.0
+        var velocityX = 0.0, velocityY = 0.0
+        var result: [Sample] = []
+        result.reserveCapacity(count)
         for index in 0..<count {
             let time = min(duration, Double(index) * step)
+            var desiredX = 0.0, desiredY = 0.0
+            var progress = 0.0
             let zoom = TimelineMath.zoomState(at: time, segments: segments, settings: settings)
-            guard zoom.scale > 1.001, let pointer = TimelineMath.cursorPosition(at: time, samples: cursor) else { continue }
-            let half = 0.5 / zoom.scale
-            let safe = half * safeZone
-            if pointer.x > zoom.centerX + safe { rawX[index] = pointer.x - (zoom.centerX + safe) }
-            else if pointer.x < zoom.centerX - safe { rawX[index] = pointer.x - (zoom.centerX - safe) }
-            if pointer.y > zoom.centerY + safe { rawY[index] = pointer.y - (zoom.centerY + safe) }
-            else if pointer.y < zoom.centerY - safe { rawY[index] = pointer.y - (zoom.centerY - safe) }
-            progress[index] = zoom.progress
-        }
-        let radius = max(1, Int((3 * smoothingSigma / step).rounded()))
-        let kernel = (-radius...radius).map { exp(-0.5 * pow(Double($0) * step / smoothingSigma, 2)) }
-        let kernelSum = kernel.reduce(0, +)
-        func convolve(_ values: [Double]) -> [Double] {
-            var result = values
-            for index in values.indices {
-                var accumulator = 0.0
-                for (offset, weight) in zip(-radius...radius, kernel) {
-                    let sampleIndex = min(values.count - 1, max(0, index + offset))
-                    accumulator += values[sampleIndex] * weight
-                }
-                result[index] = accumulator / kernelSum
+            if zoom.scale > 1.001, let pointer = TimelineMath.cursorPosition(at: time, samples: cursor) {
+                let half = 0.5 / zoom.scale
+                desiredX = desiredOffset(pointer.x - zoom.centerX, half: half)
+                desiredY = desiredOffset(pointer.y - zoom.centerY, half: half)
+                progress = zoom.progress
             }
-            return result
+            // Critically damped spring, semi-implicit Euler (stable at 60 Hz).
+            velocityX += (omega * omega * (desiredX - positionX) - 2 * omega * velocityX) * step
+            velocityY += (omega * omega * (desiredY - positionY) - 2 * omega * velocityY) * step
+            positionX += velocityX * step
+            positionY += velocityY * step
+            result.append(Sample(time: time, dx: positionX * strength * progress, dy: positionY * strength * progress))
         }
-        let smoothX = convolve(rawX)
-        let smoothY = convolve(rawY)
-        return (0..<count).map { index in
-            Sample(
-                time: min(duration, Double(index) * step),
-                dx: smoothX[index] * strength * progress[index],
-                dy: smoothY[index] * strength * progress[index]
-            )
-        }
+        return result
+    }
+
+    /// Soft zone: the pull grows smoothly with distance; hard zone: whatever
+    /// is needed to keep the pointer inside the outer 90% of the viewport.
+    static func desiredOffset(_ delta: Double, half: Double) -> Double {
+        guard half > 0, delta.isFinite else { return 0 }
+        let soft = delta * TimelineMath.smootherStep(abs(delta) / (half * softZone))
+        let limit = half * hardZone
+        let hard = abs(delta) > limit ? delta - (delta < 0 ? -limit : limit) : 0
+        return abs(hard) > abs(soft) ? hard : soft
     }
 
     /// Linear interpolation of the precomputed offsets at `time`.

@@ -1,4 +1,4 @@
-# 光标与镜头动画优化验证（2026-09-22，1.8.0 / build 15）
+# 光标与镜头动画优化验证（2026-09-22，1.8.0 / build 15 → 1.9.0 / build 16）
 
 范围：自定义光标路径平滑与点击落位、箭头 ↔ I-beam 交叉淡入、放大期间镜头跟随光标。所有计算在 `FocusStudioCore` 中完成，预览与导出共用同一路径。
 
@@ -10,6 +10,21 @@
 | 形状切换 | `CursorMotion.kindTransition`：箭头与 I-beam 之间 140 ms 交叉淡入，入场形状从 0.9 缩放到 1，两层同一热点对齐；也掩盖了输入框焦点抖动造成的一帧闪烁 |
 | 焦点转移 | `TimelineMath.zoomState`：交接时新区域的 pan 时长 = Zoom in + min(0.25 s, 距离 × 0.6 s)，仅作用于焦点插值，scale 仍走原包络；打字来源的镜头不延长（及时回到输入框）；E2E 的交接落定断言相应改为 easeIn + 0.25 s |
 | 镜头跟随 | `CursorFollow.offsets`：放大期间若光标离开视口中央 62% 安全区，按 60 Hz 计算所需偏移，σ=220 ms 零相位平滑，乘以缩放包络（回到全景时归零）与强度（Animation → Follow cursor，默认 60%）；光标隐藏时不跟随，保证与无光标元数据的渲染完全一致 |
+
+## 小手光标、弹簧追踪与时间线操作（1.9）
+
+- `CursorKind.pointingHand`；`SystemCursorMatcher` 以 24×24 灰度+覆盖指纹比对 `NSCursor.currentSystem` 与系统箭头/I-beam/小手（阈值 0.06），录制时优先使用，辅助功能 `AXLink` / `AXURL` 后备；渲染器提供系统小手、高对比度小手与圆点三种外观。
+- `CursorFollow` 改为临界阻尼弹簧（响应 0.5 s，60 Hz 半隐式欧拉）：软区（视口半宽 62%）内按 smootherStep 渐进拉动，硬区（90%）外强制保持光标在画面内；乘以缩放包络与强度。
+- 时间线：Zoom 泳道 **+** 按钮、Delete 键删除选中块（时间线获得焦点后）、右键菜单添加/复制/移除。
+- 测试：链接语义、`pointingHand` JSON 往返、系统光标指纹自匹配与两两距离 > 2×阈值（需初始化 NSApplication）、十字光标不匹配；弹簧跟随用例沿用（区内不动、越界跟随、回全景归零、无速度突变）。
+
+### 验证（1.9）
+
+- `swift run FocusStudioPermissionTests`：`CursorMotionTests` 小手部分（链接语义、`pointingHand` JSON 往返、系统光标指纹自匹配、箭头/I-beam/小手两两距离 > 2×阈值、十字光标不匹配）与弹簧跟随用例、`ZoomBoundaryTests` 全部 PASS。
+- `swift run FocusStudioE2E`：PASS（`zoomFrameDifference` 39.2，较 1.8 的 32.2 上升来自弹簧跟随在放大期间的额外位移；`returnFrameDifference` 0.85、`cursorChangedPixels` 68 与 1.8 一致，隐藏光标仍与无光标元数据渲染一致）。
+- `zsh scripts/test.sh`：全部 PASS，退出码 0（含 RecordingLifecycleRegression、FocusStudioAppRegression、InstallationTests、Codex、AI 网关与助手用例，本地化 792 键对齐）。
+- 实机抽帧：复制真实录制 F785D0E7… 为 QA 工程 E881BD7E…，把 2.225–2.492 s 的光标样本改为 `pointingHand`，用 1.9.0 候选构建通过 AI 助手 `export` 走正式渲染管线导出（1920×1196，7.09 s），ffmpeg 抽 2.15 / 2.22 / 2.26 / 2.30 / 2.40 / 2.48 / 2.51 / 2.54 s：2.22 s 前为 I-beam，2.26–2.30 s 为 I-beam 与小手交叉淡入，2.40–2.51 s 为完整的系统小手，2.54 s 淡回 I-beam（`.artifacts/qa/cursor-motion/pointing-hand-crossfade.png`）。
+- 说明：真实录制中的小手来自录制时对系统光标（`NSCursor.currentSystem`）的指纹匹配与 `AXLink`/`AXURL` 语义，1.9 之前录制的工程没有这类样本，需要新录制才会出现；QA 工程可删除。
 
 ## 过渡时刻手动调节（1.8）
 

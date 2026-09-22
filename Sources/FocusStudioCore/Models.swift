@@ -14,6 +14,8 @@ public enum MouseButton: String, Codable, Sendable {
 public enum CursorKind: String, Codable, Hashable, Sendable, CaseIterable {
     case arrow
     case iBeam
+    /// The pointing hand macOS shows over links and other clickable web controls.
+    case pointingHand
 }
 
 public struct CursorSample: Codable, Hashable, Sendable {

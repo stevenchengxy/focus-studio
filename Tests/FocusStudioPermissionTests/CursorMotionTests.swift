@@ -1,3 +1,5 @@
+import AppKit
+import FocusStudioCapture
 import FocusStudioCore
 import Foundation
 
@@ -86,6 +88,34 @@ func cursorMotionFailures() -> [String] {
            "strength 0 disables following")
     expect(ProjectSettings().resolvedZoomFollowsCursor == ProjectSettings.defaultZoomFollowsCursor,
            "new projects follow the pointer by default")
+
+    // --- Pointing hand ------------------------------------------------------------
+    expect(CursorKindSemantics.classify(role: "AXLink", subrole: nil, isEditable: false, hasEditableAncestor: false) == .pointingHand,
+           "links show the pointing hand")
+    expect(CursorKindSemantics.classify(role: "AXStaticText", subrole: nil, isEditable: false, hasEditableAncestor: false, isLink: true) == .pointingHand,
+           "an element with a URL shows the pointing hand")
+    expect(CursorKindSemantics.classify(role: "AXTextField", subrole: nil, isEditable: true, hasEditableAncestor: false, isLink: true) == .iBeam,
+           "an editable link still shows the I-beam")
+    if let decoded = try? JSONDecoder().decode(CursorSample.self, from: Data(#"{"time":1,"x":0.2,"y":0.3,"cursorKind":"pointingHand"}"#.utf8)) {
+        expect(decoded.cursorKind == .pointingHand, "pointing-hand samples round-trip through project JSON")
+    } else {
+        failures.append("pointing-hand samples must decode")
+    }
+    MainActor.assumeIsolated {
+        // System cursor images only load with an AppKit application context.
+        _ = NSApplication.shared
+        let matcher = SystemCursorMatcher()
+        expect(matcher.hasReferences, "system cursor fingerprints must be computable with AppKit initialised")
+        for (kind, cursor) in [(CursorKind.arrow, NSCursor.arrow), (.iBeam, NSCursor.iBeam), (.pointingHand, NSCursor.pointingHand)] {
+            expect(matcher.match(cursor) == kind, "the system \(kind) cursor must match itself")
+        }
+        let arrowHand = matcher.referenceDistance(NSCursor.arrow, NSCursor.pointingHand) ?? -1
+        let arrowBeam = matcher.referenceDistance(NSCursor.arrow, NSCursor.iBeam) ?? -1
+        let beamHand = matcher.referenceDistance(NSCursor.iBeam, NSCursor.pointingHand) ?? -1
+        expect(min(arrowHand, arrowBeam, beamHand) > SystemCursorMatcher.matchThreshold * 2,
+               "system cursors are far apart in fingerprint space (arrow/hand \(arrowHand), arrow/beam \(arrowBeam), beam/hand \(beamHand))")
+        expect(matcher.match(NSCursor.crosshair) == nil, "an unrelated cursor does not match any known kind")
+    }
 
     // --- Distance-aware hand-off pans ------------------------------------------
     var panSettings = ProjectSettings()

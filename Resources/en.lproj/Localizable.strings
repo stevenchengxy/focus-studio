@@ -539,7 +539,6 @@
 "Finish the current library operation before starting another." = "Finish the current library operation before starting another.";
 "Return to the project library before managing projects." = "Return to the project library before managing projects.";
 "Project “%@” could not be renamed: %@" = "Project “%@” could not be renamed: %@";
-"Moved %lld of %lld selected projects to Trash. The remaining projects were kept.\n%@" = "Moved %lld of %lld selected projects to Trash. The remaining projects were kept.\n%@";
 "“%@”: %@" = "“%@”: %@";
 "%lld selected projects are no longer in the library." = "%lld selected projects are no longer in the library.";
 
@@ -811,3 +810,8 @@
 "Zoom out starts" = "Zoom out starts";
 "Drag to change when the zoom-in finishes" = "Drag to change when the zoom-in finishes";
 "Drag to change when the zoom-out starts" = "Drag to change when the zoom-out starts";
+
+/* timeline zoom actions */
+"Add zoom at playhead" = "Add zoom at playhead";
+"Duplicate zoom" = "Duplicate zoom";
+"Moved %lld of %lld selected projects to Trash. The remaining projects were kept.\n%@" = "Moved %lld of %lld selected projects to Trash. The remaining projects were kept.\n%@";

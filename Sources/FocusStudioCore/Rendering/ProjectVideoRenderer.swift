@@ -1314,6 +1314,7 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
 private struct CursorGraphicSet: @unchecked Sendable {
     let arrow: CursorGraphic
     let iBeam: CursorGraphic
+    let pointingHand: CursorGraphic
 
     @MainActor
     init(appearance: CursorAppearance) {
@@ -1329,6 +1330,11 @@ private struct CursorGraphicSet: @unchecked Sendable {
                 fallback: CursorGraphic.highContrastIBeam,
                 fallbackHotSpot: CGPoint(x: 14, y: 20)
             )
+            pointingHand = CursorGraphic.systemOrFallback(
+                NSCursor.pointingHand,
+                fallback: CursorGraphic.highContrastHand,
+                fallbackHotSpot: CGPoint(x: 11, y: 3)
+            )
         case .highContrast:
             arrow = CursorGraphic(
                 image: CursorGraphic.highContrastArrow,
@@ -1338,6 +1344,10 @@ private struct CursorGraphicSet: @unchecked Sendable {
                 image: CursorGraphic.highContrastIBeam,
                 hotSpot: CGPoint(x: 14, y: 20)
             )
+            pointingHand = CursorGraphic(
+                image: CursorGraphic.highContrastHand,
+                hotSpot: CGPoint(x: 11, y: 3)
+            )
         case .dot:
             let dot = CursorGraphic(
                 image: CursorGraphic.dot,
@@ -1345,6 +1355,7 @@ private struct CursorGraphicSet: @unchecked Sendable {
             )
             arrow = dot
             iBeam = dot
+            pointingHand = dot
         }
     }
 
@@ -1352,6 +1363,7 @@ private struct CursorGraphicSet: @unchecked Sendable {
         switch kind {
         case .arrow: return arrow
         case .iBeam: return iBeam
+        case .pointingHand: return pointingHand
         }
     }
 }
@@ -1405,6 +1417,30 @@ private struct CursorGraphic: @unchecked Sendable {
         context.closePath()
         context.setFillColor(NSColor.black.cgColor)
         context.fillPath()
+    }
+
+    /// A bold pointing hand built from the SF Symbol so it reads at any size,
+    /// with a dark outline for light backgrounds.
+    static let highContrastHand: CGImage = drawImage(size: CGSize(width: 36, height: 40)) { context in
+        context.setAllowsAntialiasing(true)
+        let rect = CGRect(x: 2, y: 2, width: 32, height: 36)
+        for (name, color, inset) in [
+            ("hand.point.up.left.fill", NSColor.black, -1.5),
+            ("hand.point.up.left.fill", NSColor.white, 1.5),
+        ] {
+            guard let symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 30, weight: .bold)) else { continue }
+            let tinted = NSImage(size: symbol.size, flipped: false) { drawRect in
+                symbol.draw(in: drawRect)
+                color.set()
+                drawRect.fill(using: .sourceAtop)
+                return true
+            }
+            var proposed = rect.insetBy(dx: inset, dy: inset)
+            if let cgImage = tinted.cgImage(forProposedRect: &proposed, context: nil, hints: nil) {
+                context.draw(cgImage, in: rect.insetBy(dx: inset, dy: inset))
+            }
+        }
     }
 
     static let highContrastIBeam: CGImage = drawImage(size: CGSize(width: 28, height: 40)) { context in
