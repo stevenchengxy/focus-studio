@@ -31,7 +31,12 @@
 - 0.96 s：箭头与 I-beam 同时可见、处于交叉淡入中；1.10 s 数据又切回箭头，同样以淡入过渡而非一帧跳变（`.artifacts/qa/cursor-motion/ibeam-crossfade.png`）。
 - 2.79 s 点击时刻箭头位于自动填充项上；3.10 s 点击涟漪中心与箭头重合，说明平滑路径在点击点精确落位（`.artifacts/qa/cursor-motion/click-frames.png`）。
 
+## 安装包与安装（1.8.0 / build 15）
+
+- Universal 2 构建与打包通过：`dist/releases/Focus-Studio-1.8.0-universal-local.dmg`（SHA-256 `9bbda0b225616da03ebb6266851f946cbb6ba327411c7c40f2713dc4931879ea`）、`.zip`（`0ec3ad6d590a4189eaff3c83c969f5452111c13949d0a5050eaf14a310dbe74c`）、`.sha256`。
+- 用 `scripts/install-app.sh … --yes` 安装到 `/Applications/Focus Studio.app`（此前 1.7.1 build 13 先退出），安装校验通过。
+- 旧版本清理：所有 `dist/candidates/*`、`dist/Focus Studio.app`（1.1.2）、1.8.0 之前的 `dist/releases/*` 以及安装器保留的 `/Applications/.focusstudio-install-*` 恢复副本已移入废纸篓（`~/.Trash/focus-studio-old-versions-*`），本机只保留 `/Applications/Focus Studio.app` 1.8.0 与 1.8.0 的安装包。
+
 ## 交付
 
-- 候选应用：`dist/candidates/1.5.0/Focus Studio.app`（目录名沿用本次构建，内容为工作树 1.7.1 + 本次优化，原生架构）。
-- 本次没有提交或推送：工作树中还有你自己的未提交改动（暂停/续录、缩放意图排序、助手面板等），我没有替你提交。
+- 已随 1.8.0 一起提交并推送到 `main`（含此前工作树中的暂停/续录、缩放意图排序、助手面板等改动）。
