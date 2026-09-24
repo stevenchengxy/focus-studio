@@ -121,6 +121,11 @@ public struct AIAssistantContext: Sendable {
     /// Measured progress for long calls (exports), next to the text progress
     /// every tool gets. Nil when nobody listens.
     public var numericProgress: AIToolProgressHandler?
+    /// Asks the person using the app whether an external start_recording may
+    /// record sound their own recorder settings leave off (the app's prompt;
+    /// tests pass their own). Only external calls ask; with none set, such a
+    /// call is refused rather than recording sound unasked.
+    public var recordingAudioConsent: AIRecordingAudioConsentHandler?
 
     private var assetsDirectoryProvider: @Sendable () -> URL
     private var uiLanguageProvider: @Sendable () -> String

@@ -13,7 +13,12 @@ import UniformTypeIdentifiers
 /// turned away, stale and live sockets are handled (relaunch handoff), the
 /// socket folder is kept private, approvals (allow, decline, timeout with
 /// heartbeat progress, joined prompts, revoke, AI tools turned off,
-/// persistence) and the identity of the program behind the current process.
+/// persistence), the call's time counted from its arrival less the helper's
+/// own (an unanswered prompt answers "waiting_for_approval" in time, a tool
+/// detaches by the same measure, the helper's claim clamped), a new client's
+/// start_recording through the approval and the sound prompt (progress that
+/// keeps increasing, the program behind the helper named) and the identity of
+/// the program behind the current process.
 /// No real socket path, preferences or approval prompt are touched: the
 /// approver is the test's own and the preferences live in a file in the
 /// test's temporary folder.
@@ -28,9 +33,12 @@ enum ControlServerRegression {
         try await approvals()
         try await genericHostApprovals()
         try await accessCheckedBeforeRunning()
+        try await approvalWithinTheCallsTime()
+        try await elapsedClampedAtTheServer()
+        try await soundPromptAfterApproval()
         try parentIdentity()
         try await genericHostIdentity()
-        print("ControlServerRegression: PASS (hello after bootstrap, call before hello, get_status/add_zoom through the bridge with the window hook, unknown tool/method, malformed lines, duplicate ids, protocol mismatch, progress relay only when asked and never after the reply, activity indicator, cancel and disconnect cancel the tool, cancel while awaiting approval, peers of other users refused, connections over the limit told why, stale socket replaced, relaunch handoff from a live instance, lock held without a socket file, own-inode unlink, private socket folder, symlinked folder and non-socket file refused, approvals allow/decline/timeout with heartbeat/late allow/joined prompts/revoke/off/unidentified/persistence, generic hosts keyed by script or approved per connection only, revoke or off while a call waits its turn, parent process identity, script of a shell or interpreter)")
+        print("ControlServerRegression: PASS (hello after bootstrap, call before hello, get_status/add_zoom through the bridge with the window hook, unknown tool/method, malformed lines, duplicate ids, protocol mismatch, progress relay only when asked and never after the reply, activity indicator, cancel and disconnect cancel the tool, cancel while awaiting approval, peers of other users refused, connections over the limit told why, stale socket replaced, relaunch handoff from a live instance, lock held without a socket file, own-inode unlink, private socket folder, symlinked folder and non-socket file refused, approvals allow/decline/timeout with heartbeat/late allow/joined prompts/revoke/off/unidentified/persistence, generic hosts keyed by script or approved per connection only, revoke or off while a call waits its turn, an unanswered prompt answering waiting_for_approval when the call's time is up (the helper's elapsed time included) with a retry joining it, detaching by the same measure, a negative or huge elapsed clamped by the server, a new client's start_recording through approval then the sound prompt with increasing heartbeats and the verified program named, parent process identity, script of a shell or interpreter)")
     }
 
     // MARK: - Hello and calls
@@ -499,6 +507,138 @@ enum ControlServerRegression {
         }
     }
 
+    /// A call's time counts from its arrival less what the helper already
+    /// spent on it: a prompt still unanswered when that time is up answers
+    /// "waiting_for_approval" (the prompt stays, a retry joins it and runs
+    /// once allowed), and a tool detaches as a job by the same measure.
+    private static func approvalWithinTheCallsTime() async throws {
+        let fixture = try await ServerFixture(approvalTimeout: 10, heartbeat: 0.05)
+        defer { fixture.cleanup() }
+        let server = fixture.makeServer(jobs: AutomationJobs(detachAfter: 1))
+        server.start()
+        defer {
+            _ = server.bridge.jobs.cancelRunning()
+            server.stop()
+        }
+        let client = try TestClient(path: fixture.socketPath)
+        defer { client.close() }
+        try await client.hello()
+        fixture.approver.mode = .hold
+
+        // Unanswered when the call's second is up: waiting_for_approval, heartbeats until then.
+        let asked = Date()
+        let waitingID = try client.send("call", ControlCall(tool: "get_status", progressToken: "wait").json)
+        let waiting = try await client.waitForReply(to: waitingID).toolResult()
+        let took = Date().timeIntervalSince(asked)
+        try expect(waiting.isError && waiting.structuredContent == ["status": "waiting_for_approval", "tool": "get_status", "client": "Claude Code", "retry": true]
+                   && waiting.text.contains("get_status has not run yet") && waiting.text.contains("call get_status again"), "Still asking: \(waiting.json)")
+        try expect(took >= 0.9 && took < 4, "It answers when the call's time is up, long before the prompt's own timeout: \(took) s")
+        let beats = client.messages.filter { if case let .notification("progress", params) = $0 { return params?["id"] == waitingID } else { return false } }
+        try expect(beats.count >= 3, "Heartbeats until then: \(beats.count)")
+        try expect(fixture.approver.heldCount == 1 && fixture.access.pendingRequests.count == 1, "The prompt stays up")
+
+        // The helper's own time counts: 0.8 s spent there leaves 0.2 s.
+        let lateAt = Date()
+        let late = try await client.request("call", ControlCall(tool: "get_status", elapsed: 0.8).json).toolResult()
+        let lateTook = Date().timeIntervalSince(lateAt)
+        try expect(late.structuredContent?["status"] == "waiting_for_approval" && lateTook < 0.7, "The helper's time is subtracted: \(lateTook) s")
+        try expect(fixture.approver.requests.count == 1, "Both calls joined the one prompt: \(fixture.approver.requests.count)")
+
+        // Calling again joins the prompt and runs once the person allows.
+        let retryID = try client.send("call", ControlCall(tool: "get_status").json)
+        try await Task.sleep(for: .milliseconds(200))
+        fixture.approver.release(true)
+        let retried = try await client.waitForReply(to: retryID).toolResult()
+        try expect(!retried.isError && retried.structuredContent?["library_count"] == 1 && fixture.approver.requests.count == 1, "The retry runs once allowed, no new prompt: \(retried.json)")
+
+        // A tool detaches by the same measure: 0.6 s spent in the helper leaves 0.4 s.
+        let slowAt = Date()
+        let slow = try await client.request("call", ControlCall(tool: "slow_tool", arguments: ["seconds": 3], elapsed: 0.6).json).toolResult()
+        let slowTook = Date().timeIntervalSince(slowAt)
+        try expect(slow.structuredContent?["status"] == "running" && slow.structuredContent?["job_id"]?.stringValue != nil && slowTook < 0.9,
+                   "Detached from the call's arrival at the helper, after \(slowTook) s: \(slow.json)")
+        // A claim beyond any real wait: a quick call still answers with its result.
+        let claimed = try await client.request("call", ControlCall(tool: "get_status", elapsed: 1e9).json).toolResult()
+        try expect(!claimed.isError && claimed.structuredContent?["library_count"] == 1, "A quick call answers directly: \(claimed.json)")
+        // A negative claim counts as none: the tool still detaches after the
+        // call's second (unclamped, its time would never run out).
+        let earlyAt = Date()
+        let early = try await client.request("call", ControlCall(tool: "slow_tool", arguments: ["seconds": 3], elapsed: -1e9).json).toolResult()
+        let earlyTook = Date().timeIntervalSince(earlyAt)
+        try expect(early.structuredContent?["status"] == "running" && earlyTook >= 0.9 && earlyTook < 2, "A negative elapsed is clamped to 0: \(earlyTook) s, \(early.json)")
+    }
+
+    /// The server clamps the helper's claim to ControlCall.maximumElapsed:
+    /// with a threshold above it, a claim of 10^9 s still leaves the call
+    /// its last second to wait for approval (unclamped, none at all).
+    private static func elapsedClampedAtTheServer() async throws {
+        let fixture = try await ServerFixture(approvalTimeout: 10, heartbeat: 0.05)
+        defer { fixture.cleanup() }
+        let server = fixture.makeServer(jobs: AutomationJobs(detachAfter: ControlCall.maximumElapsed + 1))
+        server.start()
+        defer { server.stop() }
+        let client = try TestClient(path: fixture.socketPath)
+        defer { client.close() }
+        try await client.hello()
+        fixture.approver.mode = .hold
+        let askedAt = Date()
+        let late = try await client.request("call", ControlCall(tool: "get_status", elapsed: 1e9).json).toolResult()
+        let took = Date().timeIntervalSince(askedAt)
+        try expect(late.structuredContent?["status"] == "waiting_for_approval" && took >= 0.8 && took < 3,
+                   "A claim of 10^9 s counts as \(Int(ControlCall.maximumElapsed)) s, leaving about 1 s: \(took) s, \(late.json)")
+        fixture.approver.release(false)
+    }
+
+    /// A new client's first start_recording that turns on the microphone:
+    /// the approval prompt, then the sound prompt, on one call whose progress
+    /// keeps increasing throughout; the sound prompt names the program that
+    /// started the helper, as the approval prompt does, besides the name the
+    /// client gives itself.
+    private static func soundPromptAfterApproval() async throws {
+        let fixture = try await ServerFixture(approvalTimeout: 10, heartbeat: 0.05)
+        defer { fixture.cleanup() }
+        let server = fixture.makeServer()
+        let prompter = ScriptedSoundPrompter()
+        prompter.mode = .hold
+        server.bridge.audioConsent = AutomationAudioConsentController(timeout: 10, heartbeatInterval: 0.05) { await prompter.prompt($0) }
+        let area = CaptureTargetInfo(id: "area-1-server", kind: .area, nativeID: 1, title: "Test area", frame: CaptureRect(x: 0, y: 0, width: 64, height: 64))
+        try fixture.model.captureEngine.registerAreaTarget(area)
+        server.start()
+        defer { server.stop() }
+        let client = try TestClient(path: fixture.socketPath)
+        defer { client.close() }
+        try await client.hello()
+        fixture.approver.mode = .hold
+        let callID = try client.send("call", ControlCall(tool: "start_recording", arguments: ["source": AIJSONValue(area.id), "microphone": true], progressToken: "rec").json)
+        func beats() -> [ControlProgress] {
+            client.messages.compactMap { message in
+                guard case let .notification("progress", params) = message, params?["id"] == callID else { return nil }
+                return try? ControlProgress.decode(params)
+            }
+        }
+        try await waitUntil("the approval prompt's heartbeats") { beats().count >= 3 }
+        fixture.approver.release(true)
+        try await waitUntil("the sound prompt") { prompter.heldCount == 1 }
+        try await waitUntil("the sound prompt's heartbeats") { beats().filter { ($0.message ?? "").contains("sound prompt") }.count >= 3 }
+        let asked = try unwrapRequest(prompter.requests.last)
+        try expect(asked.clientName == "Claude Code" && asked.programName != nil && asked.programName == fixture.identity.value?.programName && asked.audio == AIRecordingAudio(microphone: true),
+                   "The sound prompt names the client and the program that started it: \(asked)")
+        prompter.release(.cancel)
+        let refused = try await client.waitForReply(to: callID).toolResult()
+        try expect(refused.isError && refused.text.contains("did not allow sound") && fixture.model.recordingPhase == .idle, "Cancel recording: \(refused.text)")
+        let values = beats()
+        let approvalBeats = values.filter { ($0.message ?? "").contains("allow") }
+        let soundBeats = values.filter { ($0.message ?? "").contains("sound prompt") }
+        try expect(zip(values, values.dropFirst()).allSatisfy { $0.progress < $1.progress } && approvalBeats.count >= 3 && soundBeats.count >= 3
+                   && values.firstIndex { ($0.message ?? "").contains("sound prompt") }.map { index in values[..<index].allSatisfy { !($0.message ?? "").contains("sound prompt") } } == true,
+                   "Approval heartbeats, then the sound prompt's, always increasing: \(values.map { "\($0.progress) \($0.message ?? "-")" })")
+    }
+
+    private static func unwrapRequest(_ request: AutomationAudioConsentRequest?) throws -> AutomationAudioConsentRequest {
+        guard let request else { throw ServerFailure("The person was asked about sound") }
+        return request
+    }
+
     /// The script behind a real shell process, and none for zsh -c.
     private static func genericHostIdentity() async throws {
         try expect(AutomationClientIdentity.scriptArgument(in: ["node", "--no-warnings", "/a/cli.js", "--flag"]) == "/a/cli.js"
@@ -773,13 +913,14 @@ final class ServerFixture {
         socketPath: String? = nil,
         appPath: String = "/Applications/Focus Studio Test.app",
         options: ControlServer.Options? = nil,
+        jobs: AutomationJobs? = nil,
         readiness: (@MainActor () async -> Void)? = nil,
         presentWindow: (@MainActor () -> Void)? = nil
     ) -> ControlServer {
         let slow = MCPToolSpec(tool: SlowServerTool(started: slowStarted, cancelled: slowCancelled), title: "Slow", description: "Sleeps, reporting progress.", scope: .global, annotations: .reads)
         let navigating = MCPToolSpec(tool: SlowServerTool(name: "slow_nav", started: navStarted, cancelled: navCancelled), title: "Slow navigating", description: "Sleeps holding the call queue.",
                                      scope: .global, annotations: MCPToolAnnotations(readOnly: false, idempotent: true), navigates: true)
-        let bridge = AutomationBridge(model: model, catalog: MCPToolCatalog(tools: MCPToolCatalog.v1.tools + [slow, navigating]))
+        let bridge = AutomationBridge(model: model, catalog: MCPToolCatalog(tools: MCPToolCatalog.v1.tools + [slow, navigating]), jobs: jobs)
         bridge.presentWindow = presentWindow
         var configured = options ?? ControlServer.Options()
         let identity = self.identity

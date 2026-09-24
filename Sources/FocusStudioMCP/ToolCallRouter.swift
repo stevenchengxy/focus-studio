@@ -172,6 +172,7 @@ final class ToolCallRouter: @unchecked Sendable {
     /// - otherwise `.result`, an `isError` one when the call was cancelled for
     ///   another reason, such as the helper shutting down.
     func call(toolName: String, arguments: [String: AIJSONValue], progress: AIToolProgressHandler?) async -> AutomationCallResult {
+        let receivedAt = ContinuousClock.now
         guard let spec = catalog.tool(named: toolName) else {
             log.debug("tools/call \(toolName): not in the catalog")
             return .unknownTool(toolName)
@@ -190,7 +191,8 @@ final class ToolCallRouter: @unchecked Sendable {
             lastSequence += 1
             let call = ForwardedToolCall(
                 sequence: lastSequence, tool: spec, arguments: arguments, workingDirectory: workingDirectory,
-                client: session.client, protocolVersion: session.protocolVersion, progress: progress, roots: session.roots
+                client: session.client, protocolVersion: session.protocolVersion, progress: progress, roots: session.roots,
+                receivedAt: receivedAt
             )
             let task = Task { await forwarder.forward(call) }
             running[lastSequence] = task

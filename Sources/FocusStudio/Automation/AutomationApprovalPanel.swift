@@ -3,7 +3,8 @@ import FocusStudioAutomation
 import SwiftUI
 
 /// The prompt that asks the person whether an AI client may control Focus
-/// Studio, the first time it calls. The only moment an external call brings
+/// Studio, the first time it calls. With start_recording's sound prompt
+/// (``AutomationAudioConsentPanel``) the only moments an external call brings
 /// the app forward. Neither button is the default, so a Return typed into
 /// another app cannot answer it; Escape declines.
 @MainActor

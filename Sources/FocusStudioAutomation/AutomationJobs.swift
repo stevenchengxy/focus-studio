@@ -2,10 +2,14 @@ import Foundation
 
 /// Runs automation calls as jobs so no call outlives a client's tool timeout
 /// (Codex gives up after 300 s by default). A call still running after
-/// ``detachAfter`` (counted from its arrival, time spent queued included)
-/// answers at once with `{status: "running", job_id, tool, elapsed}` while
-/// the work continues, and wait_for_job collects the result later. Results
-/// of such detached jobs are kept for ``retention``, at most ``capacity`` of
+/// ``detachAfter`` answers at once with `{status: "running", job_id, tool,
+/// elapsed}` (and `activity`, what a job without measured progress waits
+/// for) while the work continues, and wait_for_job collects the result
+/// later. The threshold counts from when the call reached the app, less the
+/// time focus-studio-mcp had already spent on it (opening the app,
+/// connecting), so the approval prompt, a wait for a turn and a prompt
+/// inside the tool (start_recording's sound prompt) all count. Results of
+/// such detached jobs are kept for ``retention``, at most ``capacity`` of
 /// them; a job that finishes in time is never stored.
 @MainActor
 public final class AutomationJobs {
@@ -19,6 +23,11 @@ public final class AutomationJobs {
     public let detachAfter: TimeInterval
     public let retention: TimeInterval
     public let capacity: Int
+
+    /// The short grace a call gets past ``detachAfter`` when it reaches its
+    /// tool late (a tenth of the threshold, at most a second), so a quick
+    /// call that waited long still answers with its result.
+    public var grace: TimeInterval { min(1, detachAfter / 10) }
 
     /// Detached jobs, running or finished, by id.
     private var detached: [String: Job] = [:]
@@ -39,11 +48,12 @@ public final class AutomationJobs {
     /// calling task is cancelled first, the work is cancelled and awaited
     /// (an export removes its partial file) and the result is `.cancelled`.
     ///
-    /// `arrivedAt` is when the client's call arrived, if it waited for its
-    /// turn before this: that wait counts toward ``detachAfter``, so a queued
-    /// call answers in time as well. It still gets a short grace (a tenth of
-    /// the threshold, at most a second) so a quick call that waited long
-    /// answers with its result.
+    /// `arrivedAt` is when the client's call started counting (see the type's
+    /// description), if it waited before this (for approval, for its turn):
+    /// that wait counts toward ``detachAfter``, so such a call answers in
+    /// time as well. It still gets a short grace (a tenth of the threshold,
+    /// at most a second) so a quick call that waited long answers with its
+    /// result.
     ///
     /// With `detaches` false the call is never detached: it answers when the
     /// work does, for work that bounds its own time (wait_for_recording).
@@ -58,7 +68,7 @@ public final class AutomationJobs {
         prune()
         var budget: TimeInterval? = detachAfter
         if let arrivedAt {
-            budget = max(min(1, detachAfter / 10), detachAfter - Date().timeIntervalSince(arrivedAt))
+            budget = max(grace, detachAfter - Date().timeIntervalSince(arrivedAt))
         }
         if !detaches { budget = nil }
         let job = Job(id: UUID().uuidString.lowercased(), tool: tool, clientName: clientName)
@@ -91,8 +101,10 @@ public final class AutomationJobs {
     /// wait_for_job: waits up to `timeout_seconds` (default ``defaultWait``,
     /// at most ``maximumWait``) for a detached job and returns its result
     /// exactly as the original call would have, or the running status again.
-    /// Cancelling the wait stops only the wait, never the job.
-    public func waitForJob(arguments raw: [String: Any], progress: AIToolProgressHandler?) async -> AutomationCallResult {
+    /// With `arrivedAt` (when the call's time started, before any wait for
+    /// approval) the wait ends at most ``maximumWait`` after it. Cancelling
+    /// the wait stops only the wait, never the job.
+    public func waitForJob(arguments raw: [String: Any], arrivedAt: Date? = nil, progress: AIToolProgressHandler?) async -> AutomationCallResult {
         let arguments = AIToolArguments(raw)
         guard let id = arguments.string("job_id") else {
             return .result(.failure("Missing required argument \"job_id\" (from a result whose status is \"running\")."))
@@ -103,6 +115,9 @@ public final class AutomationJobs {
                 return .result(.failure("\"timeout_seconds\" must be a number of seconds from 0 to \(Int(Self.maximumWait)) (default \(Int(Self.defaultWait)))."))
             }
             timeout = value
+        }
+        if let arrivedAt {
+            timeout = min(timeout, max(0, Self.maximumWait - Date().timeIntervalSince(arrivedAt)))
         }
         prune()
         guard let job = detached[id.lowercased()] else {
@@ -145,17 +160,32 @@ public final class AutomationJobs {
     private func runningStatus(of job: Job) -> MCPToolCallResult {
         let elapsed = Date().timeIntervalSince(job.startedAt)
         let fraction = job.progress.latestFraction
+        // What a job without measured progress is waiting for, such as the
+        // person's answer to start_recording's sound prompt.
+        let waitingFor = fraction == nil ? job.progress.latestMessage.map(Self.sentence) : nil
         var text = "\(job.tool) is still running as job \(job.id) (\(AIToolSupport.seconds(elapsed)) s so far"
         if let fraction { text += ", \(Int((fraction * 100).rounded(.down)))% done" }
-        text += "). Call wait_for_job with job_id \"\(job.id)\" to get its result."
-        let data: AIJSONValue = [
+        text += ")"
+        if let waitingFor { text += ": \(waitingFor)" }
+        text += ". Call wait_for_job with job_id \"\(job.id)\" to get its result."
+        var data: [String: AIJSONValue] = [
             "status": "running",
             "job_id": AIJSONValue(job.id),
             "tool": AIJSONValue(job.tool),
             "elapsed": .rounded(elapsed, places: 1),
             "progress": fraction.map { .rounded($0) } ?? .null,
         ]
-        return MCPToolCallResult(content: [.text(text)], structuredContent: data)
+        if let waitingFor { data["activity"] = AIJSONValue(waitingFor) }
+        return MCPToolCallResult(content: [.text(text)], structuredContent: .object(data))
+    }
+
+    /// A progress message as part of a sentence: without its trailing
+    /// ellipsis or full stop, and starting in lower case.
+    private static func sentence(_ message: String) -> String {
+        var text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        while let last = text.last, last == "…" || last == "." { text.removeLast() }
+        guard let first = text.first else { return text }
+        return first.lowercased() + text.dropFirst()
     }
 
     /// Drops finished results older than ``retention`` and, beyond
@@ -285,6 +315,14 @@ final class AutomationProgressRelay: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// The latest report's message, if it had one.
+    var latestMessage: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let message = latest?.message, !message.isEmpty else { return nil }
+        return message
+    }
+
     /// The latest report as a fraction of its total, when it has one.
     var latestFraction: Double? {
         lock.lock()
@@ -299,32 +337,59 @@ final class AutomationProgressRelay: @unchecked Sendable {
 /// Lets calls through one at a time, in the order they arrive. The calls
 /// that change what the app shows use it, so an MCP client's parallel calls
 /// never open one project under another's edit. A caller cancelled while it
-/// waits leaves the queue without taking a turn.
+/// waits, or whose deadline passes first, leaves the queue without taking a
+/// turn.
 @MainActor
 public final class AutomationCallQueue {
+    /// How a wait for a turn ended.
+    public enum AcquireOutcome: Equatable, Sendable {
+        /// The caller has the turn; ``release()`` must follow.
+        case acquired
+        /// The caller was cancelled first.
+        case cancelled
+        /// The deadline passed first.
+        case timedOut
+    }
+
     private var isTaken = false
-    private var waiting: [(id: UUID, continuation: CheckedContinuation<Bool, Never>)] = []
+    private var waiting: [(id: UUID, continuation: CheckedContinuation<AcquireOutcome, Never>)] = []
 
     public init() {}
 
     /// Waits for this caller's turn; false when it was cancelled first. Every
     /// true must be followed by ``release()``.
     public func acquire() async -> Bool {
+        await acquire(until: nil) == .acquired
+    }
+
+    /// Waits for this caller's turn, at most until `deadline` (nil: no
+    /// limit). Every ``AcquireOutcome/acquired`` must be followed by
+    /// ``release()``; the other outcomes hold no turn.
+    public func acquire(until deadline: Date?) async -> AcquireOutcome {
         guard isTaken else {
             isTaken = true
-            return true
+            return .acquired
         }
+        if let deadline, deadline <= Date() { return .timedOut }
         let id = UUID()
+        let timer = deadline.map { deadline in
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(max(0, deadline.timeIntervalSinceNow)))
+                guard !Task.isCancelled else { return }
+                self?.leave(id, .timedOut)
+            }
+        }
+        defer { timer?.cancel() }
         return await withTaskCancellationHandler {
-            await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            await withCheckedContinuation { (continuation: CheckedContinuation<AcquireOutcome, Never>) in
                 if Task.isCancelled {
-                    continuation.resume(returning: false)
+                    continuation.resume(returning: .cancelled)
                 } else {
                     waiting.append((id, continuation))
                 }
             }
         } onCancel: {
-            Task { @MainActor [weak self] in self?.withdraw(id) }
+            Task { @MainActor [weak self] in self?.leave(id, .cancelled) }
         }
     }
 
@@ -333,15 +398,19 @@ public final class AutomationCallQueue {
         if waiting.isEmpty {
             isTaken = false
         } else {
-            waiting.removeFirst().continuation.resume(returning: true)
+            waiting.removeFirst().continuation.resume(returning: .acquired)
         }
     }
+
+    /// Whether a caller has the turn now, so the next one would wait.
+    public var isBusy: Bool { isTaken }
 
     /// Callers waiting for a turn.
     public var waitingCount: Int { waiting.count }
 
-    private func withdraw(_ id: UUID) {
+    /// Takes a caller that is still waiting out of the queue.
+    private func leave(_ id: UUID, _ outcome: AcquireOutcome) {
         guard let index = waiting.firstIndex(where: { $0.id == id }) else { return }
-        waiting.remove(at: index).continuation.resume(returning: false)
+        waiting.remove(at: index).continuation.resume(returning: outcome)
     }
 }

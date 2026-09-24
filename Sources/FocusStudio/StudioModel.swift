@@ -650,11 +650,12 @@ final class StudioModel: ObservableObject {
     }
 
     /// `target` as the engine last listed it, checked when a countdown ends.
-    /// An empty list (the engine could not list sources, or never has) is
-    /// left to the capture start, which reports the real reason.
+    /// A list without displays or windows (the engine could not list
+    /// sources, or never has; a selected area alone is no listing) is left to
+    /// the capture start, which reports the real reason.
     private func listedTarget(for target: CaptureTargetInfo) -> CaptureTargetInfo? {
         let listed = captureEngine.availableTargets
-        guard !listed.isEmpty else { return target }
+        guard listed.contains(where: { $0.kind != .area }) else { return target }
         if target.kind == .area {
             let displayStillExists = listed.contains { $0.kind == .display && $0.nativeID == target.nativeID }
             return displayStillExists ? target : nil

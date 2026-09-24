@@ -7,7 +7,8 @@
 # paths, per-export options with progress and cancellation, get_project,
 # get_status), the MCP layer (tool catalog, result shape and inline images,
 # long-call jobs, library tools), recording sessions (start returns once
-# live, duration auto-stop, wait_for_recording, cancellation), AVFoundation
+# live, duration auto-stop, wait_for_recording, cancellation, the sound
+# prompt for sound an external start adds), AVFoundation
 # clip assembly and the Ark client against a local Python fixture server.
 set -euo pipefail
 SCRIPT_DIR="${0:A:h}"

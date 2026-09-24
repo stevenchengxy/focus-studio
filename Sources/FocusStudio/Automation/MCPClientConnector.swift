@@ -48,9 +48,13 @@ enum MCPClientKind: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// The command a person can paste into Terminal, the path quoted.
-    func commandLine(helperPath: String) -> String {
-        ([executableName] + addArguments(helperPath: helperPath)).map(ShellQuoting.quote).joined(separator: " ")
+    /// The command a person can paste into Terminal: the CLI found on this
+    /// Mac (`cliPath`, which may not be on the person's PATH, such as the
+    /// `codex` inside ChatGPT.app), else the bare command name, with every
+    /// path shell-quoted.
+    func commandLine(helperPath: String, cliPath: String? = nil) -> String {
+        let command = cliPath.flatMap { $0.isEmpty ? nil : $0 } ?? executableName
+        return ([command] + addArguments(helperPath: helperPath)).map(ShellQuoting.quote).joined(separator: " ")
     }
 
     /// Where the CLI is usually installed, after PATH.
@@ -434,8 +438,10 @@ final class MCPClientConnector: ObservableObject {
         statuses[kind] ?? MCPClientStatus()
     }
 
+    /// The copyable command: with the CLI this connector found (the last
+    /// check's), else the bare command name.
     func commandLine(for kind: MCPClientKind) -> String {
-        kind.commandLine(helperPath: helperPath)
+        kind.commandLine(helperPath: helperPath, cliPath: statuses[kind]?.cliPath ?? located?.executables[kind])
     }
 
     /// Finds the CLIs again and asks each for its registration.

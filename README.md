@@ -49,6 +49,45 @@ Focus Studio 是一个原生 macOS 产品 Demo 录制与编辑器，核心工作
 
 4 首原创 BGM 和 4 种原创音效由 [`scripts/generate-audio-assets.swift`](scripts/generate-audio-assets.swift) 程序化生成；另外收录了作者页面明确标记为 CC0 的 `City Loop`、`Overworld (BGM)`、`Calm Loop` 与 `Loading Screen Loop`。完整作者、来源、许可、SHA-256 与编码信息见 [`Resources/Audio/README.md`](Resources/Audio/README.md)。构建脚本会生成原创资源、验证网络资源哈希并打包完整目录。
 
+## 让 Claude Code / Codex 直接使用 Focus Studio（MCP，1.5）
+
+应用内附带 MCP server `Focus Studio.app/Contents/MacOS/focus-studio-mcp`（stdio，基于官方 MCP Swift SDK 0.12.1）。接入后，在 Claude Code 或 Codex 里一句话即可完成"列出录制源 → 录制 → 加缩放、字幕、配乐 → 导出到当前目录"，例如：
+
+> 录制 Chrome 里 localhost:3000 的窗口 20 秒（我来操作），配上 Calm Loop，导出 1920 宽 60 fps 的 MP4 到 ./demo.mp4
+
+- **前台可见**：所有工具都在 Focus Studio 应用里执行。编辑工具和 `capture_frame`、`export_project` 按 `project_id` 先在编辑器里打开对应项目（开着别的项目会先保存再切换）；`assemble_video`、`list_assets` 的 `project_id` 可选，只用来定位该项目的素材目录，不会打开项目。主窗口顶栏下方显示"Claude Code 正在操作…"，每一步改动都能实时看到，也可以随时接手。录制中或应用正忙时，这些工具返回明确的错误。应用没在运行时，第一次调用会在后台启动它（不抢键盘焦点）；只列出工具不会启动应用。
+- **首次连接批准**：新的 AI 工具第一次调用时，应用弹窗显示它自报的名称和实际启动 helper 的程序路径，允许后记住。**设置 › AI 工具** 里有总开关"允许 AI 工具控制 Focus Studio"和已批准列表，可以随时撤销。helper 与应用只通过本机 Unix socket 通信（目录 0700、socket 0600、校验同一用户），不监听网络端口。
+- **录制**：`start_recording` 后先显示 3 秒悬浮倒计时（写明哪个 AI 工具请求录制什么，可以取消），然后是悬浮控制条，你随时可以结束或取消；倒计时和控制条都不会录进视频，结束的录制都保存到项目库（取消的会被删除），没有静默录制。调用在录制真正开始后就返回，AI 可以用自己的工具操作被录的内容。`duration`（1–600 秒）从第一帧起计时并自动停止，控制条显示剩余时间；`wait_for_recording` 等待录制结束（每次最多 240 秒，没结束就再调用），`stop_recording` 立即停止，两者都返回新项目的 `project_id`；录制已经结束时 `wait_for_recording` 返回 `idle`，`last_recording` 里是上一次录制怎样结束，保存了的话还有 `project_id`。录制沿用 Focus Studio 自己的录屏权限，不需要给终端授权。
+- **声音先问你**：AI 要为某次录制打开麦克风或系统音频（`microphone` / `system_audio`），而你在录制器里没有打开它们时，倒计时之前 Focus Studio 会弹窗写明哪个 AI 工具（以及实际启动它的程序）要录哪种声音、录什么，让你选 **仅本次允许**（Allow for this recording）、**无声录制**（Record without sound，只录画面、不录任何声音，录制器里本来打开的声音这次也不录；AI 会在结果里看到）或 **取消录制**（Cancel recording，Esc 同样取消，没有默认按钮）；60 秒没有回答就不录制。询问期间你在录制器里关掉的声音，这次录制也不会录。每次录制都重新询问，不会记住，也不改你的录制设置。不额外加声音的录制直接开始，不会被打断；应用内的 AI 助手由你自己操作，不会询问。
+- **路径与保护**：相对路径按 AI 工具当前的工作目录解析。导出默认不覆盖已有文件（`overwrite: true` 才覆盖），也不会写项目自己的 `raw.mp4` 和素材；项目库只由应用写入，外部工具不能直接改 `project.json`。
+- **长操作**：导出和拼接发送进度通知。一个调用从到达 Focus Studio 算起约 200 秒后仍在进行时返回 `job_id`，用 `wait_for_job` 继续等；这 200 秒还扣除了 helper 启动应用、建立连接已经用掉的时间，等待批准、排队和等你回答声音询问的时间也都算在内，所以新 AI 工具的第一次调用同样会在 Codex 的 300 秒超时之内得到回答。批准面板 2 分钟内没人处理时，这次调用不执行，返回错误提示 AI 请你点允许后再调用一次（面板保持打开，再调用会等同一个面板）；极少数情况下（helper 启动和连接应用用了很久）调用的时间会先用完，这时返回 `waiting_for_approval`，处理方式相同。排队时时间用完（例如另一个 AI 工具的调用一直占着），调用同样不执行，返回 `waiting_for_turn`，AI 再调用一次即可；还在等你回答声音询问时，调用返回 `job_id`，AI 用 `wait_for_job` 取得录制结果。Codex 0.141.0 起默认 300 秒的工具超时足够，一般不需要改配置；更早的 Codex 默认只等 120 秒，请更新，或在 `~/.codex/config.toml` 的 `[mcp_servers.focus-studio]` 下设置 `tool_timeout_sec = 300`，详见 [安装与首次使用](docs/INSTALL.md) 的常见问题。
+- **不开放**：付费生成（`generate_image` / `generate_video`）、点击和键盘输入、Shell 命令。需要 AI 片头片尾时，Claude Code 可以用 `skills/` 里的 Seedream / Seedance skill。
+
+24 个工具：
+
+| 类别 | 工具 |
+| --- | --- |
+| 状态与项目 | `get_status`、`list_projects`、`get_project`、`rename_project`、`delete_project`（移到废纸篓） |
+| 导入 | `import_video`、`create_screenshot_demo` |
+| 录制 | `list_recording_sources`、`start_recording`、`stop_recording`、`wait_for_recording` |
+| 编辑 | `add_zoom`、`remove_zoom`、`set_zoom_style`、`update_settings`（含导出宽度和帧率）、`set_chapters`、`set_background_image`、`set_background_music`、`set_sound_effects` |
+| 输出 | `capture_frame`（直接返回图片）、`export_project`、`assemble_video`、`list_assets` |
+| 长任务 | `wait_for_job` |
+
+**接入**：打开 Focus Studio → **设置 › AI 工具**（AI tools）→ **接入 AI 工具** 中对 Claude Code 或 Codex 点 **接入**（Connect）。应用调用它们自己的命令注册，不改其他配置。每个客户端下方还有可复制的命令：开头是应用找到的命令行工具的完整路径（例如 ChatGPT.app 内置的 `codex`，它不在 PATH 中），找不到时才写 `claude` / `codex`。也可以手动执行（应用在"应用程序"里时）：
+
+```bash
+claude mcp add --scope user focus-studio -- "/Applications/Focus Studio.app/Contents/MacOS/focus-studio-mcp"
+codex mcp add focus-studio -- "/Applications/Focus Studio.app/Contents/MacOS/focus-studio-mcp"
+```
+
+只有 ChatGPT.app / Codex.app 内置的 `codex` 时，把 `codex` 换成它的完整路径（如 `/Applications/ChatGPT.app/Contents/Resources/codex`；设置页的 **拷贝命令** 已经是这样）。接入后开始新的会话即可。批准、撤销和排错见 [安装与首次使用](docs/INSTALL.md)；给 Claude Code 的使用说明见 [`skills/focus-studio-mcp/SKILL.md`](skills/focus-studio-mcp/SKILL.md)。
+
+已知限制：
+
+- Playwright、Claude in Chrome 这类通过浏览器调试协议（DevTools protocol）产生的点击和输入不是真实的鼠标、键盘事件，Focus Studio 记录不到，也就不会自动缩放；录完后用 `add_zoom` 补上。
+- 本地 ad-hoc 签名的包每次重新构建后，macOS 可能要求重新授权录屏。
+
 ## 可操控应用的 AI 助手、Codex 大脑、语音与数字人（1.4）
 
 - **助手可以操控 Focus Studio**：独立的 AI 助手窗口跨页面存活。对话即可完成整条流程：列出可录制的窗口/显示器 → 开始录制（自动倒计时）→ 停止并进入编辑器 → 增删缩放、调整镜头风格、选择背景音乐/音效、写入章节字幕 → 导出 → 生成 AI 片头/片尾并拼接。
@@ -72,7 +111,7 @@ Focus Studio 是一个原生 macOS 产品 Demo 录制与编辑器，核心工作
 
 ## AI 视频与生图 Skills（火山引擎）
 
-`skills/` 目录提供四个 Claude Code Skills：用火山方舟 Seedance 生成片头/转场/片尾镜头、用 Seedream 生成标题卡与主视觉、把 Focus Studio 项目转成分镜 JSON，以及用 ffmpeg 把 AI 片段与录屏导出合成为企业级产品演示视频。AI 片段是可选项，不影响录制与编辑。密钥只从环境变量或 `~/.config/focus-studio/ark.env` 读取，绝不写入仓库。详见 [`skills/README.md`](skills/README.md)。
+`skills/` 目录提供四个 Claude Code Skills：用火山方舟 Seedance 生成片头/转场/片尾镜头、用 Seedream 生成标题卡与主视觉、把 Focus Studio 项目转成分镜 JSON，以及用 ffmpeg 把 AI 片段与录屏导出合成为企业级产品演示视频。AI 片段是可选项，不影响录制与编辑。密钥只从环境变量或 `~/.config/focus-studio/ark.env` 读取，绝不写入仓库。另有 `focus-studio-mcp`（1.5），教 Claude Code 通过 MCP 工具录制、编辑和导出，不涉及付费生成。详见 [`skills/README.md`](skills/README.md)。
 
 ## 截图转 Demo
 
@@ -123,14 +162,14 @@ Focus Studio 会通过本机 [`codex app-server`](https://developers.openai.com/
 
 使用 `dist/releases/` 中的 DMG 或 ZIP。DMG 中将 **Focus Studio.app** 拖入 **Applications**，然后从应用程序启动。支持 macOS 15+ 的 Apple 芯片和 Intel Mac；录屏、编辑、导出不要求安装 Swift、Node.js、Homebrew 或 FFmpeg。
 
-每台机器分别授予录屏权限；需要外部应用点击跟踪时授予输入监控。完整步骤见 [安装与首次使用](docs/INSTALL.md)。当前没有 Developer ID 证书，生成的是标记为 `local` 的本地签名包，尚未 Apple 公证；正式签名、公证命令见 [发布指南](docs/RELEASE.md)。
+每台机器分别授予录屏权限；需要外部应用点击跟踪时授予输入监控。完整步骤（包括接入 Claude Code / Codex）见 [安装与首次使用](docs/INSTALL.md)。当前没有 Developer ID 证书，生成的是标记为 `local` 的本地签名包，尚未 Apple 公证；正式签名、公证命令见 [发布指南](docs/RELEASE.md)。
 
 ## 构建与运行
 
 要求：
 
 - macOS 15 或更高版本
-- Xcode Command Line Tools / Swift 5.10 或更新版本
+- Xcode Command Line Tools / Swift 6.1 或更新版本（1.5 起 MCP Swift SDK 及其依赖的清单要求 Swift 6；已在 Swift 6.1 上构建验证）
 - Codex Director 为可选功能；使用时需要本机 Codex CLI 或 ChatGPT macOS 应用内置 Codex
 
 ```bash
@@ -139,13 +178,13 @@ chmod +x scripts/build-app.sh scripts/test.sh
 open "dist/Focus Studio.app"
 ```
 
-`build-app.sh` 默认构建 arm64 + x86_64 通用应用、打包音频并验证动态依赖、最低系统版本与签名；输出 `dist/Focus Studio.app`。本机快速构建可设置 `FOCUS_STUDIO_ARCHS=native`。如果机器上没有签名证书，脚本使用绑定 `com.local.focusstudio` 的 ad-hoc 签名；重新构建后 macOS 可能再次要求授权。正式发布需要 `FOCUS_STUDIO_SIGNING_IDENTITY`，使用 Developer ID 签名。
+`build-app.sh` 默认构建 arm64 + x86_64 通用应用、打包音频并验证动态依赖、最低系统版本与签名；输出 `dist/Focus Studio.app`。1.5 起同时按架构构建 MCP helper `focus-studio-mcp`，放进 `Contents/MacOS/`：它静态链接官方 MCP Swift SDK（`Package.swift` 精确锁定 0.12.1，版本记录在 `Package.resolved`，首次构建需要联网拉取），仍然只链接系统库；脚本先用独立标识 `com.local.focusstudio.mcp` 给 helper 签名，再签整个应用，并把 SDK 及其依赖的许可证写入 `Contents/Resources/ThirdPartyNotices.txt`。本机快速构建可设置 `FOCUS_STUDIO_ARCHS=native`。如果机器上没有签名证书，脚本使用绑定 `com.local.focusstudio` 的 ad-hoc 签名；重新构建后 macOS 可能再次要求授权。正式发布需要 `FOCUS_STUDIO_SIGNING_IDENTITY`，使用 Developer ID 签名。
 
 ```bash
 ./scripts/package-release.sh
 ```
 
-该命令构建通用应用并生成 DMG、ZIP、SHA-256 校验文件。只打包应用及静态素材，不复制个人项目或登录凭据。
+该命令构建通用应用并生成 DMG、ZIP、SHA-256 校验文件。只打包应用及静态素材，不复制个人项目或登录凭据。`verify-release.sh` 同时检查 helper：架构与应用一致、只依赖系统库、签名标识、没有 entitlements，并对每个可运行的架构做一次 stdio 冒烟测试（握手、24 个工具与 `Tests/MCPTests/v1-tools.txt` 一致）。
 
 ## macOS 权限
 
@@ -178,6 +217,8 @@ open "dist/Focus Studio.app"
 - 验证新项目不自动配置 BGM/点击音/Zoom 音，并验证 8 首 BGM、4 种 SFX 的 catalog 完整性；
 - 检查输出尺寸、时长、缩放帧差异、裁剪区域与音视频可读性。
 - 用隔离的临时项目库反复测试打开、编辑、返回、旧绑定读取与过期回调，验证最新修改落盘。
+- 验证 MCP 控制通道（`FocusStudioAppRegression`）：按 `project_id` 编辑、首次连接批准与撤销、调用时间从到达应用算起（等批准或排队超过这段时间时返回 `waiting_for_approval` / `waiting_for_turn`，helper 报告的已用时间限制在 0–600 秒）、socket 权限、录制会话（倒计时、`duration`、`wait_for_recording`、取消、声音询问），以及一次真实链路的端到端调用（`focus-studio-mcp` → 控制服务 → 应用模型，使用临时项目库）；一键接入只针对假的 `claude` / `codex`，不会改动本机配置。
+- 运行 `scripts/test-mcp.sh`：工具目录（24 个工具，与 `Tests/MCPTests/v1-tools.txt` 一致）、SDK 适配层、协议版本协商、进度、取消、断线重连；用只依赖标准库的 Python MCP 客户端通过真实 stdio 驱动构建出的 helper，并连接一个假的应用。所有 helper 都设置 `FOCUS_STUDIO_MCP_NO_LAUNCH=1` 和临时 socket，不会打开或连接真实的 Focus Studio。
 
 端到端产物位于 `.artifacts/e2e/`。
 

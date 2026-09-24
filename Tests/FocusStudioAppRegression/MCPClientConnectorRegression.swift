@@ -20,7 +20,7 @@ enum MCPClientConnectorRegression {
         try await failures(fixture)
         try parsing()
         try commandsAndWarnings(fixture)
-        print("MCPClientConnectorRegression: PASS (login-shell PATH lookup with noisy startup output, broken install skipped, hanging shell timed out, missing CLIs, exact add/remove/get argument arrays, already connected is a no-op, another copy updated by remove + add, CLI errors and timeouts reported, Focus Studio test variables kept from CLIs, claude/codex output parsing, copyable shell-quoted commands, translocated/disk image/missing helper warnings)")
+        print("MCPClientConnectorRegression: PASS (login-shell PATH lookup with noisy startup output, broken install skipped, hanging shell timed out, missing CLIs, exact add/remove/get argument arrays, already connected is a no-op, another copy updated by remove + add, CLI errors and timeouts reported, Focus Studio test variables kept from CLIs, claude/codex output parsing, copyable shell-quoted commands with the CLI path found (bare name when none), translocated/disk image/missing helper warnings)")
     }
 
     private static func locating(_ fixture: FakeCLIFixture) async throws {
@@ -41,6 +41,7 @@ enum MCPClientConnectorRegression {
         let missing = MCPClientConnector(helperPath: fixture.helperPath, search: fixture.search(shell: nil, path: "/usr/bin:/bin"))
         await missing.refresh()
         try expect(missing.status(for: .claudeCode).state == .cliNotFound && missing.status(for: .codex).state == .cliNotFound, "Missing CLIs are reported")
+        try expect(missing.commandLine(for: .codex).hasPrefix("codex mcp add focus-studio -- "), "Without a CLI the command names it bare: \(missing.commandLine(for: .codex))")
         await missing.connect(.codex)
         try expect(missing.status(for: .codex).state == .cliNotFound, "Connect without a CLI reports it missing")
     }
@@ -48,8 +49,13 @@ enum MCPClientConnectorRegression {
     private static func connecting(_ fixture: FakeCLIFixture) async throws {
         fixture.reset()
         let connector = MCPClientConnector(helperPath: fixture.helperPath, search: fixture.search(), commandTimeout: 5)
+        let beforeCheck = connector.commandLine(for: .claudeCode)
+        try expect(beforeCheck.hasPrefix("claude mcp add "), "Before any CLI is found, the command names claude bare: \(beforeCheck)")
         await connector.refresh()
         try expect(connector.status(for: .claudeCode) == MCPClientStatus(cliPath: fixture.claude, state: .notConnected), "claude: not connected: \(connector.status(for: .claudeCode))")
+        try expect(connector.commandLine(for: .claudeCode) == MCPClientKind.claudeCode.commandLine(helperPath: fixture.helperPath, cliPath: fixture.claude)
+                   && connector.commandLine(for: .codex).hasPrefix(ShellQuoting.quote(fixture.codex) + " mcp add focus-studio -- "),
+                   "The copyable commands use the CLIs found: \(connector.commandLine(for: .claudeCode)) / \(connector.commandLine(for: .codex))")
         try expect(connector.status(for: .codex) == MCPClientStatus(cliPath: fixture.codex, state: .notConnected), "codex: not connected: \(connector.status(for: .codex))")
 
         await connector.connect(.claudeCode)
@@ -162,6 +168,12 @@ enum MCPClientConnectorRegression {
         let path = "/Applications/Focus Studio.app/Contents/MacOS/focus-studio-mcp"
         try expect(MCPClientKind.claudeCode.commandLine(helperPath: path) == "claude mcp add --scope user focus-studio -- '/Applications/Focus Studio.app/Contents/MacOS/focus-studio-mcp'", "claude command: \(MCPClientKind.claudeCode.commandLine(helperPath: path))")
         try expect(MCPClientKind.codex.commandLine(helperPath: path) == "codex mcp add focus-studio -- '/Applications/Focus Studio.app/Contents/MacOS/focus-studio-mcp'", "codex command")
+        // The CLI found on this Mac, which may not be on PATH (the codex inside ChatGPT.app), shell-quoted.
+        let bundled = MCPClientKind.codex.commandLine(helperPath: path, cliPath: "/Applications/ChatGPT.app/Contents/Resources/codex")
+        try expect(bundled == "/Applications/ChatGPT.app/Contents/Resources/codex mcp add focus-studio -- '/Applications/Focus Studio.app/Contents/MacOS/focus-studio-mcp'", "codex command with its path: \(bundled)")
+        let spaced = MCPClientKind.claudeCode.commandLine(helperPath: path, cliPath: "/Users/me/My Tools/claude")
+        try expect(spaced == "'/Users/me/My Tools/claude' mcp add --scope user focus-studio -- '/Applications/Focus Studio.app/Contents/MacOS/focus-studio-mcp'", "claude command with a quoted path: \(spaced)")
+        try expect(MCPClientKind.codex.commandLine(helperPath: path, cliPath: "") == MCPClientKind.codex.commandLine(helperPath: path), "An empty path is no path")
         try expect(ShellQuoting.quote("it's") == #"'it'\''s'"# && ShellQuoting.quote("/plain/path") == "/plain/path" && ShellQuoting.quote("") == "''", "Shell quoting")
         let search = fixture.search(shell: nil)
         try expect(MCPClientConnector(helperPath: "/private/var/folders/x/AppTranslocation/ABC/d/Focus Studio.app/Contents/MacOS/focus-studio-mcp", search: search).helperWarning?.contains("temporary location") == true, "Translocated")

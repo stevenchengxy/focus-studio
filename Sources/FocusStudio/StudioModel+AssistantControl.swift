@@ -143,6 +143,12 @@ extension StudioModel: AppControlling {
         return nil
     }
 
+    /// The sound the recorder's own choices record, which an external
+    /// start_recording may add to only with the person's consent.
+    var recorderAudio: AIRecordingAudio {
+        AIRecordingAudio(microphone: recordMicrophone, systemAudio: recordSystemAudio)
+    }
+
     func startRecording(sourceID: String, options: AIRecordingOptions) throws -> UUID {
         guard !captureEngine.isRecording, destination != .countdown, currentRecording?.isLive != true else {
             throw AIToolError.failed("A recording is already in progress.")

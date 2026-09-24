@@ -147,6 +147,10 @@ enum AutomationAccessDecision: Equatable, Sendable {
     case allowed
     /// An `isError` text for the model.
     case refused(String)
+    /// The call's time ran out (see ``AutomationAccessController/authorize(identity:client:tool:connection:deadline:progress:)``)
+    /// while the prompt still waits for the person: the result for the
+    /// model, which may call again and join the same prompt.
+    case stillAsking(MCPToolCallResult)
     /// The caller was cancelled while the prompt was up.
     case cancelled
 }
@@ -155,9 +159,13 @@ enum AutomationAccessDecision: Equatable, Sendable {
 /// are turned off; at once for an approved client; otherwise it asks the
 /// person (one prompt per client, which later calls join) and waits up to
 /// ``timeout``, relaying heartbeat progress so the client does not give up.
-/// The prompt stays up after a call times out, and its answer is still
-/// remembered. Nothing outside the app can answer it: the approver is the
-/// app's own panel, and tests pass their own.
+/// A call whose own time runs out first (its deadline: the moment it would
+/// answer with a job, ``AutomationJobs``) stops waiting with a
+/// "waiting_for_approval" result it can call again with, so the wait never
+/// pushes a first call past the client's tool timeout. The prompt stays up
+/// after a call stops waiting, and its answer is still remembered. Nothing
+/// outside the app can answer it: the approver is the app's own panel, and
+/// tests pass their own.
 ///
 /// A client that cannot be remembered (a generic host with no script, see
 /// ``AutomationClientIdentity/isRememberable``) is asked once per
@@ -199,11 +207,15 @@ final class AutomationAccessController {
         pending.values.map(\.request).sorted { $0.identity.key < $1.identity.key }
     }
 
+    /// `deadline` is when the call has to answer (nil: no limit besides
+    /// ``timeout``); waiting for the person past it ends in
+    /// ``AutomationAccessDecision/stillAsking(_:)``.
     func authorize(
         identity: AutomationClientIdentity?,
         client: ControlClientInfo?,
         tool: String,
         connection: AutomationConnectionAccess,
+        deadline: Date? = nil,
         progress: AIToolProgressHandler?
     ) async -> AutomationAccessDecision {
         guard store.isEnabled else { return .refused(Self.disabledMessage(tool: tool)) }
@@ -227,7 +239,7 @@ final class AutomationAccessController {
         }
 
         let prompt = pending[scope] ?? ask(AutomationApprovalRequest(identity: identity, clientName: name, clientVersion: client?.version, toolName: tool), scope: scope, connection: connection)
-        switch await wait(for: prompt, client: name, progress: progress) {
+        switch await wait(for: prompt, client: name, deadline: deadline, progress: progress) {
         case .decided(true):
             // Turned off while the prompt was up.
             guard store.isEnabled else { return .refused(Self.disabledMessage(tool: tool)) }
@@ -236,6 +248,8 @@ final class AutomationAccessController {
             return .refused(Self.declinedMessage(client: name, tool: tool))
         case .timedOut:
             return .refused(Self.timeoutMessage(client: name, tool: tool, seconds: timeout))
+        case .outOfTime:
+            return .stillAsking(Self.stillAskingResult(client: name, tool: tool))
         case .cancelled:
             return .cancelled
         }
@@ -280,18 +294,26 @@ final class AutomationAccessController {
         prompt.resolve(allowed)
     }
 
-    private enum WaitOutcome { case decided(Bool), timedOut, cancelled }
+    private enum WaitOutcome { case decided(Bool), timedOut, outOfTime, cancelled }
 
-    private func wait(for prompt: PendingApproval, client: String, progress: AIToolProgressHandler?) async -> WaitOutcome {
-        enum Event: Sendable { case decided(Bool?), timedOut, heartbeatStopped }
+    private func wait(for prompt: PendingApproval, client: String, deadline: Date?, progress: AIToolProgressHandler?) async -> WaitOutcome {
+        enum Event: Sendable { case decided(Bool?), timedOut, outOfTime, heartbeatStopped }
         let timeout = self.timeout
         let interval = heartbeatInterval
         let message = "Waiting for the person to allow \(client) in Focus Studio…"
+        // The call's own time, when it runs out before the prompt's timeout.
+        let remaining = deadline.map { max(0, $0.timeIntervalSinceNow) }.flatMap { $0 < timeout ? $0 : nil }
         return await withTaskGroup(of: Event.self) { group in
             group.addTask { @MainActor in .decided(await prompt.wait()) }
             group.addTask {
                 try? await Task.sleep(for: .seconds(timeout))
                 return .timedOut
+            }
+            if let remaining {
+                group.addTask {
+                    try? await Task.sleep(for: .seconds(remaining))
+                    return .outOfTime
+                }
             }
             if let progress {
                 group.addTask {
@@ -315,6 +337,8 @@ final class AutomationAccessController {
                     return .cancelled
                 case .timedOut:
                     return Task.isCancelled ? .cancelled : .timedOut
+                case .outOfTime:
+                    return Task.isCancelled ? .cancelled : .outOfTime
                 case .heartbeatStopped:
                     continue
                 }
@@ -339,6 +363,20 @@ final class AutomationAccessController {
 
     static func declinedMessage(client: String, tool: String) -> String {
         "The person declined to let \(client) control Focus Studio, so \(tool) did not run and nothing was changed. Do not retry on your own; if the person changes their mind, they can allow \(client) in Focus Studio › Settings › AI tools."
+    }
+
+    /// The answer for a call whose time ran out while the prompt waits: not
+    /// run, nothing changed, and calling again joins the same prompt (or
+    /// runs at once once the person has allowed the client).
+    static func stillAskingResult(client: String, tool: String) -> MCPToolCallResult {
+        let text = "Focus Studio is still waiting for the person to allow \(client) to control it, so \(tool) has not run yet and nothing was changed. The prompt stays open in Focus Studio: call \(tool) again with the same arguments to keep waiting (it runs as soon as the person clicks Allow), and tell the person to click Allow in the Focus Studio window that asks about \(client)."
+        let data: AIJSONValue = [
+            "status": "waiting_for_approval",
+            "tool": AIJSONValue(tool),
+            "client": AIJSONValue(client),
+            "retry": true,
+        ]
+        return MCPToolCallResult(content: [.text(text)], structuredContent: data, isError: true)
     }
 
     static func timeoutMessage(client: String, tool: String, seconds: TimeInterval) -> String {

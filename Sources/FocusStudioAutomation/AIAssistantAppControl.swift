@@ -57,6 +57,15 @@ public struct AIRecordingSource: Equatable, Sendable, Identifiable {
         ]
     }
 
+    /// What the person reads: a display's name, or a window's app and title
+    /// ("Safari — Docs"), as the floating countdown names it.
+    public var displayName: String {
+        if kind == .window, let appName, !appName.isEmpty, appName != title {
+            return title.isEmpty ? appName : "\(appName) — \(title)"
+        }
+        return title.isEmpty ? (appName ?? kind.rawValue) : title
+    }
+
     /// One line for the model, e.g. `id win-12 · window · Safari — Docs · 1440×900`.
     var summaryLine: String {
         var parts = ["id \(id)", kind.rawValue]
@@ -152,6 +161,79 @@ public struct AIRecordingOptions: Equatable, Sendable {
         self.duration = duration
     }
 }
+
+/// The sound a recording captures besides the screen.
+public struct AIRecordingAudio: Equatable, Sendable {
+    public var microphone: Bool
+    public var systemAudio: Bool
+
+    public init(microphone: Bool = false, systemAudio: Bool = false) {
+        self.microphone = microphone
+        self.systemAudio = systemAudio
+    }
+
+    public var isEmpty: Bool { !microphone && !systemAudio }
+
+    /// The sources by their start_recording argument names, for structured results.
+    public var argumentNames: [String] {
+        (microphone ? ["microphone"] : []) + (systemAudio ? ["system_audio"] : [])
+    }
+
+    /// "the microphone", "system audio" or both, for texts to the model.
+    public var phrase: String {
+        switch (microphone, systemAudio) {
+        case (true, true): return "the microphone and system audio"
+        case (true, false): return "the microphone"
+        case (false, true): return "system audio"
+        case (false, false): return "no sound"
+        }
+    }
+
+    /// The sound `options` turns on that `recorder` (the person's own recorder
+    /// settings) would not record: what an AI tool must ask the person for.
+    public static func added(by options: AIRecordingOptions, to recorder: AIRecordingAudio) -> AIRecordingAudio {
+        AIRecordingAudio(
+            microphone: options.microphone == true && !recorder.microphone,
+            systemAudio: options.systemAudio == true && !recorder.systemAudio
+        )
+    }
+}
+
+/// What an external start_recording asks the person before its countdown:
+/// the sound the call turns on for this recording that the person's own
+/// recorder settings leave off.
+public struct AIRecordingAudioConsentRequest: Equatable, Sendable {
+    public var audio: AIRecordingAudio
+    /// The source to record, as the person reads it (``AIRecordingSource/displayName``).
+    public var sourceName: String
+
+    public init(audio: AIRecordingAudio, sourceName: String) {
+        self.audio = audio
+        self.sourceName = sourceName
+    }
+}
+
+/// The person's answer to a sound prompt, as start_recording gets it.
+public enum AIRecordingAudioConsent: Equatable, Sendable {
+    /// Record with the sound asked for, this recording only.
+    case allowed
+    /// Record the screen only: no sound at all, also none the person's
+    /// recorder settings would record, this recording only.
+    case withoutSound
+    /// The person chose Cancel recording (or closed the prompt): nothing records.
+    case declined
+    /// Nobody answered within this many seconds; the prompt is gone and
+    /// nothing records.
+    case timedOut(TimeInterval)
+    /// The call may no longer run (AI tools turned off, the client revoked
+    /// while the prompt was up): the text for the model.
+    case refused(String)
+}
+
+/// Asks the person whether an external start_recording may record the sound
+/// in the request, reporting heartbeat progress (when given a handler) so
+/// the client keeps waiting. Never remembered: each recording asks again.
+public typealias AIRecordingAudioConsentHandler = @Sendable (AIRecordingAudioConsentRequest, AIToolProgressHandler?) async -> AIRecordingAudioConsent
 
 /// How a recording attempt ended.
 public enum AIRecordingOutcome: Equatable, Sendable {
@@ -279,6 +361,10 @@ public protocol AppControlling: AnyObject, Sendable {
     /// The error the app is currently showing the user, if any, including the
     /// recorder's Screen Recording permission notice after a refused start.
     var lastReportedError: String? { get }
+    /// The sound the person's own recorder settings record (what a recording
+    /// without options captures besides the screen). An external
+    /// start_recording that turns on more asks the person first.
+    var recorderAudio: AIRecordingAudio { get }
     /// Selects the source and starts the visible countdown for a recording
     /// with these options (for this recording only), and returns the new
     /// attempt's id (``recordingSession``). Throws when the app cannot start
@@ -632,10 +718,51 @@ struct StartRecordingTool: AIAssistantTool {
             sources = try await AIToolSupport.appAction(context) { try await app.refreshRecordingSources() }
         }
         let source = try Self.resolveSource(query, in: sources)
-        let requestedOptions = options
-        let sessionID = try await AIToolSupport.appAction(context) {
-            try await MainActor.run { try app.startRecording(sourceID: source.id, options: requestedOptions) }
+        // Sound the person's own recorder settings leave off is recorded only
+        // when the person allows it, asked before the countdown and never
+        // remembered. The in-app assistant never asks: the person drives it.
+        var asked = AIRecordingAudio()
+        var consent: AIRecordingAudioConsent?
+        if context.isExternal {
+            asked = AIRecordingAudio.added(by: options, to: await app.recorderAudio)
+            if !asked.isEmpty {
+                guard let ask = context.recordingAudioConsent else { throw AIToolError.failed(Self.consentUnavailableMessage(asked)) }
+                let answer = await ask(AIRecordingAudioConsentRequest(audio: asked, sourceName: source.displayName), context.numericProgress)
+                try Task.checkCancellation()
+                switch answer {
+                case .allowed:
+                    break
+                case .withoutSound:
+                    // "Record without sound" records the screen only: no sound
+                    // at all, also none the recorder itself would record.
+                    options.microphone = false
+                    options.systemAudio = false
+                case .declined:
+                    throw AIToolError.failed(Self.soundDeclinedMessage(asked))
+                case let .timedOut(seconds):
+                    throw AIToolError.failed(Self.soundUnansweredMessage(asked, seconds: seconds))
+                case let .refused(message):
+                    throw AIToolError.failed(message)
+                }
+                consent = answer
+            }
         }
+        let requestedOptions = options
+        let allowedAudio = consent == .allowed ? asked : AIRecordingAudio()
+        let isExternal = context.isExternal
+        let (sessionID, startedOptions, leftOff) = try await AIToolSupport.appAction(context) {
+            try await MainActor.run { () throws -> (UUID, AIRecordingOptions, AIRecordingAudio) in
+                // Read in the same main-actor turn as the start: sound the
+                // person was not asked about records only while their recorder
+                // settings still record it, so a toggle they turned off while
+                // the prompt was up (or at any moment before the start) wins.
+                let (options, leftOff) = isExternal
+                    ? Self.withoutUnallowedSound(requestedOptions, allowed: allowedAudio, recorder: app.recorderAudio)
+                    : (requestedOptions, AIRecordingAudio())
+                return (try app.startRecording(sourceID: source.id, options: options), options, leftOff)
+            }
+        }
+        options = startedOptions
 
         progress(context.tr("Counting down…"))
         let outcome: Result<AIRecordingSession, AIToolError>?
@@ -669,6 +796,19 @@ struct StartRecordingTool: AIAssistantTool {
         let startedAt = session.startedAt ?? Date()
         var text = "Recording started after the 3-second countdown: \(source.summaryLine)."
         if !settings.isEmpty { text += " Settings for this recording: \(settings.joined(separator: ", "))." }
+        switch consent {
+        case .allowed?:
+            text += " Focus Studio asked the person, and they allowed \(asked.phrase) for this recording."
+        case .withoutSound?:
+            text += " Focus Studio asked the person about \(asked.phrase), and they chose to record without sound: this recording records no sound at all (microphone and system audio off), although you asked for \(asked.microphone && asked.systemAudio ? "them" : "it"). Do not turn sound on again unless the person asks for it."
+        default:
+            break
+        }
+        if !leftOff.isEmpty {
+            let phrase = leftOff.phrase
+            let both = leftOff.microphone && leftOff.systemAudio
+            text += " \(phrase.prefix(1).uppercased() + phrase.dropFirst()) \(both ? "are" : "is") off for this recording, although you asked for \(both ? "them" : "it"): the person turned \(both ? "them" : "it") off in their recorder settings before the recording started. Do not turn \(both ? "them" : "it") on again unless the person asks for it."
+        }
         if let duration = session.duration {
             text += " It stops by itself \(AIToolSupport.seconds(duration)) s after it started (at \(Self.clockTime(startedAt.addingTimeInterval(duration))))."
         }
@@ -697,7 +837,50 @@ struct StartRecordingTool: AIAssistantTool {
             data["duration"] = .rounded(duration, places: 1)
             data["auto_stop_at"] = AIJSONValue(startedAt.addingTimeInterval(duration))
         }
+        if let consent {
+            // What the person was asked, and their answer; "options" above
+            // holds what this recording actually records.
+            data["audio_consent"] = [
+                "asked": .array(asked.argumentNames.map { AIJSONValue($0) }),
+                "answer": consent == .allowed ? "allowed" : "without_sound",
+            ]
+        }
         return AIToolResult(text: text, data: .object(data))
+    }
+
+    // MARK: Sound prompt
+
+    /// `options` as an external call may record them: a sound it turns on
+    /// that the person did not allow at the prompt (`allowed`) records only
+    /// while their recorder settings (`recorder`, read right before the
+    /// start) still record it; otherwise it is turned off, and returned as
+    /// left off. A sound the person allowed, or one the call turns off or
+    /// leaves to the recorder, is unchanged.
+    static func withoutUnallowedSound(_ options: AIRecordingOptions, allowed: AIRecordingAudio, recorder: AIRecordingAudio) -> (AIRecordingOptions, leftOff: AIRecordingAudio) {
+        var options = options
+        var leftOff = AIRecordingAudio()
+        if options.microphone == true, !allowed.microphone, !recorder.microphone {
+            options.microphone = false
+            leftOff.microphone = true
+        }
+        if options.systemAudio == true, !allowed.systemAudio, !recorder.systemAudio {
+            options.systemAudio = false
+            leftOff.systemAudio = true
+        }
+        return (options, leftOff)
+    }
+
+    static func consentUnavailableMessage(_ audio: AIRecordingAudio) -> String {
+        "Focus Studio could not ask the person whether you may record \(audio.phrase), which their recorder settings leave off, so nothing was recorded. Call start_recording again without turning that sound on; with microphone and system_audio false it records the screen only."
+    }
+
+    static func soundDeclinedMessage(_ audio: AIRecordingAudio) -> String {
+        "The person did not allow sound: Focus Studio asked whether you may record \(audio.phrase) with this recording, and they chose Cancel recording, so nothing was recorded and nothing is recording. Do not retry with microphone or system_audio on unless the person asks for sound; to record the screen only, call start_recording again with microphone and system_audio false."
+    }
+
+    static func soundUnansweredMessage(_ audio: AIRecordingAudio, seconds: TimeInterval) -> String {
+        let wait = seconds >= 1 ? "\(Int(seconds.rounded()))" : String(format: "%.1f", locale: Locale(identifier: "en_US_POSIX"), seconds)
+        return "The person did not allow sound: Focus Studio asked whether you may record \(audio.phrase) with this recording and nobody answered within \(wait) seconds, so the prompt was closed, nothing was recorded and nothing is recording. Ask the person whether they want sound before calling start_recording again; with microphone and system_audio false it records the screen only, with no prompt."
     }
 
     /// How attempt `sessionID` stands while start_recording waits: live (its

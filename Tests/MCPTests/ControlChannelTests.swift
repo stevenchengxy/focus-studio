@@ -67,6 +67,17 @@ extension MCPTests {
         try verify(try ControlCall.decode(call.json) == call, "call round-trips")
         try verify(try ControlCall.decode(["tool": "get_status"]) == ControlCall(tool: "get_status"), "Missing arguments decode as none")
         try verify(try ControlCall.decode(["tool": "x", "progress_token": 5]).progressToken == 5, "Numeric progress tokens")
+        // elapsed: the helper's own time, optional in protocol 1 both ways.
+        let timed = ControlCall(tool: "export_project", elapsed: 12.5)
+        check(timed.json["elapsed"] == 12.5 && call.json["elapsed"] == nil, "elapsed is sent only when known: \(timed.json)")
+        try verify(try ControlCall.decode(timed.json) == timed, "elapsed round-trips")
+        try verify(try ControlCall.decode(["tool": "x"]).elapsed == nil && ControlCall(tool: "x").countedElapsed == 0, "A helper that predates elapsed counts as none")
+        check(ControlCall(tool: "x", elapsed: -3).countedElapsed == 0 && ControlCall(tool: "x", elapsed: 1e9).countedElapsed == ControlCall.maximumElapsed
+              && ControlCall(tool: "x", elapsed: .infinity).countedElapsed == 0 && timed.countedElapsed == 12.5, "The app clamps what a helper claims")
+        struct OlderCall: Decodable, Equatable { let tool: String; let working_directory: String? }
+        check((try? JSONDecoder().decode(OlderCall.self, from: timed.json.jsonData())) == OlderCall(tool: "export_project", working_directory: nil),
+              "A decoder that predates elapsed skips it")
+        check(ControlChannel.protocolVersion == 1, "An optional field keeps protocol 1")
         do {
             _ = try ControlCall.decode(["arguments": [:]])
             check(false, "A call without a tool must fail")

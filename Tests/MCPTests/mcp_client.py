@@ -604,6 +604,9 @@ def app_forwarding(path, expected_version):
         calls = app.messages("call")
         check("progress_token" in calls[-1]["message"]["params"] and "progress_token" not in calls[0]["message"]["params"],
               "the app is asked for progress only when the client asked")
+        elapsed = [call["message"]["params"].get("elapsed") for call in calls]
+        check(all(isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value < 5 for value in elapsed),
+              f"every call carries the seconds the helper already spent on it (elapsed): {elapsed}")
 
         # A tool the app does not know (an older app).
         unknown = helper.call("tools/call", {"name": "list_assets", "arguments": {}})
@@ -668,6 +671,9 @@ def app_slow_hello(path):
         reply = helper.call("tools/call", {"name": "get_status", "arguments": {}, "_meta": {"progressToken": 42}})
         structured(reply)
         check(time.monotonic() - started >= 2.4, "the call waited for hello")
+        sent = [call["message"]["params"].get("elapsed") for call in app.messages("call")]
+        check(len(sent) == 1 and isinstance(sent[0], (int, float)) and not isinstance(sent[0], bool) and 2.4 <= sent[0] < 10,
+              f"elapsed includes the wait for hello: {sent}")
         beats = [n["params"] for n in helper.notifications if n.get("method") == "notifications/progress"]
         values = [beat["progress"] for beat in beats]
         check(len(beats) >= 2 and all(beat["progressToken"] == 42 for beat in beats), f"heartbeats with the token: {beats}")
@@ -789,9 +795,9 @@ def main():
           f"unknown arguments refused; malformed params -32602; batches -32600; progress tokens; cancellation; parse errors; "
           f"idle without polling ({idle_wakeups} wakeups in {IDLE_SECONDS} s) with stdin left blocking; "
           f"logs on stderr only; stdout JSON-RPC only; exit 0 at end of input (idle {idle:.2f} s, piped {piped:.2f} s); "
-          f"against fake-app.py: hello first with client and working directory, arguments as sent, one connection, "
+          f"against fake-app.py: hello first with client and working directory, arguments as sent with the helper's elapsed time, one connection, "
           f"progress relayed, unknown tool, cancel forwarded without a response, quit mid-call isError without retry, "
-          f"reconnect, crash and absent app unreachable, protocol mismatch, late hello with {heartbeats} heartbeats, "
+          f"reconnect, crash and absent app unreachable, protocol mismatch, late hello with {heartbeats} heartbeats and its wait counted in elapsed, "
           f"shutdown cancels the running call and exits in {shutdown_elapsed:.1f} s; {launch_cases} launch settings refused before opening anything)")
 
 

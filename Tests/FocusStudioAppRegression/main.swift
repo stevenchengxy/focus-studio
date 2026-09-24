@@ -137,6 +137,6 @@ struct AppRegression {
         try await ControlServerRegression.run()
         try await MCPClientConnectorRegression.run()
         try await MCPEndToEndRegression.run()
-        print("FocusStudioAppRegression: PASS (interaction preflight, 50 open/edit/back cycles, stale binding reads/writes, autosave, zoom timing edit/save/reload/regeneration, assistant control, recording sessions (countdown, duration, joined stop, per-recording options), automation bridge, control server and approvals, MCP client connector, MCP end to end through focus-studio-mcp)")
+        print("FocusStudioAppRegression: PASS (interaction preflight, 50 open/edit/back cycles, stale binding reads/writes, autosave, zoom timing edit/save/reload/regeneration, assistant control, recording sessions (countdown, duration, joined stop, per-recording options, the sound prompt), automation bridge, control server and approvals within the call's time, MCP client connector, MCP end to end through focus-studio-mcp)")
     }
 }

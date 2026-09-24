@@ -41,6 +41,71 @@ Chrome 产品演示：选择 **Window → Chrome 窗口**，开启 **Webpage onl
 
 如果编辑器提示没有捕获点击或输入活动，说明该段视频缺少生成自动缩放所需的交互数据。稍后授权无法补回已经录制的视频事件：请完成权限设置后新录一段，或在原视频的 **Zoom** 时间线上双击添加并调整缩放块。
 
+## 让 Claude Code / Codex 使用 Focus Studio（MCP，1.5.0）
+
+Focus Studio.app 内附带 MCP server `Contents/MacOS/focus-studio-mcp`。接入后，Claude Code 和 Codex 可以在 Focus Studio 里录制、编辑和导出：所有操作都在应用里执行，你能看到每一步，也可以随时接手。录屏和剪辑本身不需要接入。
+
+开始前：
+
+1. 按上文把 Focus Studio 装进“应用程序”，从那里手动打开一次，完成 Gatekeeper 确认和录屏授权。录制沿用 Focus Studio 自己的权限，不需要给终端、Claude Code 或 Codex 授予录屏权限。
+2. 安装 Claude Code（`claude`）或 Codex CLI（`codex`）。只装了 Codex.app / ChatGPT.app 时，一键接入会自动找到其内置的 `codex`；它不在 PATH 中，手动接入时要把命令开头的 `codex` 换成完整路径（见下文）。
+
+### 一键接入
+
+1. 打开 **Focus Studio → Settings… / 设置…**（⌘,），选择 **AI tools / AI 工具** 标签页。
+2. 确认 **Allow AI tools to control Focus Studio / 允许 AI 工具控制 Focus Studio** 已开启，下方显示 **Ready for AI tools. / 已准备好接受 AI 工具的调用。**
+3. 在 **Connect AI tools / 接入 AI 工具** 中，对 Claude Code 或 Codex 点 **Connect / 接入**。应用调用它们自己的命令（`claude mcp add` / `codex mcp add`）注册名为 `focus-studio` 的 MCP server，不改动其他设置；Claude Code 注册在 user 作用域，所有项目都能用。显示 **Connected. / 已接入。** 后，开始新的 Claude Code 或 Codex 会话即可。
+4. 显示 **Connected to another copy / 已接入另一个副本** 时，说明登记的是别处的 Focus Studio（例如旧的开发构建），点 **Update / 更新** 改为当前这一份。
+5. 应用在登录 shell 的 PATH 和常见安装目录中查找 `claude` / `codex`。每个客户端下方显示一条可复制的命令，里面已经是当前这份应用的 helper 路径；找到了命令行工具时，命令开头就是它的完整路径（例如 ChatGPT.app 内置的 `codex`），在“终端”里可以直接运行。找不到时 **Connect / 接入** 不可用，命令开头是 `claude` / `codex`：装好命令行工具后点 **Check again / 重新检查**；也可以点 **Copy command / 拷贝命令** 粘贴到“终端”，命令行工具不在 PATH 中时把开头换成它的完整路径再运行。
+
+### 手动接入
+
+应用在“应用程序”里时：
+
+```sh
+claude mcp add --scope user focus-studio -- "/Applications/Focus Studio.app/Contents/MacOS/focus-studio-mcp"
+codex mcp add focus-studio -- "/Applications/Focus Studio.app/Contents/MacOS/focus-studio-mcp"
+```
+
+终端里没有 `codex` 命令、只有 ChatGPT.app 内置的 `codex` 时，用完整路径（Codex.app 为 `/Applications/Codex.app/Contents/Resources/codex`）：
+
+```sh
+/Applications/ChatGPT.app/Contents/Resources/codex mcp add focus-studio -- "/Applications/Focus Studio.app/Contents/MacOS/focus-studio-mcp"
+```
+
+检查：`claude mcp get focus-studio`（或在 Claude Code 里运行 `/mcp`）、`codex mcp list`（内置的 `codex` 同样用完整路径）。helper 自己回答握手和工具列表，这一步不会启动 Focus Studio。
+
+### 第一次调用：批准
+
+- Focus Studio 没在运行时，第一次工具调用会在后台启动它，不抢键盘焦点。
+- 新的 AI 工具第一次调用时，Focus Studio 弹出 **Allow AI tool? / 允许 AI 工具？**：显示 AI 工具自报的名称（例如 Claude Code）、它要运行的工具，以及实际启动 helper 的程序路径和签名者。这和下文的 **Record sound? / 录制声音？** 询问是外部调用仅有的两个会把应用切到前台的时刻；回答声音询问后，键盘焦点回到你原来使用的应用。
+- 点 **Allow / 允许** 后记住，之后不再询问；点 **Don't Allow / 不允许**、关闭面板或 2 分钟内没有处理，这次调用不执行。拒绝后约 10 分钟内同一程序不会再弹窗，可以在设置页 **Recently declined / 最近拒绝的** 里改为 **Allow / 允许**。
+- 每个调用都有自己的时间：从到达 Focus Studio 算起约 200 秒，并扣除 helper 启动应用、建立连接已经用掉的时间（见下文“Codex 超时”）。面板还开着、这段时间先用完时，这次调用不执行，先返回“仍在等待批准”（`structuredContent.status` 为 `waiting_for_approval`），面板保持打开；AI 工具再调用一次会继续等同一个面板，你点允许后立即执行。按默认设置，上一条的 2 分钟通常先到，只有 helper 启动应用、建立连接用了很久时才会先遇到这种情况。
+- 批准按程序记住：有开发者签名的程序按签名身份（更新后仍然有效），其他程序按可执行文件路径，node、python 运行的脚本按“解释器 + 脚本路径”。由 shell 直接启动 helper 时（例如自己在终端里测试），面板用橙色说明这次批准只在本次连接有效，不会记住。
+
+### 撤销与关闭
+
+- **AI tools / AI 工具 → Approved AI tools / 已批准的 AI 工具** 列出每个已批准的程序（名称、路径、签名、批准时间和上次使用时间），点 **Revoke / 撤销** 即可。已经在排队的调用会被拒绝；该程序再次调用时，会重新弹出批准面板。
+- 关闭 **Allow AI tools to control Focus Studio / 允许 AI 工具控制 Focus Studio** 后，所有外部调用都被拒绝，helper 也不会再在后台启动应用。
+- 取消接入：`claude mcp remove focus-studio`、`codex mcp remove focus-studio`。
+
+### 使用中会看到什么
+
+- 编辑和导出时，主窗口回到最前（不抢键盘焦点），编辑器打开 AI 工具指定的项目，顶栏下方显示 “Claude Code is working… / Claude Code 正在操作…”。开着别的项目时先保存再切换；录制中或应用正忙时，编辑工具会返回错误，不会丢掉修改。
+- 录制：先有 3 秒倒计时。Focus Studio 在后台时，倒计时浮在每个显示器顶部中央（“Focus Studio is about to record / Focus Studio 即将开始录制”，写明哪个 AI 工具请求录制什么，带取消）；之后是录制控制条；设置了时长时，控制条显示剩余时间（“Stops in 0:08 / 0:08 后停止”）。随时可以点 **Finish / 结束** 结束录制，或点 ✕ 取消（取消的录制会被删除）。倒计时和控制条都不会录进视频；结束的录制都会保存到项目库，没有静默录制。
+- 录制时的声音：AI 工具要为某次录制打开麦克风或系统音频，而你在录制器里没有打开它们时，倒计时之前会弹出 **Record sound? / 录制声音？**，写明哪个 AI 工具想录哪种声音、要录制什么，以及实际启动这个 AI 工具的程序（**Started by / 启动它的程序**，与批准面板相同；AI 工具自报的名称可以随意填写）。三个按钮：**Allow for this recording / 仅本次允许**（按它的要求录制）、**Record without sound / 无声录制**（只录画面、不录任何声音，录制器里本来打开的声音这次也不录；AI 工具会在结果里看到你的选择）、**Cancel recording / 取消录制**（不录制；按 Esc 或关闭面板也一样）。询问期间你在录制器里关掉的声音，这次录制也不会录。没有默认按钮，在别的应用里按回车不会替你选择；60 秒内没有回答就不录制，面板自动关闭。每次这样的录制都会重新询问，不会记住，也不会改动录制器里的设置；回答后键盘焦点回到你原来使用的应用。AI 工具不额外要求声音时（或要的声音你本来就开着），录制直接开始、不会弹窗；应用内的 AI 助手由你自己操作，也不会询问。
+- 导出不会覆盖已有文件（除非 AI 工具明确要求覆盖），也不会写项目自己的原始录像。删除项目只移到废纸篓。
+
+### 常见问题
+
+- **应用不在 /Applications**：helper 路径是 `<Focus Studio.app 所在位置>/Contents/MacOS/focus-studio-mcp`，例如 `~/Applications/Focus Studio.app/Contents/MacOS/focus-studio-mcp`。设置页 **Connect AI tools / 接入 AI 工具** 下方显示当前这份应用的 helper 路径和完整命令，一键接入也用这个路径。移动或替换应用后，回到设置页点 **Update / 更新**，或重新运行手动命令。
+- **从 DMG 或解压位置直接运行**：在磁盘映像里（`/Volumes/…`）运行，或 macOS 把刚下载的应用放到临时位置运行（App Translocation）时，这个路径之后会失效，所以设置页会提示并禁用接入。请把 Focus Studio 移到“应用程序”，从那里重新打开再接入。如果 helper 启动的是一份从未打开过的副本，macOS 可能先询问是否打开；30 秒内没有确认，这次调用会返回说明，确认后再试一次即可。
+- **Codex 超时**：Codex 0.141.0（2026 年 6 月）起，MCP 工具调用默认最多等 300 秒，一般不需要修改配置：等待录制和等待后台任务的工具每次最多等 240 秒，导出或拼接超过约 200 秒会返回 `job_id` 转为后台任务；握手和列工具由 helper 立即回答，不等应用启动。更早的 Codex 默认只等 120 秒（更老的版本为 60 秒），长时间的导出或等待会先在 Codex 端超时：请更新 Codex（`codex --version` 查看版本），或在 `~/.codex/config.toml` 的 `[mcp_servers.focus-studio]` 下加一行 `tool_timeout_sec = 300`，再开始新的 Codex 会话。这约 200 秒从调用到达 Focus Studio 算起，并扣除 helper 在后台启动应用、建立连接已经用掉的时间；等待批准、排队和等你回答声音询问的时间也都算在内，所以新 AI 工具的第一次调用同样会在 300 秒之内得到回答。批准面板 2 分钟内没人处理时，调用返回“没人回答”的错误（极少数情况下先返回 `waiting_for_approval`）；排队等另一个调用时时间用完，返回 `waiting_for_turn`；这两种情况调用都没有执行，AI 工具再调用一次即可。还在等你回答声音询问时，调用返回 `job_id`，AI 工具用 `wait_for_job` 取得录制结果。
+- **“Focus Studio could not be reached”**：helper 连不上应用。先手动打开 Focus Studio，看 **AI tools / AI 工具** 页是否显示 **Ready for AI tools.**；显示 “AI tools cannot connect: … / AI 工具无法连接：…” 时按其中的原因处理（控制通道在 `~/Library/Application Support/FocusStudio/Control/`）。再确认 MCP 配置里没有给 helper 设置 `FOCUS_STUDIO_MCP_NO_LAUNCH=1`（设置后 helper 不会自动打开应用）或 `FOCUS_STUDIO_CONTROL_SOCKET`（只用于测试）。
+- **“Focus Studio is set not to accept AI tools”**：总开关已关闭，打开即可。
+- **“Another copy of Focus Studio … is running but is not accepting AI tools”**：另一份不提供 AI 工具的 Focus Studio（例如 1.4.0 或更早版本）正在运行。两份应用会同时编辑同一个项目库，所以 helper 不会再打开第二份；退出那一份或更新它即可。
+- **查看 helper 日志**：helper 的日志只写到标准错误。Claude Code 连上 MCP server 之后不再保留它的标准错误，Codex 默认也不会把终端里 `export` 的变量传给 helper，所以在 AI 工具的会话里一般看不到这些日志。需要排查时，按源码仓库 `docs/MCP-QA.md` 中“一个可以手动发消息的 MCP 会话”，在终端里带 `FOCUS_STUDIO_MCP_LOG_LEVEL=debug` 直接运行 helper：日志包括连接、启动应用、hello 和每个调用。Codex 也可以先 `codex mcp remove focus-studio`，再 `codex mcp add --env FOCUS_STUDIO_MCP_LOG_LEVEL=debug focus-studio -- "<helper 路径>"` 重新登记，这些行会以 `MCP server stderr` 开头记进 Codex 自己的日志；排查完同样先 remove，再用不带 `--env` 的命令登记回来。
+
 ## AI 助手操控应用、Codex 大脑、语音与数字人（1.4.0）
 
 点击编辑器或项目库顶栏的 **AI** 打开独立的助手窗口。直接说需求，例如"录一段 Chrome 窗口的操作，停止后自动加缩放和章节字幕，导出 1080p"，助手会逐步执行并汇报；开始录制前有 3 秒倒计时，付费生成（Seedance）前会弹出费用确认。

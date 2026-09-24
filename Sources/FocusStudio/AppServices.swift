@@ -22,6 +22,11 @@ final class AppServices {
         accessStore = AutomationAccessStore(defaults: .standard)
         bridge = AutomationBridge(model: model)
         bridge.presentWindow = { MainWindowPresenter.shared.present() }
+        // Sound the person's recorder settings leave off: asked before each
+        // such recording an AI tool starts, never remembered.
+        bridge.audioConsent = AutomationAudioConsentController { request in
+            await AutomationAudioConsentPanel.ask(request)
+        }
         access = AutomationAccessController(store: accessStore) { request in
             await AutomationApprovalPanel.ask(request)
         }

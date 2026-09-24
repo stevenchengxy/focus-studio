@@ -92,10 +92,20 @@ extension MCPTests {
         check(helloID.intValue != nil, "Request ids are the helper's integers")
         check(hello == ControlHello(helperVersion: "7.7.7-test", client: ControlClientInfo(name: "claude-code", version: "2.1.0", title: "Claude Code"), workingDirectory: "/tmp/client-cwd"),
               "hello names the protocol, helper, client and working directory: \(helloParams ?? .null)")
-        guard case let .request(_, "call", callParams)? = first.last?.message, let call = try? ControlCall.decode(callParams) else { fatalError("FAIL: then the call") }
+        guard case let .request(_, "call", callParams)? = first.last?.message, var call = try? ControlCall.decode(callParams) else { fatalError("FAIL: then the call") }
+        // The seconds since the tools/call reached the helper: connecting and hello here.
+        check(call.elapsed.map { $0 >= 0 && $0 < 3 } == true, "The call carries the helper's own time: \(callParams ?? .null)")
+        call.elapsed = nil
         check(call == ControlCall(tool: "add_zoom", arguments: zoomArguments, workingDirectory: "/tmp/client-cwd", progressToken: nil),
               "The call carries the tool, the arguments exactly, the working directory and no progress token: \(callParams ?? .null)")
         check(callParams?.objectValue.map { !$0.keys.contains("progress_token") } == true, "not even a null one: \(callParams ?? .null)")
+        // A call that waited in the helper (opening the app, connecting) says how long.
+        var waited = forwarded("get_status")
+        waited.receivedAt = .now - .seconds(3)
+        guard case let .result(waitedResult) = await forwarder.forward(waited), !waitedResult.isError, let sentElapsed = app.calls.last?.elapsed else {
+            fatalError("FAIL: a call that waited in the helper is answered and carries elapsed")
+        }
+        check(sentElapsed >= 3 && sentElapsed < 5, "elapsed counts from the tools/call's arrival at the helper: \(sentElapsed)")
 
         // Calls share the connection, also when they run at the same time.
         let answers = await withTaskGroup(of: AutomationCallResult.self) { group in
@@ -146,6 +156,9 @@ extension MCPTests {
         check(beats.count >= 3 && zip(beats, beats.dropFirst()).allSatisfy { $0.0 < $1.0 } && beats.allSatisfy { $0.0 > 0 && $0.0 < 0.0001 },
               "Tiny increasing heartbeats below the app's own: \(beats.map(\.0))")
         check(beats.allSatisfy { $0.1 == "Waiting for Focus Studio to load its library…" }, "saying what the call waits for: \(beats.map(\.1))")
+        // The wait for hello is part of the helper's own time the call reports.
+        let slowElapsed = slow.calls.last?.elapsed ?? 0
+        check(slowElapsed >= 0.6 && slowElapsed < 5, "elapsed includes the wait for hello: \(slowElapsed)")
 
         // Another protocol: an isError naming the copy that runs; the connection is closed and the next call tries again.
         let oldPath = folder + "/old.sock"
@@ -217,6 +230,9 @@ extension MCPTests {
         check(launcher.launches.count == 1 && launcher.launches.first?.0 == appURL, "Opened once, by its URL, for all waiting calls: \(launcher.launches.map(\.0))")
         check(launcher.launches.first?.1 == ["FOCUS_STUDIO_CONTROL_SOCKET": path], "with only the allowed environment: \(launcher.launches.first?.1 ?? [:])")
         check(apps.items.first?.acceptedCount == 1, "One connection")
+        // Opening the app is part of the helper's own time: it listens 0.4 s after the launch.
+        let launchElapsed = apps.items.first?.calls.compactMap(\.elapsed) ?? []
+        check(launchElapsed.count == 3 && launchElapsed.allSatisfy { $0 >= 0.4 && $0 < 10 }, "elapsed includes opening the app: \(launchElapsed)")
         // The first call started the attempt and saw its first beat; each call's beats increase.
         check(progress.contains { $0.items.first?.1 == "Opening Focus Studio in the background…" }, "The beats say the app is opening: \(progress.map { $0.items.map(\.1) })")
         for (index, list) in progress.enumerated() {

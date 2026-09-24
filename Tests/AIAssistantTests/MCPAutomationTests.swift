@@ -116,14 +116,22 @@ extension AIAssistantTests {
         check(start.inputSchema["required"] == ["source"], "start_recording requires only its source")
         check(start.inputSchema["properties"]?["duration"]?["minimum"] == 1 && start.inputSchema["properties"]?["duration"]?["maximum"] == 600 && start.inputSchema["properties"]?["duration"]?["type"] == "number", "start_recording takes a bounded duration: \(start.inputSchema["properties"]?["duration"] ?? .null)")
         for phrase in ["returns as soon as the recording is live", "countdown", "control bar", "cancel", "wait_for_recording", "stop_recording", "duration", "this recording only", "DevTools", "Clicks and typing", "add_zoom", "your own tools",
-                       "top centre", "deletes the recording", "never with the bar's buttons"] {
+                       "top centre", "deletes the recording", "never with the bar's buttons", "asks the person before the countdown", "never remembered",
+                       "record without sound", "no sound at all", "audio_consent", "60 seconds", "isError", "add no sound start without asking"] {
             check(start.description.contains(phrase), "start_recording's description mentions \(phrase)")
+        }
+        for property in ["microphone", "system_audio"] {
+            let text = start.inputSchema["properties"]?[property]?["description"]?.stringValue ?? ""
+            check(start.inputSchema["properties"]?[property]?["type"] == "boolean" && text.contains("asks the person first"), "start_recording.\(property) says the person is asked: \(text)")
         }
         let wait = catalog.tool(named: "wait_for_recording")!
         check(wait.inputSchema["required"] == nil && wait.inputSchema["properties"]?["timeout_seconds"]?["maximum"] == 240 && wait.inputSchema["properties"]?["timeout_seconds"]?["default"] == 120, "wait_for_recording takes an optional bounded timeout: \(wait.inputSchema)")
-        for phrase in ["finished", "cancelled", "recording", "idle", "timeout_seconds", "get_status"] {
+        // Every state it can return: when the recording ended, and each one it
+        // can still be in when its timeout runs out.
+        for phrase in ["\"finished\"", "\"cancelled\"", "\"idle\"", "\"countdown\"", "\"recording\"", "\"stopping\"", "last_recording", "timeout_seconds", "get_status"] {
             check(wait.description.contains(phrase), "wait_for_recording's description mentions \(phrase)")
         }
+        check(catalog.tool(named: "wait_for_job")!.description.contains("sound prompt"), "wait_for_job names start_recording's prompt as a reason for a job")
         check(catalog.tool(named: "stop_recording")!.description.contains("joined"), "stop_recording says a stop under way is joined")
         check(catalog.tool(named: "get_project")!.inputSchema["required"] == ["project_id"], "get_project's own optional project_id becomes required")
         check(catalog.tool(named: "rename_project")!.inputSchema["required"] == ["project_id", "title"], "rename_project requires the id and the title")
@@ -156,8 +164,14 @@ extension AIAssistantTests {
         check(String(instructions.prefix(1_024)).contains("project.json"), "the project.json rule is near the top of the instructions")
         for phrase in ["list_recording_sources → start_recording", "stop_recording", "project_id", "top-left", "seconds", "working directory", "countdown",
                        "control bar", "editor", "in-app assistant", "wait_for_job", "overwrite", "project.json", "wait_for_recording", "your own tools",
-                       "DevTools", "Clicks and typing", "add_zoom"] {
+                       "DevTools", "Clicks and typing", "add_zoom", "microphone", "system_audio", "waiting_for_approval", "waiting_for_turn", "call it again"] {
             check(instructions.contains(phrase), "the server instructions mention \(phrase)")
+        }
+        // Only tools that edit or render a project open it: not the reads,
+        // list_assets or assemble_video (whose project_id only picks a folder).
+        check(!instructions.contains("Editing and output tools open their project"), "the instructions do not say every output tool opens its project")
+        for tool in ["get_project", "list_assets", "assemble_video"] {
+            check(instructions.contains(tool), "the instructions name \(tool) as leaving the project closed")
         }
     }
 
@@ -295,6 +309,41 @@ extension AIAssistantTests {
             return MCPToolCallResult(content: [.text("zoomed later")])
         }, "queued briefly")
         check(recent.text == "zoomed later", "the rest of the threshold still applies: \(recent.json)")
+        check(running.structuredContent?["activity"] == nil, "a job with measured progress names no activity: \(running.json)")
+
+        // A job waiting for the person (start_recording's sound prompt) says so
+        // in its running status, until its heartbeats stop.
+        let prompting = AutomationJobs(detachAfter: 0.2)
+        let answered = Flag()
+        let waitingForPerson = callResult(await prompting.run(tool: "start_recording", progress: nil) { report in
+            report(0.0101, nil, "Waiting for the person to answer Focus Studio's sound prompt…")
+            while !answered.isRaised { try await Task.sleep(nanoseconds: 10_000_000) }
+            report(0.0102, nil, nil)
+            try await Task.sleep(nanoseconds: 200_000_000)
+            return MCPToolCallResult(content: [.text("Recording started.")], structuredContent: ["state": "recording"])
+        }, "prompting job")
+        guard let promptJob = waitingForPerson.structuredContent?["job_id"]?.stringValue else { fatalError("FAIL: the prompting call detaches: \(waitingForPerson.json)") }
+        check(waitingForPerson.structuredContent?["activity"] == "waiting for the person to answer Focus Studio's sound prompt"
+              && waitingForPerson.text.contains("so far): waiting for the person to answer Focus Studio's sound prompt. Call wait_for_job"),
+              "the running status names what the job waits for: \(waitingForPerson.json)")
+        answered.raise()
+        let afterAnswer = callResult(await prompting.waitForJob(arguments: ["job_id": promptJob, "timeout_seconds": 0.05], progress: nil), "after the answer")
+        check(afterAnswer.structuredContent?["status"] == "running" && afterAnswer.structuredContent?["activity"] == nil, "once answered it no longer says so: \(afterAnswer.json)")
+        let started = callResult(await prompting.waitForJob(arguments: ["job_id": promptJob, "timeout_seconds": 5], progress: nil), "prompting result")
+        check(started.structuredContent?["state"] == "recording", "wait_for_job returns what start_recording returned: \(started.json)")
+
+        // wait_for_job ends within its maximum counted from the call's arrival
+        // (a wait for approval before it included).
+        let limited = AutomationJobs(detachAfter: 0.05)
+        let slowExport = callResult(await limited.run(tool: "export_project", progress: nil) { _ in
+            try await Task.sleep(nanoseconds: 5_000_000_000)
+            return final
+        }, "bounded slow")
+        guard let slowExportJob = slowExport.structuredContent?["job_id"]?.stringValue else { fatalError("FAIL: the slow call detaches: \(slowExport.json)") }
+        let limitedAt = Date()
+        let limitedWait = callResult(await limited.waitForJob(arguments: ["job_id": slowExportJob, "timeout_seconds": 30], arrivedAt: Date().addingTimeInterval(-(AutomationJobs.maximumWait - 0.2)), progress: nil), "bounded wait")
+        check(limitedWait.structuredContent?["status"] == "running" && Date().timeIntervalSince(limitedAt) < 2, "a wait that arrived long ago ends by its maximum: \(Date().timeIntervalSince(limitedAt)) s")
+        _ = limited.cancelRunning()
 
         // Cancelling the caller before detaching cancels the work and waits for it.
         let stopped = Flag()
@@ -409,7 +458,28 @@ extension AIAssistantTests {
         check(order.runs == ["b cancelled", "a", "c"], "turns go in arrival order; a cancelled caller leaves without one: \(order.runs)")
         let free = await queue.acquire()
         check(free && queue.waitingCount == 0, "after the last turn the queue is free")
+
+        // A deadline: a caller still waiting when it passes leaves without a
+        // turn; one whose turn comes first gets it; a past deadline waits not at all.
+        check(queue.isBusy, "the turn is taken")
+        let started = Date()
+        let late = await queue.acquire(until: Date().addingTimeInterval(0.2))
+        let waited = Date().timeIntervalSince(started)
+        check(late == .timedOut && waited >= 0.15 && waited < 2 && queue.waitingCount == 0, "a waiter whose deadline passes leaves without a turn: \(late) after \(waited) s")
+        let past = await queue.acquire(until: Date().addingTimeInterval(-1))
+        check(past == .timedOut, "a deadline already past answers at once")
+        let inTime = Task { @MainActor in await queue.acquire(until: Date().addingTimeInterval(5)) }
+        try await waitUntil("the caller with time left to queue") { queue.waitingCount == 1 }
         queue.release()
+        let taken = await inTime.value
+        check(taken == .acquired && queue.isBusy && queue.waitingCount == 0, "a turn that comes before the deadline is taken")
+        let withdrawn = Task { @MainActor in await queue.acquire(until: Date().addingTimeInterval(5)) }
+        try await waitUntil("the caller to queue") { queue.waitingCount == 1 }
+        withdrawn.cancel()
+        let left = await withdrawn.value
+        check(left == .cancelled && queue.waitingCount == 0, "a cancelled caller with a deadline leaves as cancelled")
+        queue.release()
+        check(!queue.isBusy, "after the last turn the queue is free again")
     }
 
     // MARK: - Library tools

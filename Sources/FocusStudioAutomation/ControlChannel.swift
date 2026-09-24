@@ -23,12 +23,17 @@ import Foundation
 ///   ready. The app answers with its own protocol number even when it differs;
 ///   the helper decides what to tell its client, and the app then refuses
 ///   calls on that connection with ``ErrorCode/protocolMismatch``.
-/// - `call` request, helper → app: ``ControlCall``, sent after hello. The
+/// - `call` request, helper → app: ``ControlCall``, sent after hello, with
+///   the seconds the helper already spent on it (`elapsed`, optional). The
 ///   result is an MCP `CallToolResult` (`{content, structuredContent?,
 ///   isError}`); an unknown tool is error ``ErrorCode/invalidParams`` with
 ///   `data.tool`; a call the helper cancelled is error ``ErrorCode/cancelled``.
 ///   Refusals (AI tools turned off in Settings, a client the person has not
-///   approved) are `isError` results the model can read.
+///   approved) are `isError` results the model can read, and so is a call
+///   whose time ran out while the approval prompt waited for the person, or
+///   while it waited for its turn behind another call (`structuredContent.status`
+///   "waiting_for_approval" or "waiting_for_turn": it did not run; call it
+///   again). A new result shape, not a protocol change.
 ///   ``AutomationCallResult/init(controlReply:tool:)`` maps a reply back.
 /// - `progress` notification, app → helper: ``ControlProgress``, only for a
 ///   call that carried `progress_token`; values always increase, and none
@@ -40,7 +45,9 @@ import Foundation
 /// Closing the connection cancels that connection's running calls.
 public enum ControlChannel {
     /// The internal protocol between the helper and the app, independent of
-    /// the MCP protocol version the helper negotiates with its client.
+    /// the MCP protocol version the helper negotiates with its client. An
+    /// optional field the other end may ignore (`call`'s `elapsed`) keeps
+    /// the number; anything an older peer would misread changes it on both ends.
     public static let protocolVersion = 1
     /// Overrides the socket path, for tests and QA runs.
     public static let socketPathVariable = "FOCUS_STUDIO_CONTROL_SOCKET"
@@ -424,12 +431,27 @@ public struct ControlCall: ControlParameters {
     /// Present when the client asked for progress; the app then sends
     /// `progress` notifications for this call. Opaque to the app.
     public var progressToken: AIJSONValue?
+    /// Seconds the helper had already spent on the call when it sent it
+    /// (opening the app, connecting, waiting for hello), measured from the
+    /// client's `tools/call`. The app counts them toward the time after which
+    /// a call answers with a job (``AutomationJobs``), so the first call of a
+    /// session answers within the client's tool timeout as well.
+    ///
+    /// Optional, so protocol 1 is unchanged: an app that predates it ignores
+    /// the key (decoding skips unknown keys) and counts from the call's
+    /// arrival, and the app counts a call without it (an older helper) the
+    /// same way. The app uses it clamped to `0...` ``maximumElapsed``.
+    public var elapsed: Double?
 
-    public init(tool: String, arguments: [String: AIJSONValue] = [:], workingDirectory: String? = nil, progressToken: AIJSONValue? = nil) {
+    /// More than any helper waits before sending a call.
+    public static let maximumElapsed: TimeInterval = 600
+
+    public init(tool: String, arguments: [String: AIJSONValue] = [:], workingDirectory: String? = nil, progressToken: AIJSONValue? = nil, elapsed: Double? = nil) {
         self.tool = tool
         self.arguments = arguments
         self.workingDirectory = workingDirectory
         self.progressToken = progressToken
+        self.elapsed = elapsed
     }
 
     enum CodingKeys: String, CodingKey {
@@ -437,6 +459,7 @@ public struct ControlCall: ControlParameters {
         case arguments
         case workingDirectory = "working_directory"
         case progressToken = "progress_token"
+        case elapsed
     }
 
     public init(from decoder: Decoder) throws {
@@ -445,6 +468,13 @@ public struct ControlCall: ControlParameters {
         arguments = try container.decodeIfPresent([String: AIJSONValue].self, forKey: .arguments) ?? [:]
         workingDirectory = try container.decodeIfPresent(String.self, forKey: .workingDirectory)
         progressToken = try container.decodeIfPresent(AIJSONValue.self, forKey: .progressToken)
+        elapsed = try container.decodeIfPresent(Double.self, forKey: .elapsed)
+    }
+
+    /// ``elapsed`` as the app counts it: finite, from 0 to ``maximumElapsed``.
+    public var countedElapsed: TimeInterval {
+        guard let elapsed, elapsed.isFinite else { return 0 }
+        return min(Self.maximumElapsed, max(0, elapsed))
     }
 }
 

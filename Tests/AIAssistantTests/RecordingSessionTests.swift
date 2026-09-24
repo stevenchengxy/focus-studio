@@ -12,8 +12,15 @@ import Foundation
 /// in; so does one that timed out or was cancelled as it went live. A wait on
 /// a recording without a followed attempt (the Codex Director) waits through
 /// its save. The in-app assistant replies after the start and stops when the
-/// user says so, unless the recording has a duration. Durations are the
-/// shortest the tools accept (1 s) with generous deadlines.
+/// user says so, unless the recording has a duration. An external start that
+/// turns on sound the recorder leaves off asks the person first (allow,
+/// record without sound, which records no sound at all, cancel, no answer, a
+/// refusal meanwhile, a cancelled call), never for sound the recorder records
+/// anyway, for no sound, or for the in-app assistant; a sound the call asks
+/// for that the person was not asked about records only while the recorder
+/// still records it at the start (turned off during the prompt, it stays
+/// off); the recorder's own choices never change. Durations
+/// are the shortest the tools accept (1 s) with generous deadlines.
 extension AIAssistantTests {
     @MainActor
     static func recordingSessions(root: URL) async throws {
@@ -26,6 +33,7 @@ extension AIAssistantTests {
         try await startTimeoutDiscards(root: root)
         try await cancelAsItGoesLiveDiscards(root: root)
         try await untrackedRecordingWaitsThroughItsSave(root: root)
+        try await soundConsent(root: root)
     }
 
     static func date(_ value: AIJSONValue?) -> Date? {
@@ -39,10 +47,15 @@ extension AIAssistantTests {
         let (context, app, _) = makeFakeApp(root: root)
         var external = context
         external.isExternal = true
+        // The recorder leaves sound off, so the person is asked; here they allow it.
+        let consent = ConsentProbe(answer: .allowed)
+        external.recordingAudioConsent = consent.handler
         let preferences = app.recorderPreferences
         let arguments: [String: Any] = ["source": "display", "system_audio": true, "microphone": true, "automatic_zooms": false,
                                         "browser_content_only": false, "frame_rate": 30, "duration": 30]
         let result = try await StartRecordingTool(startTimeout: 5).run(arguments: arguments, context: external, progress: { _ in })
+        check(consent.requests == [AIRecordingAudioConsentRequest(audio: AIRecordingAudio(microphone: true, systemAudio: true), sourceName: "Built-in Display")],
+              "the person is asked once about both, naming the source: \(consent.requests)")
         let data = try structured(result, "start_recording with a duration")
         check(app.recordingPhase == .recording && data["state"] == "recording" && data["source"]?["id"] == "display-1", "the call returns while recording: \(data)")
         guard let started = date(data["started_at"]), let stops = date(data["auto_stop_at"]) else { fatalError("FAIL: started_at and auto_stop_at are ISO 8601 dates: \(data)") }
@@ -79,6 +92,191 @@ extension AIAssistantTests {
             }
         }
         check(app.startedSourceIDs.count == 3, "a bad duration never reaches the app")
+    }
+
+    // MARK: - Sound consent
+
+    /// Answers the sound prompt from the test: a fixed answer, or (with
+    /// `hold`) waits until the calling task is cancelled. `meanwhile` runs on
+    /// the main actor while the prompt is up, before the answer (the person
+    /// changing their recorder settings, say).
+    final class ConsentProbe: @unchecked Sendable {
+        private let lock = NSLock()
+        private var asked: [AIRecordingAudioConsentRequest] = []
+        private var progressHandlers = 0
+        let answer: AIRecordingAudioConsent
+        let hold: Bool
+        let meanwhile: (@MainActor @Sendable () -> Void)?
+
+        init(answer: AIRecordingAudioConsent, hold: Bool = false, meanwhile: (@MainActor @Sendable () -> Void)? = nil) {
+            self.answer = answer
+            self.hold = hold
+            self.meanwhile = meanwhile
+        }
+
+        var requests: [AIRecordingAudioConsentRequest] { lock.withLock { asked } }
+        var withProgress: Int { lock.withLock { progressHandlers } }
+
+        var handler: AIRecordingAudioConsentHandler {
+            { [self] request, progress in
+                lock.withLock {
+                    asked.append(request)
+                    if progress != nil { progressHandlers += 1 }
+                }
+                progress?(0.01, nil, "Waiting for the person to answer Focus Studio's sound prompt…")
+                if let meanwhile { await meanwhile() }
+                if hold {
+                    while !Task.isCancelled { try? await Task.sleep(nanoseconds: 5_000_000) }
+                    return .declined
+                }
+                return answer
+            }
+        }
+    }
+
+    /// An external start_recording that turns on sound the person's recorder
+    /// settings leave off asks the person before the countdown, and does what
+    /// they answer; nothing else asks, and the recorder's own choices never change.
+    @MainActor
+    private static func soundConsent(root: URL) async throws {
+        let (context, app, _) = makeFakeApp(root: root)
+        var external = context
+        external.isExternal = true
+        let preferences = app.recorderPreferences
+        check(app.recorderAudio == AIRecordingAudio(), "the recorder records no sound")
+        func start(_ arguments: [String: Any], _ consent: ConsentProbe?, in base: AIAssistantContext? = nil) async throws -> AIToolResult {
+            var call = base ?? external
+            call.recordingAudioConsent = consent?.handler
+            return try await StartRecordingTool(startTimeout: 5).run(arguments: arguments, context: call, progress: { _ in })
+        }
+
+        // Allow: recorded as asked; the result names the answer.
+        let allowing = ConsentProbe(answer: .allowed)
+        let measured = ProgressLog()
+        var withProgress = external
+        withProgress.numericProgress = { measured.record($0, $1, $2) }
+        let allowed = try await start(["source": "Safari", "microphone": true], allowing, in: withProgress)
+        let allowedData = try structured(allowed, "allowed")
+        check(allowing.requests == [AIRecordingAudioConsentRequest(audio: AIRecordingAudio(microphone: true), sourceName: "Safari — Focus Studio — Docs")] && allowing.withProgress == 1,
+              "asked about the microphone only, with the window's name and the call's progress: \(allowing.requests)")
+        check(measured.values.first?.message?.contains("sound prompt") == true, "the prompt's heartbeat reaches the call's progress: \(measured.values)")
+        check(app.attemptSettings.last?.microphone == true && app.attemptSettings.last?.systemAudio == false, "the recording records the microphone: \(app.attemptSettings)")
+        check(allowedData["audio_consent"] == ["asked": ["microphone"], "answer": "allowed"] && allowedData["options"]?["microphone"] == true,
+              "the result says the person allowed it: \(allowedData)")
+        check(allowed.text.contains("they allowed the microphone for this recording"), "and the text: \(allowed.text)")
+        check(app.recorderPreferences == preferences, "the recorder is unchanged after allow")
+        await app.stopRecording()
+
+        // Record without sound: the recording starts with that sound off, and the model is told.
+        let silent = ConsentProbe(answer: .withoutSound)
+        let withoutSound = try await start(["source": "display", "microphone": true, "system_audio": true, "frame_rate": 30], silent)
+        let silentData = try structured(withoutSound, "without sound")
+        check(silent.requests.map(\.audio) == [AIRecordingAudio(microphone: true, systemAudio: true)], "asked about both")
+        check(app.attemptSettings.last?.microphone == false && app.attemptSettings.last?.systemAudio == false && app.attemptSettings.last?.frameRate == 30,
+              "recorded without sound, the other options kept: \(app.attemptSettings)")
+        check(app.startedOptions.last?.microphone == false && app.startedOptions.last?.systemAudio == false, "the app was asked for no sound")
+        check(silentData["audio_consent"] == ["asked": ["microphone", "system_audio"], "answer": "without_sound"]
+              && silentData["options"]?["microphone"] == false && silentData["options"]?["system_audio"] == false && silentData["state"] == "recording",
+              "the structured result says so: \(silentData)")
+        check(withoutSound.text.contains("chose to record without sound") && withoutSound.text.contains("no sound at all") && withoutSound.text.contains("microphone off")
+              && withoutSound.text.contains("Do not turn sound on again"), "and the text: \(withoutSound.text)")
+        check(app.recorderPreferences == preferences, "the recorder is unchanged after record without sound")
+        await app.stopRecording()
+
+        // Cancel recording, no answer in time, and a refusal meanwhile: nothing starts.
+        let started = app.startedSourceIDs.count
+        for (answer, expected) in [(AIRecordingAudioConsent.declined, "they chose Cancel recording"), (.timedOut(60), "nobody answered within 60 seconds"),
+                                   (.refused("The person revoked Codex's access to Focus Studio."), "revoked Codex's access")] {
+            let probe = ConsentProbe(answer: answer)
+            await expectToolError("answer \(answer)", { _ = try await start(["source": "display", "system_audio": true], probe) }) {
+                guard case let .failed(message) = $0, message.contains(expected) else { return false }
+                if case .refused = answer { return true }
+                return message.contains("did not allow sound") && message.contains("nothing was recorded")
+            }
+            check(probe.requests.count == 1 && app.startedSourceIDs.count == started && app.recordingPhase == .idle, "\(answer): asked once, nothing started")
+            check(app.recorderPreferences == preferences, "\(answer): the recorder is unchanged")
+        }
+
+        // A call cancelled while the prompt is up records nothing.
+        let holding = ConsentProbe(answer: .allowed, hold: true)
+        let pending = Task { @MainActor in try await start(["source": "display", "microphone": true], holding) }
+        try await waitUntil("the held prompt") { !holding.requests.isEmpty }
+        pending.cancel()
+        do {
+            _ = try await pending.value
+            fatalError("FAIL: a start cancelled during the prompt must not record")
+        } catch is CancellationError {
+        } catch {
+            fatalError("FAIL: a start cancelled during the prompt throws CancellationError, got \(error)")
+        }
+        check(app.startedSourceIDs.count == started && app.recordingPhase == .idle, "nothing started after the cancelled prompt")
+
+        // No way to ask: refused, never recorded unasked.
+        await expectToolError("no prompt available", { _ = try await start(["source": "display", "microphone": true], nil) }) {
+            if case let .failed(message) = $0 { return message.contains("could not ask the person") && message.contains("microphone and system_audio false") } else { return false }
+        }
+        check(app.startedSourceIDs.count == started, "nothing started without a prompt")
+
+        // No prompt: no sound asked for, sound turned off, or sound the recorder records anyway.
+        let never = ConsentProbe(answer: .declined)
+        _ = try await start(["source": "display"], never)
+        await app.stopRecording()
+        _ = try await start(["source": "display", "microphone": false, "system_audio": false], never)
+        await app.stopRecording()
+        app.recorderPreferences.systemAudio = true
+        let recorderSound = try structured(try await start(["source": "display", "system_audio": true], never), "sound the recorder records")
+        check(recorderSound["audio_consent"] == nil && app.attemptSettings.last?.systemAudio == true, "no consent needed for the recorder's own sound: \(recorderSound)")
+        await app.stopRecording()
+        // Only the added sound is asked about; Record without sound then
+        // records no sound at all, the recorder's own included, as the
+        // prompt says ("records the screen only").
+        for arguments in [["source": "display", "system_audio": true, "microphone": true], ["source": "display", "microphone": true]] as [[String: Any]] {
+            let added = ConsentProbe(answer: .withoutSound)
+            let addedData = try structured(try await start(arguments, added), "mixed \(arguments.keys.sorted())")
+            check(added.requests.map(\.audio) == [AIRecordingAudio(microphone: true)] && app.attemptSettings.last?.systemAudio == false && app.attemptSettings.last?.microphone == false,
+                  "only the microphone is asked about, and nothing is recorded with Record without sound: \(app.attemptSettings.last.map { "\($0)" } ?? "none")")
+            check(addedData["audio_consent"] == ["asked": ["microphone"], "answer": "without_sound"] && addedData["options"]?["microphone"] == false && addedData["options"]?["system_audio"] == false,
+                  "the result names the microphone and reports no sound: \(addedData)")
+            await app.stopRecording()
+        }
+        check(app.recorderPreferences.systemAudio == true, "the recorder keeps its system audio")
+        app.recorderPreferences.systemAudio = false
+
+        // The person turns a recorder sound off while the prompt is up: a
+        // sound the call asked for but the prompt did not (the recorder had
+        // it on) follows the recorder as it is at the start, so it is off,
+        // whatever the answer; the result says so.
+        for answer in [AIRecordingAudioConsent.allowed, .withoutSound] {
+            app.recorderPreferences.microphone = true
+            let turnedOff = ConsentProbe(answer: answer, meanwhile: { app.recorderPreferences.microphone = false })
+            let changed = try await start(["source": "display", "microphone": true, "system_audio": true], turnedOff)
+            let changedData = try structured(changed, "recorder changed during the prompt, \(answer)")
+            check(turnedOff.requests.map(\.audio) == [AIRecordingAudio(systemAudio: true)], "\(answer): asked about system audio only: \(turnedOff.requests)")
+            check(app.attemptSettings.last?.microphone == false && app.attemptSettings.last?.systemAudio == (answer == .allowed),
+                  "\(answer): the microphone the person turned off is not recorded: \(app.attemptSettings.last.map { "\($0)" } ?? "none")")
+            check(changedData["options"]?["microphone"] == false && changedData["options"]?["system_audio"] == AIJSONValue(answer == .allowed), "\(answer): options say what records: \(changedData)")
+            if answer == .allowed {
+                check(changed.text.contains("The microphone is off for this recording") && changed.text.contains("turned it off in their recorder settings"), "\(answer): the text says why: \(changed.text)")
+            }
+            check(app.recorderPreferences.microphone == false, "\(answer): the person's own change stands")
+            await app.stopRecording()
+        }
+        // And a sound the recorder records, turned off before a start that asks nothing.
+        app.recorderPreferences.microphone = true
+        let unasked = ConsentProbe(answer: .declined)
+        let quiet = try await start(["source": "display", "microphone": true], unasked)
+        check(unasked.requests.isEmpty && app.attemptSettings.last?.microphone == true, "the recorder's own microphone records without asking: \(quiet.text)")
+        await app.stopRecording()
+        app.recorderPreferences.microphone = false
+        check(StartRecordingTool.withoutUnallowedSound(AIRecordingOptions(systemAudio: true, microphone: true), allowed: AIRecordingAudio(), recorder: AIRecordingAudio(microphone: true))
+              == (AIRecordingOptions(systemAudio: false, microphone: true), AIRecordingAudio(systemAudio: true)), "a sound neither allowed nor recorded by the recorder is left off")
+
+        // The in-app assistant: the person drives it, so it never asks.
+        _ = try await start(["source": "display", "microphone": true, "system_audio": true], never, in: context)
+        check(app.attemptSettings.last?.microphone == true && app.attemptSettings.last?.systemAudio == true, "the in-app assistant records as asked")
+        await app.stopRecording()
+        check(never.requests.isEmpty, "none of these asked the person: \(never.requests)")
+        check(app.recorderPreferences == preferences, "the recorder's own choices never changed: \(app.recorderPreferences)")
     }
 
     /// A duration stops the recording by itself, through the same joined

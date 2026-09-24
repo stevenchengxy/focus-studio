@@ -30,7 +30,19 @@ import UniformTypeIdentifiers
 ///   countdown ends however it ends;
 /// - calls during a countdown or a recording never bring the main window
 ///   over the recorded app;
-/// - a Codex Director plan saving its capture is stopping, not idle.
+/// - a Codex Director plan saving its capture is stopping, not idle;
+/// - start_recording from an AI tool (through the bridge, with a scripted
+///   sound prompt) records sound the recorder leaves off only as the person
+///   answers, before any countdown: allow, record without sound (no sound at
+///   all, also when the recorder records some), cancel, no answer in time
+///   (the prompt closes), AI tools turned off meanwhile, the call cancelled;
+///   a recorder sound the person turns off while the prompt is up is not
+///   recorded whatever they answer; never asks for no sound, for the
+///   recorder's own sound or for the in-app assistant; names the client and
+///   the program that started it; waits 60 s by default; keeps the client
+///   alive with heartbeats above the approval prompt's and the wait for a
+///   turn's; and the prompt's wait counts toward the detach threshold from
+///   the call's arrival. The recorder's own choices never change.
 @MainActor
 enum RecordingSessionRegression {
     static func run() async throws {
@@ -44,7 +56,9 @@ enum RecordingSessionRegression {
         try await floatingCountdownFollowsTheCountdown()
         try await windowStaysBehindTheRecording()
         try codexPlanSaveIsStopping()
-        print("RecordingSessionRegression: PASS (countdown and automatic stop on a manual clock, the duration measured from the first frame, Finish/Cancel cancel the automatic stop and Cancel stops the capture, the automatic stop joined by stop_recording and wait_for_recording with one project, get_status and the call queue free while wait_for_recording waits and no job for it, Cancel ignored and starts refused while saving, per-recording options (browser_content_only's crop, audio shown) with the recorder's choices unchanged, discarding a countdown, a capture start or a live recording, the floating countdown's lifecycle, no main window over a recording, a Codex plan's save is stopping)")
+        try await soundConsent()
+        try await soundPromptWithinTheCallsTime()
+        print("RecordingSessionRegression: PASS (countdown and automatic stop on a manual clock, the duration measured from the first frame, Finish/Cancel cancel the automatic stop and Cancel stops the capture, the automatic stop joined by stop_recording and wait_for_recording with one project, get_status and the call queue free while wait_for_recording waits and no job for it, a late wait_for_recording shortened to its maximum from the call's arrival, Cancel ignored and starts refused while saving, per-recording options (browser_content_only's crop, audio shown) with the recorder's choices unchanged, discarding a countdown, a capture start or a live recording, the floating countdown's lifecycle, no main window over a recording, a Codex plan's save is stopping, the sound prompt before the countdown for sound the recorder leaves off (60 s by default as the catalog says, naming the client and the program that started it; allow, record without sound with no sound at all even when the recorder records some, cancel, no answer closes it, turned off meanwhile, a recorder sound turned off while it is up stays off, cancelled call, heartbeats above the approval's and the turn's; none for no sound, the recorder's own sound or the in-app assistant; the recorder's choices unchanged; its wait detaching as a job from the call's arrival))")
     }
 
     // MARK: - Duration
@@ -129,6 +143,19 @@ enum RecordingSessionRegression {
         let short = try await fixture.succeed(detaching, "wait_for_recording", ["timeout_seconds": 0.4])
         try expect(short.structuredContent?["state"] == "recording" && short.structuredContent?["job_id"] == nil && short.structuredContent?["remaining"] == 4,
                    "A wait that runs out reports the recording: \(short.json)")
+
+        // A wait whose call arrived long ago (it waited for approval) ends
+        // within its maximum counted from the arrival; an invalid timeout is
+        // still refused.
+        let lateAt = Date()
+        let arrivedLongAgo = Date().addingTimeInterval(-(AutomationJobs.maximumWait - 0.3))
+        guard case let .result(bounded) = await bridge.call(toolName: "wait_for_recording", arguments: ["timeout_seconds": 60], workingDirectory: nil, clientName: "test",
+                                                             arrivedAt: arrivedLongAgo, progress: nil) else { throw SessionFailure("The bounded wait must answer") }
+        try expect(!bounded.isError && bounded.structuredContent?["state"] == "recording" && (bounded.structuredContent?["waited"]?.doubleValue ?? 99) < 1
+                   && Date().timeIntervalSince(lateAt) < 2, "A late wait is shortened to its maximum from the arrival: \(bounded.json)")
+        guard case let .result(invalid) = await bridge.call(toolName: "wait_for_recording", arguments: ["timeout_seconds": 500], workingDirectory: nil, clientName: "test",
+                                                             arrivedAt: arrivedLongAgo, progress: nil) else { throw SessionFailure("The invalid wait must answer") }
+        try expect(invalid.isError && invalid.text.contains("timeout_seconds"), "An invalid timeout is refused whatever the time: \(invalid.text)")
 
         let waiting = Task { @MainActor in
             await bridge.call(toolName: "wait_for_recording", arguments: ["timeout_seconds": 60], workingDirectory: nil, clientName: "test", progress: nil)
@@ -428,6 +455,258 @@ enum RecordingSessionRegression {
                    "Other recordings keep their phases")
     }
 
+    // MARK: - Sound consent
+
+    /// A selected area of the fixture's display: the only source the engine
+    /// lists (no ScreenCaptureKit), which start_recording can name by its id.
+    private static let soundArea = CaptureTargetInfo(id: "area-1-sound", kind: .area, nativeID: 1, title: "Test area", frame: CaptureRect(x: 0, y: 0, width: 64, height: 64))
+
+    /// start_recording through `bridge` for Claude Code; once its countdown
+    /// starts, the countdown runs on the manual clock.
+    private static func record(
+        _ arguments: [String: Any],
+        fixture: SessionFixture,
+        bridge: AutomationBridge,
+        arrivedAt: Date? = nil,
+        progress: AIToolProgressHandler? = nil,
+        stillAllowed: (@MainActor () -> String?)? = nil
+    ) async throws -> AutomationCallResult {
+        let model = fixture.model
+        let done = TestBox(false)
+        let call = Task { @MainActor in
+            let outcome = await bridge.call(toolName: "start_recording", arguments: ["source": soundArea.id].merging(arguments) { $1 }, workingDirectory: nil,
+                                            clientName: "Claude Code", programName: "Claude (claude)", arrivedAt: arrivedAt, progress: progress, stillAllowed: stillAllowed)
+            done.value = true
+            return outcome
+        }
+        try await waitUntil("start_recording neither counted down nor answered") { done.value || model.recordingPhase == .countdown }
+        if !done.value { try await fixture.runCountdown() }
+        return await call.value
+    }
+
+    private static func result(_ outcome: AutomationCallResult, _ what: String) throws -> MCPToolCallResult {
+        guard case let .result(result) = outcome else { throw SessionFailure("\(what): expected a result, got \(outcome)") }
+        return result
+    }
+
+    private static func soundConsent() async throws {
+        // The app's prompt waits 60 s (AppServices builds it with the
+        // defaults), which start_recording's description, SKILL.md, README
+        // and INSTALL promise.
+        try expect(AutomationAudioConsentController.defaultTimeout == 60 && AutomationAudioConsentController { _ in nil }.timeout == 60,
+                   "The sound prompt waits 60 s by default")
+        let startText = try unwrap(MCPToolCatalog.v1.tool(named: "start_recording"), "start_recording").description
+        try expect(startText.contains("within \(Int(AutomationAudioConsentController.defaultTimeout)) seconds"), "start_recording promises the prompt's default wait: \(startText)")
+        // One call's progress must keep increasing, and a new client's first
+        // start_recording sends the approval prompt's heartbeats, then (when
+        // it waits for its turn) the queue's, then the sound prompt's: each
+        // starts above the most the one before can reach.
+        let approvalMost = ((AutomationAccessController.defaultTimeout / AutomationAccessController.defaultHeartbeatInterval).rounded(.up) + 1) * AutomationAccessController.heartbeatStep
+        let turnMost = AutomationBridge.turnHeartbeatBase + Double(AutomationBridge.turnHeartbeatLimit) * AutomationBridge.turnHeartbeatStep
+        try expect(approvalMost < AutomationBridge.turnHeartbeatBase && turnMost < AutomationAudioConsentController.heartbeatBase,
+                   "Heartbeats rise from the approval prompt (up to \(approvalMost)) to the wait for a turn (\(AutomationBridge.turnHeartbeatBase)–\(turnMost)) to the sound prompt (from \(AutomationAudioConsentController.heartbeatBase))")
+
+        let fixture = try await SessionFixture()
+        defer { fixture.cleanup() }
+        let (model, capture) = (fixture.model, fixture.capture)
+        try model.captureEngine.registerAreaTarget(soundArea)
+        let prompter = ScriptedSoundPrompter()
+        let consent = AutomationAudioConsentController(timeout: 5, heartbeatInterval: 0.05) { await prompter.prompt($0) }
+        let bridge = AutomationBridge(model: model)
+        bridge.audioConsent = consent
+        let choices = model.recorderSettings
+        try expect(choices.microphone == false && choices.systemAudio == false && model.recorderAudio == AIRecordingAudio(), "The recorder records no sound: \(choices)")
+
+        // Allow: recorded with the microphone; the prompt names the AI tool, the sound and the source.
+        prompter.mode = .answer(.allow)
+        let allowed = try result(try await record(["microphone": true], fixture: fixture, bridge: bridge), "allow")
+        try expect(!allowed.isError && allowed.structuredContent?["audio_consent"] == ["asked": ["microphone"], "answer": "allowed"]
+                   && allowed.structuredContent?["options"]?["microphone"] == true, "Allowed: \(allowed.json)")
+        let asked = try unwrap(prompter.requests.last, "The person was asked")
+        try expect(prompter.requests.count == 1 && asked.clientName == "Claude Code" && asked.programName == "Claude (claude)" && asked.audio == AIRecordingAudio(microphone: true)
+                   && asked.sourceName == "Test area" && asked.timeout == 5, "The prompt names the client, the program that started it, the sound, the source and its wait (injected here): \(asked)")
+        try expect(capture.starts.last?.options.microphone == true && capture.starts.last?.options.systemAudio == false, "The capture records the microphone")
+        try expect(model.recorderSettings == choices, "Allow changes none of the recorder's choices")
+        await model.stopRecording()
+
+        // Record without sound: the capture has none, and the result says so.
+        prompter.mode = .answer(.withoutSound)
+        let silent = try result(try await record(["microphone": true, "system_audio": true, "frame_rate": 30], fixture: fixture, bridge: bridge), "without sound")
+        try expect(!silent.isError && silent.structuredContent?["audio_consent"] == ["asked": ["microphone", "system_audio"], "answer": "without_sound"]
+                   && silent.structuredContent?["options"]?["microphone"] == false && silent.structuredContent?["options"]?["system_audio"] == false
+                   && silent.text.contains("chose to record without sound"), "Without sound: \(silent.json)")
+        let silentOptions = capture.starts.last?.options
+        try expect(silentOptions?.microphone == false && silentOptions?.systemAudio == false && silentOptions?.frameRate == 30, "The capture records no sound: \(String(describing: silentOptions))")
+        try expect(model.currentRecording?.settings.audioDescription == nil && model.recorderSettings == choices, "No sound shown, the recorder unchanged")
+        await model.stopRecording()
+
+        // Record without sound while the recorder records system audio: the
+        // prompt asks about the microphone only and promises the screen only,
+        // so the recording has no sound at all.
+        model.recordSystemAudio = true
+        let ownSound = model.recorderSettings
+        let screenOnly = try result(try await record(["microphone": true], fixture: fixture, bridge: bridge), "without sound, recorder sound on")
+        try expect(prompter.requests.last?.audio == AIRecordingAudio(microphone: true) && !screenOnly.isError
+                   && screenOnly.structuredContent?["options"]?["microphone"] == false && screenOnly.structuredContent?["options"]?["system_audio"] == false,
+                   "Asked about the microphone; the result says no sound: \(screenOnly.json)")
+        try expect(capture.starts.last?.options.microphone == false && capture.starts.last?.options.systemAudio == false && model.currentRecording?.settings.audioDescription == nil,
+                   "Record without sound records no sound, the recorder's system audio included: \(String(describing: capture.starts.last?.options))")
+        try expect(model.recorderSettings == ownSound, "The recorder still records system audio for the person's own recordings")
+        await model.stopRecording()
+        model.recordSystemAudio = false
+
+        // The person turns the recorder's microphone off while the prompt
+        // (about system audio only: the microphone was on) is up: whatever
+        // they answer, the microphone they turned off is not recorded.
+        for answer in [AutomationAudioConsentAnswer.allow, .withoutSound] {
+            model.recordMicrophone = true
+            prompter.mode = .hold
+            let changing = Task { @MainActor in try await record(["microphone": true, "system_audio": true], fixture: fixture, bridge: bridge) }
+            try await waitUntil("The prompt did not come up") { prompter.heldCount == 1 }
+            try expect(prompter.requests.last?.audio == AIRecordingAudio(systemAudio: true), "\(answer): the prompt asks about system audio only")
+            model.recordMicrophone = false
+            prompter.release(answer)
+            let changed = try result(try await changing.value, "recorder changed during the prompt, \(answer)")
+            let options = capture.starts.last?.options
+            try expect(!changed.isError && options?.microphone == false && options?.systemAudio == (answer == .allow) && changed.structuredContent?["options"]?["microphone"] == false,
+                       "\(answer): the microphone turned off during the prompt is not recorded: \(String(describing: options)) \(changed.json)")
+            try expect(model.recordMicrophone == false && model.recorderSettings == choices, "\(answer): the person's own change stands")
+            await model.stopRecording()
+        }
+        prompter.mode = .answer(.allow)
+
+        // Cancel recording: no countdown, no capture, a clear refusal.
+        let startsBefore = capture.starts.count
+        let attemptBefore = model.currentRecording?.id
+        prompter.mode = .answer(.cancel)
+        let cancelled = try result(try await record(["system_audio": true], fixture: fixture, bridge: bridge), "cancel")
+        try expect(cancelled.isError && cancelled.text.contains("did not allow sound") && cancelled.text.contains("Cancel recording") && cancelled.text.contains("system audio"),
+                   "Cancelled: \(cancelled.text)")
+        try expect(capture.starts.count == startsBefore && model.currentRecording?.id == attemptBefore && model.recordingPhase == .idle && model.recorderSettings == choices,
+                   "Nothing counted down or recorded after Cancel recording")
+
+        // Held: no countdown while the person decides; heartbeats keep the client waiting.
+        prompter.mode = .hold
+        let beats = ProgressReports()
+        let heldCall = Task { @MainActor in try await record(["microphone": true], fixture: fixture, bridge: bridge, progress: beats.handler) }
+        try await waitUntil("The prompt did not come up") { prompter.heldCount == 1 }
+        try await Task.sleep(for: .milliseconds(250))
+        try expect(model.recordingPhase == .idle && model.destination != .countdown && consent.pendingRequests.count == 1, "No countdown before the answer")
+        let values = beats.values
+        try expect(values.count >= 3 && zip(values, values.dropFirst()).allSatisfy { $0.progress < $1.progress }
+                   && values.allSatisfy { $0.progress >= AutomationAudioConsentController.heartbeatBase && $0.total == nil && ($0.message ?? "").contains("sound prompt") },
+                   "Heartbeats while the prompt is up: \(values.map(\.progress))")
+        prompter.release(.allow)
+        let heldResult = try result(try await heldCall.value, "held then allowed")
+        try expect(!heldResult.isError && capture.starts.last?.options.microphone == true && consent.pendingRequests.isEmpty, "Allowed after a while: \(heldResult.json)")
+        try expect(beats.values.last?.message == nil, "The last report no longer says it waits for the person")
+        await model.stopRecording()
+
+        // Turned off (or revoked) while the prompt was up: refused even after Allow.
+        let turnedOff = TestBox(false)
+        let offCall = Task { @MainActor in
+            try await record(["microphone": true], fixture: fixture, bridge: bridge, stillAllowed: { turnedOff.value ? AutomationSwitch.disabledMessage(tool: "start_recording") : nil })
+        }
+        try await waitUntil("The prompt did not come up") { prompter.heldCount == 1 }
+        let startsBeforeOff = capture.starts.count
+        turnedOff.value = true
+        prompter.release(.allow)
+        let off = try result(try await offCall.value, "turned off")
+        try expect(off.isError && off.text == AutomationSwitch.disabledMessage(tool: "start_recording") && capture.starts.count == startsBeforeOff && model.recordingPhase == .idle,
+                   "Refused after the answer: \(off.text)")
+
+        // The call cancelled while the prompt is up: the prompt closes, nothing records.
+        let cancelledCall = Task { @MainActor in
+            await bridge.call(toolName: "start_recording", arguments: ["source": soundArea.id, "microphone": true], workingDirectory: nil, clientName: "Claude Code", progress: nil)
+        }
+        try await waitUntil("The prompt did not come up") { prompter.heldCount == 1 }
+        let closedBefore = prompter.closedUnanswered
+        cancelledCall.cancel()
+        let cancelledOutcome = await cancelledCall.value
+        try expect(cancelledOutcome == .cancelled && prompter.closedUnanswered == closedBefore + 1 && prompter.heldCount == 0 && consent.pendingRequests.isEmpty,
+                   "A cancelled call closes its prompt: \(cancelledOutcome)")
+        try expect(model.recordingPhase == .idle && capture.starts.count == startsBeforeOff, "and records nothing")
+
+        // No answer in time: the prompt closes and nothing records.
+        let impatient = AutomationAudioConsentController(timeout: 0.3, heartbeatInterval: 0.05) { await prompter.prompt($0) }
+        let timing = AutomationBridge(model: model)
+        timing.audioConsent = impatient
+        let unanswered = try result(try await record(["system_audio": true], fixture: fixture, bridge: timing), "no answer")
+        try expect(unanswered.isError && unanswered.text.contains("did not allow sound") && unanswered.text.contains("nobody answered within 0.3 seconds"),
+                   "No answer: \(unanswered.text)")
+        try expect(prompter.closedUnanswered == closedBefore + 2 && prompter.heldCount == 0 && impatient.pendingRequests.isEmpty, "The unanswered prompt was closed")
+        try expect(capture.starts.count == startsBeforeOff && model.recordingPhase == .idle && model.recorderSettings == choices, "Nothing recorded without an answer")
+
+        // No prompt: no sound, sound turned off, the recorder's own sound.
+        let promptsBefore = prompter.requests.count
+        prompter.mode = .answer(.cancel)
+        for arguments in [[:], ["microphone": false, "system_audio": false]] as [[String: Any]] {
+            let quiet = try result(try await record(arguments, fixture: fixture, bridge: bridge), "no sound \(arguments)")
+            try expect(!quiet.isError && quiet.structuredContent?["audio_consent"] == nil && capture.starts.last?.options.microphone == false, "No sound, no prompt: \(quiet.json)")
+            await model.stopRecording()
+        }
+        model.recordMicrophone = true
+        let own = model.recorderSettings
+        let recorderSound = try result(try await record(["microphone": true], fixture: fixture, bridge: bridge), "the recorder's own sound")
+        try expect(!recorderSound.isError && capture.starts.last?.options.microphone == true && model.recorderSettings == own, "The recorder's own microphone: no prompt")
+        await model.stopRecording()
+        model.recordMicrophone = false
+
+        // The in-app assistant: the person drives it, so it never asks.
+        let inApp = model.assistantSession.context
+        try expect(!inApp.isExternal && inApp.recordingAudioConsent == nil, "The in-app assistant's context is not external")
+        let inAppTool = try unwrap(AIAssistantToolCatalog.standard.first { $0.name == "start_recording" }, "The in-app assistant has start_recording")
+        let inAppDone = TestBox(false)
+        let inAppCall = Task { @MainActor in
+            defer { inAppDone.value = true }
+            return try await inAppTool.run(arguments: ["source": soundArea.id, "microphone": true, "system_audio": true], context: inApp, progress: { _ in })
+        }
+        try await waitUntil("The in-app start did not count down") { inAppDone.value || model.recordingPhase == .countdown }
+        try await fixture.runCountdown()
+        _ = try await inAppCall.value
+        try expect(capture.starts.last?.options.microphone == true && capture.starts.last?.options.systemAudio == true, "The in-app assistant records as asked")
+        await model.stopRecording()
+        try expect(prompter.requests.count == promptsBefore, "None of these asked the person: \(prompter.requests.count - promptsBefore)")
+        try expect(model.recorderSettings == choices, "The recorder's own choices never changed: \(model.recorderSettings)")
+    }
+
+    /// The sound prompt's wait counts toward the detach threshold from the
+    /// call's arrival: still unanswered when the time is up, the call answers
+    /// with a job that says it waits for the person; wait_for_job collects
+    /// the recording once they allow it.
+    private static func soundPromptWithinTheCallsTime() async throws {
+        let fixture = try await SessionFixture()
+        defer { fixture.cleanup() }
+        let (model, capture) = (fixture.model, fixture.capture)
+        try model.captureEngine.registerAreaTarget(soundArea)
+        let prompter = ScriptedSoundPrompter()
+        prompter.mode = .hold
+        let bridge = AutomationBridge(model: model, jobs: AutomationJobs(detachAfter: 1))
+        bridge.audioConsent = AutomationAudioConsentController(timeout: 30, heartbeatInterval: 0.05) { await prompter.prompt($0) }
+        let choices = model.recorderSettings
+
+        // 0.8 s of the call's second went by before it reached the bridge
+        // (the helper, the approval prompt): it answers about 0.2 s later.
+        let asked = Date()
+        let running = try result(try await record(["microphone": true], fixture: fixture, bridge: bridge, arrivedAt: Date().addingTimeInterval(-0.8)), "detached")
+        let took = Date().timeIntervalSince(asked)
+        let jobID = try unwrap(running.structuredContent?["job_id"]?.stringValue, "A job id: \(running.json)")
+        try expect(!running.isError && running.structuredContent?["status"] == "running" && took < 0.7, "Detached from the call's arrival, after \(took) s: \(running.json)")
+        try expect(running.structuredContent?["activity"] == "waiting for the person to answer Focus Studio's sound prompt" && running.text.contains("sound prompt"),
+                   "The running status says it waits for the person: \(running.json)")
+        try expect(prompter.heldCount == 1 && model.recordingPhase == .idle && capture.starts.isEmpty, "The prompt is still up and nothing counts down")
+
+        // The person allows it: the job counts down and records; wait_for_job returns what start_recording did.
+        prompter.release(.allow)
+        try await waitUntil("The allowed job did not count down") { model.recordingPhase == .countdown }
+        try await fixture.runCountdown()
+        let collected = try result(await bridge.call(toolName: "wait_for_job", arguments: ["job_id": jobID, "timeout_seconds": 10], workingDirectory: nil, clientName: "Claude Code", progress: nil), "wait_for_job")
+        try expect(!collected.isError && collected.structuredContent?["state"] == "recording" && collected.structuredContent?["audio_consent"] == ["asked": ["microphone"], "answer": "allowed"],
+                   "wait_for_job returns the recording: \(collected.json)")
+        try expect(capture.starts.last?.options.microphone == true && model.recorderSettings == choices, "Recorded with the microphone; the recorder unchanged")
+        await model.stopRecording()
+    }
+
     // MARK: - Helpers
 
     /// Lets tasks the clock resumed run.
@@ -461,6 +740,68 @@ private final class PanelProbe {
     var active: Bool? = true
     var open = 0
     var requesters: [String?] = []
+}
+
+/// Answers the sound prompt from the test: at once, or held until released
+/// (a held prompt whose task is cancelled closes unanswered).
+@MainActor
+final class ScriptedSoundPrompter {
+    enum Mode { case answer(AutomationAudioConsentAnswer), hold }
+    var mode = Mode.answer(.allow)
+    private(set) var requests: [AutomationAudioConsentRequest] = []
+    /// Prompts closed without an answer: their call gave up or timed out.
+    private(set) var closedUnanswered = 0
+    private var held: [UUID: CheckedContinuation<AutomationAudioConsentAnswer?, Never>] = [:]
+
+    var heldCount: Int { held.count }
+
+    func prompt(_ request: AutomationAudioConsentRequest) async -> AutomationAudioConsentAnswer? {
+        requests.append(request)
+        guard case .hold = mode else {
+            if case let .answer(answer) = mode { return answer }
+            return nil
+        }
+        let id = request.id
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<AutomationAudioConsentAnswer?, Never>) in
+                if Task.isCancelled {
+                    closedUnanswered += 1
+                    continuation.resume(returning: nil)
+                } else {
+                    held[id] = continuation
+                }
+            }
+        } onCancel: {
+            Task { @MainActor in self.close(id) }
+        }
+    }
+
+    func release(_ answer: AutomationAudioConsentAnswer) {
+        let waiting = held
+        held.removeAll()
+        waiting.values.forEach { $0.resume(returning: answer) }
+    }
+
+    private func close(_ id: UUID) {
+        guard let continuation = held.removeValue(forKey: id) else { return }
+        closedUnanswered += 1
+        continuation.resume(returning: nil)
+    }
+}
+
+/// A value a test shares with the tasks it starts.
+@MainActor
+final class TestBox<Value> {
+    var value: Value
+    init(_ value: Value) { self.value = value }
+}
+
+/// Progress reports from any thread, in order.
+final class ProgressReports: @unchecked Sendable {
+    private let lock = NSLock()
+    private var reports: [(progress: Double, total: Double?, message: String?)] = []
+    var values: [(progress: Double, total: Double?, message: String?)] { lock.withLock { reports } }
+    var handler: AIToolProgressHandler { { [self] progress, total, message in lock.withLock { reports.append((progress, total, message)) } } }
 }
 
 private struct SessionFailure: Error, CustomStringConvertible {

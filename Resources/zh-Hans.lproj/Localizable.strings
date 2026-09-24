@@ -775,6 +775,15 @@
 "You can revoke this at any time in Settings › AI tools." = "你可以随时在“设置 › AI 工具”中撤销。";
 "Script: %@" = "脚本：%@";
 "%@ runs many programs, so this approval lasts only until this AI tool disconnects." = "%@ 会运行许多不同的程序，所以这次批准只在这个 AI 工具断开连接之前有效。";
+"Record sound?" = "录制声音？";
+"“%@” wants to record your microphone and system audio" = "“%@”想录制你的麦克风和系统音频";
+"“%@” wants to record your microphone" = "“%@”想录制你的麦克风";
+"“%@” wants to record system audio" = "“%@”想录制系统音频";
+"It is about to record “%@”. Your recorder settings leave this sound off; your answer applies to this recording only and changes no settings." = "它即将录制“%@”。你的录制设置里没有打开这些声音；你的选择只对这一次录制有效，不会改变任何设置。";
+"“Record without sound” records the screen only, with no sound at all. If nobody answers within %lld seconds, nothing is recorded." = "选择“无声录制”只录制画面，不录任何声音。%lld 秒内没有回答，就不会录制。";
+"Cancel recording" = "取消录制";
+"Record without sound" = "无声录制";
+"Allow for this recording" = "仅本次允许";
 "AI tools are turned off. Focus Studio refuses their calls." = "已关闭 AI 工具控制，Focus Studio 会拒绝它们的调用。";
 "Stops in %@" = "%@ 后停止";
 "Stops automatically in %@" = "%@ 后自动停止";

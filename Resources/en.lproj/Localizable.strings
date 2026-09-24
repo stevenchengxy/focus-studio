@@ -775,6 +775,15 @@
 "You can revoke this at any time in Settings › AI tools." = "You can revoke this at any time in Settings › AI tools.";
 "Script: %@" = "Script: %@";
 "%@ runs many programs, so this approval lasts only until this AI tool disconnects." = "%@ runs many programs, so this approval lasts only until this AI tool disconnects.";
+"Record sound?" = "Record sound?";
+"“%@” wants to record your microphone and system audio" = "“%@” wants to record your microphone and system audio";
+"“%@” wants to record your microphone" = "“%@” wants to record your microphone";
+"“%@” wants to record system audio" = "“%@” wants to record system audio";
+"It is about to record “%@”. Your recorder settings leave this sound off; your answer applies to this recording only and changes no settings." = "It is about to record “%@”. Your recorder settings leave this sound off; your answer applies to this recording only and changes no settings.";
+"“Record without sound” records the screen only, with no sound at all. If nobody answers within %lld seconds, nothing is recorded." = "“Record without sound” records the screen only, with no sound at all. If nobody answers within %lld seconds, nothing is recorded.";
+"Cancel recording" = "Cancel recording";
+"Record without sound" = "Record without sound";
+"Allow for this recording" = "Allow for this recording";
 "AI tools are turned off. Focus Studio refuses their calls." = "AI tools are turned off. Focus Studio refuses their calls.";
 "Stops in %@" = "Stops in %@";
 "Stops automatically in %@" = "Stops automatically in %@";

@@ -59,6 +59,13 @@ struct ControlAppInfo: Equatable, Sendable {
 ///   cancels all of that connection's calls.
 /// - Access is checked when a call arrives (asking the person if needed) and
 ///   again right before its tool runs, after any wait for its turn.
+/// - A call's time starts when it arrives, less the seconds the helper says
+///   it already spent on it (`elapsed`: opening the app, connecting): the
+///   approval prompt waits at most until then plus
+///   ``AutomationJobs/detachAfter`` (a "waiting_for_approval" result the
+///   model can call again with), the bridge's wait for a turn likewise (a
+///   "waiting_for_turn" result), and the bridge detaches the tool as a job
+///   by the same measure.
 @MainActor
 final class ControlServer: ObservableObject {
     enum State: Equatable {
@@ -321,12 +328,14 @@ final class ControlServer: ObservableObject {
             session.reply(.error(id: id, ControlError(code: ControlChannel.ErrorCode.invalidRequest, message: "A call with the id \(id) is already running.")))
             return
         }
+        // The call's time counts from here, less what the helper already spent on it.
+        let arrivedAt = Date().addingTimeInterval(-call.countedElapsed)
         let sink = ControlProgressSink(connection: session.connection, id: id, isEnabled: call.progressToken != nil)
         let workingDirectory = (call.workingDirectory ?? hello.workingDirectory)
             .flatMap { $0.hasPrefix("/") ? URL(fileURLWithPath: $0, isDirectory: true) : nil }
         let task = Task { @MainActor [weak self, weak session] in
             guard let self, let session else { return }
-            let outcome = await self.run(call, hello: hello, session: session, workingDirectory: workingDirectory, progress: sink.handler)
+            let outcome = await self.run(call, hello: hello, session: session, workingDirectory: workingDirectory, arrivedAt: arrivedAt, progress: sink.handler)
             sink.finish {
                 do {
                     try session.connection.send(outcome.controlReply(id: id))
@@ -344,14 +353,18 @@ final class ControlServer: ObservableObject {
         hello: ControlHello,
         session: ControlSession,
         workingDirectory: URL?,
+        arrivedAt: Date,
         progress: AIToolProgressHandler?
     ) async -> AutomationCallResult {
         await readiness()
         if Task.isCancelled { return .cancelled }
         let identity = await session.identity.value
-        switch await access.authorize(identity: identity, client: hello.client, tool: call.tool, connection: session.access, progress: progress) {
+        let deadline = arrivedAt.addingTimeInterval(bridge.jobs.detachAfter)
+        switch await access.authorize(identity: identity, client: hello.client, tool: call.tool, connection: session.access, deadline: deadline, progress: progress) {
         case let .refused(message):
             return .result(.failure(message))
+        case let .stillAsking(result):
+            return .result(result)
         case .cancelled:
             return .cancelled
         case .allowed:
@@ -371,6 +384,8 @@ final class ControlServer: ObservableObject {
             arguments: call.arguments.mapValues(\.jsonObject),
             workingDirectory: workingDirectory,
             clientName: clientName,
+            programName: identity?.programName,
+            arrivedAt: arrivedAt,
             progress: progress,
             stillAllowed: { access.refusalNow(identity: identity, connection: connection, tool: call.tool, client: clientName) }
         )

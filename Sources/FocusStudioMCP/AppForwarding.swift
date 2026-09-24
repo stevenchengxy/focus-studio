@@ -36,8 +36,19 @@ struct ForwardedToolCall: Sendable {
     let progress: AIToolProgressHandler?
     /// The client's roots; nil when it did not declare the roots capability.
     let roots: MCPRootsProvider?
+    /// When the client's `tools/call` reached the helper. The app counts the
+    /// time since (opening it, connecting) toward the moment the call
+    /// answers with a job (`ControlCall.elapsed`).
+    var receivedAt: ContinuousClock.Instant = .now
 
     var toolName: String { tool.name }
+
+    /// Seconds since ``receivedAt``.
+    var elapsed: TimeInterval {
+        let duration = ContinuousClock.now - receivedAt
+        let (seconds, attoseconds) = duration.components
+        return max(0, Double(seconds) + Double(attoseconds) / 1e18)
+    }
 }
 
 /// Carries a tool call to the Focus Studio app and brings back what the app's

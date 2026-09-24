@@ -27,6 +27,10 @@ import Foundation
 ///   reports tiny increasing heartbeat values (when its request carried a
 ///   progress token), so clients with an idle timeout keep waiting; the app's
 ///   own progress for the call follows.
+/// - **Time.** Each call carries the seconds since its `tools/call` reached
+///   the helper (`elapsed`: opening the app, connecting), which the app
+///   counts toward the moment a long call answers with a job, so the first
+///   call of a session also answers within the client's tool timeout.
 /// - **Cancellation** (the client's, or the helper shutting down) sends
 ///   `cancel` for the call; the app answers it as cancelled.
 /// - **The app quitting mid-call** ends each running call with an `isError`
@@ -655,7 +659,10 @@ final class AppLink: @unchecked Sendable {
                 // Opaque to the app, which only checks that it is there.
                 // (Not `cond ? nil : …`: AIJSONValue is ExpressibleByNilLiteral,
                 // so that nil would be sent as JSON null.)
-                progressToken: call.progress.map { _ in AIJSONValue(id) }
+                progressToken: call.progress.map { _ in AIJSONValue(id) },
+                // Measured as the request is written: the app counts the time
+                // spent opening it and connecting toward the call's job threshold.
+                elapsed: (call.elapsed * 1_000).rounded() / 1_000
             ).json
         }
         switch reply {

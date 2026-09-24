@@ -52,10 +52,10 @@ struct AIAssistantTests {
         step("MCP: one navigating call at a time"); try await callQueue()
         step("MCP: library tools"); try await libraryTools(root: root)
         step("MCP: assemble_video pinned to a project"); try await assemblePinned(root: root)
-        step("recording sessions: returns once live, duration, wait_for_recording, cancel"); try await recordingSessions(root: root)
+        step("recording sessions: returns once live, duration, wait_for_recording, cancel, sound prompt"); try await recordingSessions(root: root)
         step("Ark request bodies"); try arkRequestBodies()
         step("Ark fixture round trip"); try await arkFixtureRoundTrip(root: root)
-        print("AIAssistantTests: PASS (protocol parsing, scripted agent loop, confirmation gate, stop, model resolver, update_settings incl. export width/frame rate, set_chapters, dropped writes, interleaved edits, app control (sources/start/stop/library, permission errors, main display, joined stops), zoom tools, audio tools, export paths, export guard, assemble_video, automation API (JSON values, structured results, result language, working-directory paths, pinned projects, remove_zoom by id, list_projects paging and search, get_project, get_status, per-export width/frame rate with progress and cancellation, assemble_video output), MCP layer (exact v1 catalog with project_id schemas, annotations and instructions, result shape with inline JPEG, jobs with detach/wait_for_job/progress/cancellation/retention, the one-at-a-time call queue, import/screenshot/rename/delete tools, pinned assembly), recording sessions (start returns once live, per-recording options, duration auto-stop and early Finish, wait_for_recording finished/cancelled/timeout/idle with progress, joined stops, cancellation during the countdown, a start timeout or a cancel as it goes live discards, an untracked recording waited through its save, in-app guidance by duration), Ark request bodies, Ark fixture round trip incl. tools)")
+        print("AIAssistantTests: PASS (protocol parsing, scripted agent loop, confirmation gate, stop, model resolver, update_settings incl. export width/frame rate, set_chapters, dropped writes, interleaved edits, app control (sources/start/stop/library, permission errors, main display, joined stops), zoom tools, audio tools, export paths, export guard, assemble_video, automation API (JSON values, structured results, result language, working-directory paths, pinned projects, remove_zoom by id, list_projects paging and search, get_project, get_status, per-export width/frame rate with progress and cancellation, assemble_video output), MCP layer (exact v1 catalog with project_id schemas, annotations and instructions, result shape with inline JPEG, jobs with detach/wait_for_job/progress/cancellation/retention, the activity a waiting job names, wait_for_job bounded from its arrival, the one-at-a-time call queue, import/screenshot/rename/delete tools, pinned assembly), recording sessions (start returns once live, per-recording options, duration auto-stop and early Finish, wait_for_recording finished/cancelled/timeout/idle with progress, joined stops, cancellation during the countdown, a start timeout or a cancel as it goes live discards, an untracked recording waited through its save, in-app guidance by duration, the sound prompt: allow/record without sound (no sound at all, the recorder's own included)/cancel/no answer/refused meanwhile/call cancelled/no way to ask, a recorder sound turned off while the prompt is up stays off, none for no sound, the recorder's own sound or the in-app assistant, the recorder's choices unchanged), the call queue's deadline, Ark request bodies, Ark fixture round trip incl. tools)")
     }
 
     // MARK: - Helpers
@@ -670,6 +670,10 @@ struct AIAssistantTests {
         var recorderPreferences = AIRecordingOptions(systemAudio: false, microphone: false, automaticZooms: true, browserContentOnly: true, frameRate: 60)
         /// What each recording actually used: the preferences with the start's overrides.
         var attemptSettings: [AIRecordingOptions] = []
+        /// The sound the recorder's own choices record, like StudioModel's.
+        var recorderAudio: AIRecordingAudio {
+            AIRecordingAudio(microphone: recorderPreferences.microphone ?? false, systemAudio: recorderPreferences.systemAudio ?? false)
+        }
         /// The latest attempt, as StudioModel keeps it. `onSessionRead` runs
         /// on each read, so a test can act at the moment a tool polls it.
         var recordingSession: AIRecordingSession? {

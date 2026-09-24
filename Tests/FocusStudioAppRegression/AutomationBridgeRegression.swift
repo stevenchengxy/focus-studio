@@ -29,7 +29,7 @@ enum AutomationBridgeRegression {
         try await englishUnderChineseUI()
         try await longCallsDetach()
         try windowPresenterSteps()
-        print("AutomationBridgeRegression: PASS (main window presenter: a hidden app is unhidden instead of opening another window, a minimized window is restored, a closed one is never reused, edits by project_id open the editor and save, switching saves the other project, parallel calls take turns, refusals while busy or recording, while the in-app assistant works and during an editor export, unknown/withheld tools, project_id validation, read-only tools stay put, capture_frame inline JPEG, working-directory export with progress, import/screenshot/rename/Trash, English results and refusals under a Chinese UI, detached jobs with wait_for_job and cancellation, reads skip the queue, queued calls detach in time)")
+        print("AutomationBridgeRegression: PASS (main window presenter: a hidden app is unhidden instead of opening another window, a minimized window is restored, a closed one is never reused, edits by project_id open the editor and save, switching saves the other project, parallel calls take turns, refusals while busy or recording, while the in-app assistant works (also after an Allow at the sound prompt) and during an editor export, unknown/withheld tools, project_id validation, read-only tools stay put, capture_frame inline JPEG, working-directory export with progress, import/screenshot/rename/Trash, English results and refusals under a Chinese UI, detached jobs with wait_for_job and cancellation, reads skip the queue, queued calls detach in time, a call whose time runs out waiting for its turn answers waiting_for_turn with heartbeats and runs when called again)")
     }
 
     // MARK: - Main window
@@ -161,8 +161,25 @@ enum AutomationBridgeRegression {
         let zoomsBefore = fixture.model.activeProject?.zoomSegments.count ?? 0
         let secondBefore = try fixture.metadata(second.id)
 
+        // A start_recording whose sound prompt is up while the person starts
+        // an in-app assistant request: their Allow no longer starts it.
+        let area = CaptureTargetInfo(id: "area-1-bridge", kind: .area, nativeID: 1, title: "Test area", frame: CaptureRect(x: 0, y: 0, width: 64, height: 64))
+        try fixture.model.captureEngine.registerAreaTarget(area)
+        let prompter = ScriptedSoundPrompter()
+        prompter.mode = .hold
+        bridge.audioConsent = AutomationAudioConsentController(timeout: 30, heartbeatInterval: 0.05) { await prompter.prompt($0) }
+        let recording = Task { @MainActor in
+            await bridge.call(toolName: "start_recording", arguments: ["source": area.id, "microphone": true], workingDirectory: nil, clientName: "Claude Code", progress: nil)
+        }
+        try await waitUntil("the sound prompt") { prompter.heldCount == 1 }
+        try expect(fixture.model.automationNavigationRefusal == nil, "Nothing refuses the call when the prompt comes up")
         fixture.model.assistantSession.send("Add two zooms")
         try await waitUntil("the assistant to pause between its steps") { script.paused.isRaised }
+        prompter.release(.allow)
+        guard case let .result(afterAllow) = await recording.value else { throw BridgeFailure("start_recording must answer") }
+        try expect(afterAllow.isError && afterAllow.text == "Focus Studio's own assistant is working on a request in the app. Try again when it finishes."
+                   && fixture.model.recordingPhase == .idle && fixture.model.destination == .editor && fixture.model.activeProject?.id == first.id,
+                   "Allowed while the in-app assistant works: refused, no countdown, the editor stays: \(afterAllow.text)")
         try expect(fixture.model.isAssistantRunning && fixture.model.activeProject?.zoomSegments.count == zoomsBefore + 1, "The assistant's first zoom is on the open project")
         let refused = try await fixture.fail(bridge, "add_zoom", ["project_id": second.id.uuidString, "start": 0.2, "end": 0.6, "x": 0.5, "y": 0.5])
         try expect(refused.text == "Focus Studio's own assistant is working on a request in the app. Try again when it finishes.", "Edits wait for the in-app assistant: \(refused.text)")
@@ -446,6 +463,39 @@ enum AutomationBridgeRegression {
             let outcome = await queued.call(toolName: "wait_for_job", arguments: ["job_id": id, "timeout_seconds": 10], workingDirectory: nil, clientName: "test", progress: nil)
             guard case let .result(done) = outcome, done.text == "Waited 1.5 s." else { throw BridgeFailure("Each queued job finishes: \(outcome)") }
         }
+
+        // A call that waited for the person's approval can find the turn held
+        // by a call that arrived after it, which only detaches a threshold
+        // after its own arrival. The waiter's time runs out first: it answers
+        // "waiting_for_turn" without running (heartbeats until then), and
+        // calling again runs it.
+        let started = BridgeFlag()
+        let late = MCPToolSpec(tool: SlowTool(name: "slow_late", cancelled: BridgeFlag(), started: started), title: "Slow", description: "Sleeps for the given seconds, taking a turn like the calls that navigate.",
+                               scope: .global, annotations: .reads, navigates: true)
+        let turns = AutomationBridge(model: fixture.model, catalog: MCPToolCatalog(tools: MCPToolCatalog.v1.tools + [navigating, late]), jobs: AutomationJobs(detachAfter: 1))
+        turns.turnHeartbeatInterval = 0.05
+        let holder = Task { @MainActor in
+            await turns.call(toolName: "slow_tool", arguments: ["seconds": 3], workingDirectory: nil, clientName: "test", progress: nil)
+        }
+        try await waitUntil("the later call to hold the turn") { turns.queue.isBusy }
+        let beats = ProgressRecorder()
+        let arrivedEarlier = Date().addingTimeInterval(-0.5)
+        let waitedAt = Date()
+        let waiting = await turns.call(toolName: "slow_late", arguments: ["seconds": 0.1], workingDirectory: nil, clientName: "test", arrivedAt: arrivedEarlier,
+                                       progress: { beats.record($0, $1, $2) })
+        let answeredAt = Date().timeIntervalSince(arrivedEarlier)
+        guard case let .result(turnless) = waiting else { throw BridgeFailure("The waiting call must answer: \(waiting)") }
+        try expect(turnless.isError && turnless.structuredContent == ["status": "waiting_for_turn", "tool": "slow_late", "retry": true]
+                   && turnless.text.contains("slow_late has not run yet") && turnless.text.contains("Call slow_late again"), "Out of time for a turn: \(turnless.json)")
+        try expect(answeredAt >= 1 && answeredAt < 1.5 && Date().timeIntervalSince(waitedAt) < 1.2, "It answers about a threshold (plus the grace) after its arrival: \(answeredAt) s")
+        try expect(!started.isRaised && turns.queue.waitingCount == 0, "Its tool never ran, and it left the queue")
+        let values = beats.values
+        try expect(values.count >= 5 && zip(values, values.dropFirst()).allSatisfy { $0 < $1 }
+                   && values.allSatisfy { $0 > AutomationBridge.turnHeartbeatBase && $0 < AutomationAudioConsentController.heartbeatBase },
+                   "Heartbeats while it waited, between the approval's and the sound prompt's: \(values)")
+        guard case let .result(held) = await holder.value, held.structuredContent?["status"] == "running" else { throw BridgeFailure("The holder detaches as usual") }
+        let retried = try await fixture.succeed(turns, "slow_late", ["seconds": 0.1])
+        try expect(retried.text == "Waited 0.1 s." && started.isRaised, "Called again, it runs: \(retried.text)")
     }
 
     private static func waitUntil(_ message: String, predicate: () -> Bool) async throws {
@@ -512,14 +562,17 @@ private final class PausingCompletion: TextCompletionProviding, @unchecked Senda
     }
 }
 
-/// Sleeps for `seconds`, reporting progress every 0.1 s, and notes a cancellation.
+/// Sleeps for `seconds`, reporting progress every 0.1 s, and notes that it
+/// started and whether it was cancelled.
 private struct SlowTool: AIAssistantTool {
-    let name = "slow_tool"
+    var name = "slow_tool"
     let summary = "Sleep."
     let cancelled: BridgeFlag
+    var started: BridgeFlag?
     var parametersSchema: [String: Any] { ["type": "object", "properties": ["seconds": ["type": "number"]]] }
 
     func run(arguments: [String: Any], context: AIAssistantContext, progress: @escaping @Sendable (String) -> Void) async throws -> AIToolResult {
+        started?.raise()
         let seconds = (arguments["seconds"] as? NSNumber)?.doubleValue ?? 1
         let steps = max(1, Int(seconds * 10))
         do {
