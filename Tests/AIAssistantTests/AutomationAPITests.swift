@@ -293,6 +293,9 @@ extension AIAssistantTests {
         check(AIToolSupport.orderedZooms(box.project!).first { $0.segment.id.uuidString == lateID }?.index == 3, "the late zoom is now #3")
         let removeSchema = RemoveZoomTool().parametersSchema
         check((removeSchema["properties"] as? [String: Any])?["id"] != nil && removeSchema["required"] == nil, "the schema offers id and requires neither")
+        let removeProperties = removeSchema["properties"] as? [String: [String: Any]]
+        check(removeProperties?["index"]?["type"] as? String == "integer" && removeProperties?["all"]?["type"] as? String == "boolean",
+              "one JSON type per property: index is a number, all a flag")
         await expectToolError("id and a different index", { _ = try await RemoveZoomTool().run(arguments: ["id": lateID, "index": 2], context: context, progress: { _ in }) }) {
             if case let .invalidArgument(message) = $0 { return message.contains("#3") } else { return false }
         }
@@ -309,8 +312,17 @@ extension AIAssistantTests {
         let firstID = AIToolSupport.orderedZooms(box.project!)[0].segment.id.uuidString
         _ = try await RemoveZoomTool().run(arguments: ["zoom_id": firstID], context: context, progress: { _ in })
         check(box.project!.zoomSegments.count == 1, "zoom_id is accepted as an alias")
-        let all = try structured(try await RemoveZoomTool().run(arguments: ["index": "all"], context: context, progress: { _ in }), "remove_zoom all")
+        let remainingID = AIToolSupport.orderedZooms(box.project!)[0].segment.id.uuidString
+        for conflicting in [["id": remainingID, "all": true], ["index": 1, "all": true]] as [[String: Any]] {
+            await expectToolError("all with \(conflicting.keys.sorted())", { _ = try await RemoveZoomTool().run(arguments: conflicting, context: context, progress: { _ in }) }) {
+                if case let .invalidArgument(message) = $0 { return message.contains("only one") } else { return false }
+            }
+        }
+        check(box.project!.zoomSegments.count == 1, "conflicting arguments remove nothing")
+        let all = try structured(try await RemoveZoomTool().run(arguments: ["all": true], context: context, progress: { _ in }), "remove_zoom all")
         check(all["removed_count"] == 1 && all["remaining"] == 0 && box.project!.zoomSegments.isEmpty, "remove all: \(all)")
+        let legacy = try await RemoveZoomTool().run(arguments: ["index": "all"], context: context, progress: { _ in })
+        check(legacy.text == "The project has no zooms.", "index \"all\" is still accepted: \(legacy.text)")
         await expectThrows("neither index nor id") { _ = try await RemoveZoomTool().run(arguments: [:], context: context, progress: { _ in }) }
     }
 

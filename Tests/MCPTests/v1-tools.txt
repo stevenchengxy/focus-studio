@@ -1,0 +1,26 @@
+# The tools focus-studio-mcp lists (MCPToolCatalog.v1), in order. Checked
+# against the catalog by Tests/MCPTests (Swift), against the helper's
+# tools/list by mcp_client.py and by scripts/verify-release.sh.
+get_status
+list_projects
+get_project
+rename_project
+delete_project
+import_video
+create_screenshot_demo
+list_recording_sources
+start_recording
+stop_recording
+add_zoom
+remove_zoom
+set_zoom_style
+update_settings
+set_chapters
+set_background_image
+set_background_music
+set_sound_effects
+capture_frame
+export_project
+assemble_video
+list_assets
+wait_for_job

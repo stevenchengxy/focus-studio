@@ -14,3 +14,4 @@ zsh "$SCRIPT_DIR/test-app-regression.sh" --skip-build
 bash "$SCRIPT_DIR/test-codex-connection.sh"
 bash "$SCRIPT_DIR/test-ai-gateway.sh"
 zsh "$SCRIPT_DIR/test-ai-assistant.sh" --skip-build
+zsh "$SCRIPT_DIR/test-mcp.sh" --skip-build

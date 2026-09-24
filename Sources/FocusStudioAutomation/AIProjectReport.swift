@@ -65,10 +65,11 @@ public enum AIProjectReport {
 
     // MARK: - Structured
 
-    /// Everything a client needs to edit the project by id: look, zoom style,
-    /// audio and export settings under the argument names update_settings,
-    /// set_zoom_style and set_sound_effects take, zooms with stable ids for
-    /// remove_zoom, chapters, and click and typing moments for add_zoom.
+    /// Everything a client needs to edit the project by id: look, zoom style
+    /// and audio settings under the argument names update_settings,
+    /// set_zoom_style and set_sound_effects take, the export width and frame
+    /// rate (update_settings' exportWidth and frameRate), zooms with stable
+    /// ids for remove_zoom, chapters, and click and typing moments for add_zoom.
     static func data(
         of project: RecordingProject,
         isOpen: Bool,

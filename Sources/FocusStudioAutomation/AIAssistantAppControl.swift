@@ -647,7 +647,7 @@ struct ListProjectsTool: AIAssistantTool {
             "properties": [
                 "query": ["type": "string", "description": "Only projects whose title contains this text (case-insensitive)."],
                 "offset": ["type": "integer", "minimum": 0, "description": "How many matching projects to skip (default 0)."],
-                "limit": ["type": "integer", "minimum": 1, "maximum": Self.maximumLimit, "description": "How many to return (default \(Self.maximumListed), at most \(Self.maximumLimit))."],
+                "limit": ["type": "integer", "minimum": 1, "maximum": Self.maximumLimit, "description": "How many to return, from 1 to \(Self.maximumLimit) (default \(Self.maximumListed))."],
             ],
         ]
     }
@@ -784,7 +784,7 @@ public struct AddZoomTool: AIAssistantTool {
                 "end": ["type": "number", "description": "Seconds; at least 0.2 s after start."],
                 "x": ["type": "number", "minimum": 0, "maximum": 1, "description": "Horizontal centre of the zoom, 0 = left edge, 1 = right edge."],
                 "y": ["type": "number", "minimum": 0, "maximum": 1, "description": "Vertical centre, 0 = top, 1 = bottom."],
-                "scale": ["type": "number", "minimum": 1.1, "maximum": 3, "description": "Magnification; default is the project's zoom scale."],
+                "scale": ["type": "number", "minimum": 1.1, "maximum": 3, "description": "Magnification, from 1.1 to 3; by default the project's zoom scale."],
             ],
         ]
     }
@@ -852,8 +852,11 @@ struct RemoveZoomTool: AIAssistantTool {
         [
             "type": "object",
             "properties": [
-                "index": ["type": ["integer", "string"], "description": "The zoom number, or \"all\". Give index or id."],
+                // One JSON type per property: some MCP clients (Codex) keep
+                // only the first type of a union, which would lose "all".
+                "index": ["type": "integer", "minimum": 1, "description": "The zoom number (1-based, in time order). Give one of index, id or all."],
                 "id": ["type": "string", "description": "The zoom's id (from get_project or add_zoom); unlike the number it stays valid when other zooms are added or removed."],
+                "all": ["type": "boolean", "description": "true removes every zoom."],
             ],
         ]
     }
@@ -866,7 +869,10 @@ struct RemoveZoomTool: AIAssistantTool {
         let arguments = AIToolArguments(raw)
         let project = try await AIToolSupport.requireProject(context)
         let ordered = AIToolSupport.orderedZooms(project)
+        // index "all" is still accepted from models that learned it.
+        let removesAll = arguments.bool("all") == true
         if let rawID = arguments.string("id") ?? arguments.string("zoom_id") {
+            guard !removesAll else { throw AIToolError.invalidArgument("Give only one of \"index\", \"id\" or \"all\".") }
             guard let id = UUID(uuidString: rawID) else {
                 throw AIToolError.invalidArgument("\"id\" must be a zoom id from get_project or add_zoom (got \"\(rawID)\").")
             }
@@ -880,8 +886,11 @@ struct RemoveZoomTool: AIAssistantTool {
             }
             return try await remove(entry, from: project, context: context)
         }
-        let rawIndex = arguments.string("index") ?? (arguments.bool("all") == true ? "all" : nil)
-        guard let rawIndex else { throw AIToolError.invalidArgument("Missing required argument \"index\" (a zoom number or \"all\") or \"id\".") }
+        let rawIndex = arguments.string("index") ?? (removesAll ? "all" : nil)
+        guard let rawIndex else { throw AIToolError.invalidArgument("Missing required argument \"index\" (a zoom number), \"id\" or \"all\": true.") }
+        if removesAll, rawIndex.lowercased() != "all" {
+            throw AIToolError.invalidArgument("Give only one of \"index\", \"id\" or \"all\".")
+        }
         if rawIndex.lowercased() == "all" {
             let projectID = AIJSONValue(project.id.uuidString)
             guard !ordered.isEmpty else {
@@ -895,7 +904,7 @@ struct RemoveZoomTool: AIAssistantTool {
             return AIToolResult(text: "Removed all \(removed) zooms. Automatic zooms return if the zoom style is regenerated; set autoZoomEnabled false to keep them off.",
                                 data: ["project_id": projectID, "removed_count": AIJSONValue(removed), "remaining": 0])
         }
-        guard let index = arguments.int("index") else { throw AIToolError.invalidArgument("\"index\" must be a zoom number or \"all\".") }
+        guard let index = arguments.int("index") else { throw AIToolError.invalidArgument("\"index\" must be a zoom number (or give \"all\": true).") }
         guard let entry = ordered.first(where: { $0.index == index }) else {
             throw AIToolError.invalidArgument(ordered.isEmpty ? "The project has no zooms." : "Zoom #\(index) does not exist; the project has zooms 1–\(ordered.count).")
         }
@@ -945,11 +954,11 @@ struct SetZoomStyleTool: AIAssistantTool {
             "type": "object",
             "properties": [
                 "screenAnimation": ["type": "string", "enum": ScreenAnimationStyle.allCases.map(\.rawValue)],
-                "zoomScale": ["type": "number", "minimum": 1.1, "maximum": 3, "description": "Default magnification for automatic zooms and new manual zooms."],
-                "zoomHold": ["type": "number", "minimum": 0.2, "maximum": 3, "description": "Seconds an automatic zoom stays on a click."],
-                "zoomEaseIn": ["type": "number", "minimum": 0.05, "maximum": 1, "description": "Seconds to zoom in."],
-                "zoomEaseOut": ["type": "number", "minimum": 0.05, "maximum": 1.4, "description": "Seconds to zoom out."],
-                "zoomChainGap": ["type": "number", "minimum": 0, "maximum": ProjectSettings.maximumZoomChainGap, "description": "Clicks closer than this many seconds pan within one zoom instead of zooming out."],
+                "zoomScale": ["type": "number", "minimum": 1.1, "maximum": 3, "description": "Default magnification for automatic zooms and new manual zooms, from 1.1 to 3."],
+                "zoomHold": ["type": "number", "minimum": 0.2, "maximum": 3, "description": "Seconds an automatic zoom stays on a click, from 0.2 to 3."],
+                "zoomEaseIn": ["type": "number", "minimum": 0.05, "maximum": 1, "description": "Seconds to zoom in, from 0.05 to 1."],
+                "zoomEaseOut": ["type": "number", "minimum": 0.05, "maximum": 1.4, "description": "Seconds to zoom out, from 0.05 to 1.4."],
+                "zoomChainGap": ["type": "number", "minimum": 0, "maximum": ProjectSettings.maximumZoomChainGap, "description": "Clicks closer than this many seconds (from 0 to \(ProjectSettings.maximumZoomChainGap)) pan within one zoom instead of zooming out."],
                 "autoZoomEnabled": ["type": "boolean"],
             ],
         ]
@@ -1045,7 +1054,7 @@ struct SetBackgroundMusicTool: AIAssistantTool {
             "required": ["track"],
             "properties": [
                 "track": ["type": "string", "description": "Bundled track id or title, a local audio file path, or \"none\"."],
-                "volume": ["type": "number", "minimum": 0, "maximum": 1],
+                "volume": ["type": "number", "minimum": 0, "maximum": 1, "description": "Music volume, from 0 (silent) to 1 (full); by default the track's suggested level."],
             ],
         ]
     }
@@ -1139,8 +1148,8 @@ struct SetSoundEffectsTool: AIAssistantTool {
             "properties": [
                 "click": ["type": "boolean", "description": "Play a click sound on every recorded click."],
                 "zoom": ["type": "boolean", "description": "Play a whoosh on zoom transitions."],
-                "click_volume": ["type": "number", "minimum": 0, "maximum": 1],
-                "zoom_volume": ["type": "number", "minimum": 0, "maximum": 1],
+                "click_volume": ["type": "number", "minimum": 0, "maximum": 1, "description": "Click sound volume, from 0 (silent) to 1 (full)."],
+                "zoom_volume": ["type": "number", "minimum": 0, "maximum": 1, "description": "Zoom whoosh volume, from 0 (silent) to 1 (full)."],
             ],
         ]
     }

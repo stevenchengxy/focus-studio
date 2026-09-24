@@ -53,11 +53,12 @@ extension AIAssistantTests {
             "set_background_image": .project, "set_background_music": .project, "set_sound_effects": .project, "capture_frame": .project,
             "export_project": .project,
         ]
-        let readOnly: Set<String> = ["get_status", "list_projects", "get_project", "list_recording_sources", "list_assets", "wait_for_job"]
+        let readOnly: Set<String> = ["get_status", "list_projects", "get_project", "list_assets", "wait_for_job"]
         // Calls that make the app show something else run one at a time.
         let stayPut: Set<String> = ["get_status", "list_projects", "get_project", "list_assets", "assemble_video", "wait_for_job"]
-        let destructive: Set<String> = ["delete_project", "remove_zoom", "set_chapters", "update_settings", "set_zoom_style"]
-        let idempotent: Set<String> = ["rename_project", "delete_project", "set_zoom_style", "update_settings", "set_background_image", "set_background_music", "set_sound_effects"]
+        // Replacing an existing file (overwrite: true) is destructive too.
+        let destructive: Set<String> = ["delete_project", "remove_zoom", "set_chapters", "update_settings", "set_zoom_style", "export_project", "assemble_video"]
+        let idempotent: Set<String> = ["rename_project", "delete_project", "list_recording_sources", "set_zoom_style", "update_settings", "set_background_image", "set_background_music", "set_sound_effects"]
         for spec in catalog.tools {
             let name = spec.name
             check(spec.scope == scopes[name], "\(name) scope: \(spec.scope)")
@@ -80,7 +81,7 @@ extension AIAssistantTests {
             if spec.scope == .global {
                 check(projectID == nil && !required.contains("project_id") && !spec.acceptsProjectID && !spec.requiresProjectID, "\(name) takes no project_id")
             } else {
-                check(projectID?["type"] == "string" && projectID?["format"] == "uuid" && projectID?["description"]?.stringValue?.contains("list_projects") == true, "\(name) takes a project_id: \(projectID ?? .null)")
+                check(projectID?["type"] == "string" && projectID?["format"] == nil && projectID?["description"]?.stringValue?.contains("list_projects") == true, "\(name) takes a project_id: \(projectID ?? .null)")
                 let optional = ["list_assets", "assemble_video"].contains(name)
                 check(spec.requiresProjectID == !optional && required.contains("project_id") == !optional, "\(name): project_id required \(!optional)")
             }
@@ -92,6 +93,9 @@ extension AIAssistantTests {
             check(annotations.destructive == destructive.contains(name), "\(name) destructiveHint")
             check(!annotations.openWorld, "\(name) stays on this Mac")
             if !annotations.readOnly { check(annotations.idempotent == idempotent.contains(name), "\(name) idempotentHint") }
+            // Clients skip approval for read-only tools and run them in parallel.
+            check(!(spec.navigates && annotations.readOnly), "\(name): a call that changes what Focus Studio shows is not readOnlyHint")
+            if schema["properties"]?["overwrite"] != nil { check(annotations.destructive, "\(name) can replace a file, so it is destructive") }
             let json = spec.descriptor["annotations"]
             check(json?["title"]?.stringValue == spec.title && json?["readOnlyHint"] == AIJSONValue(annotations.readOnly) && json?["openWorldHint"] == false, "\(name) annotation JSON")
             // MCP defaults destructiveHint to true, so writers state it; readers omit it.
@@ -131,6 +135,10 @@ extension AIAssistantTests {
         check(custom.inputSchema["required"] == nil && custom.inputSchema["properties"]?["project_id"] != nil, "an optional project_id is offered but not required")
 
         let instructions = MCPToolCatalog.instructions
+        // Claude Code cuts server instructions at 2,048 UTF-16 units; the rule
+        // about project.json must survive any cut.
+        check(instructions.utf16.count <= 2_000, "the server instructions fit Claude Code's 2,048-character limit: \(instructions.utf16.count)")
+        check(String(instructions.prefix(1_024)).contains("project.json"), "the project.json rule is near the top of the instructions")
         for phrase in ["list_recording_sources → start_recording", "stop_recording", "project_id", "top-left", "seconds", "working directory", "countdown",
                        "control bar", "editor", "in-app assistant", "wait_for_job", "overwrite", "project.json"] {
             check(instructions.contains(phrase), "the server instructions mention \(phrase)")

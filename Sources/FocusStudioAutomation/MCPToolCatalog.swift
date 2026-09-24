@@ -123,6 +123,22 @@ public struct MCPToolSpec: Sendable {
         }
     }
 
+    /// The argument names the schema declares, sorted.
+    public var argumentNames: [String] {
+        (inputSchema["properties"]?.objectValue?.keys).map { $0.sorted() } ?? []
+    }
+
+    /// Names a tool takes without declaring them: aliases for what another
+    /// tool returns (add_zoom answers with a zoom_id).
+    static let undeclaredArgumentAliases: [String: Set<String>] = ["remove_zoom": ["zoom_id"]]
+
+    /// The names in `arguments` the tool does not take, sorted; null values
+    /// are ignored. Such an argument would otherwise be dropped unnoticed.
+    public func unknownArgumentNames(in arguments: [String: AIJSONValue]) -> [String] {
+        let known = Set(argumentNames).union(Self.undeclaredArgumentAliases[name] ?? [])
+        return arguments.filter { key, value in value != .null && !known.contains(key) }.keys.sorted()
+    }
+
     /// The `tools/list` entry: name, title, description, inputSchema and annotations.
     public var descriptor: AIJSONValue {
         [
@@ -134,10 +150,11 @@ public struct MCPToolSpec: Sendable {
         ]
     }
 
+    /// No `format` keyword: clients differ on which formats they accept
+    /// (some reject `uuid`), so the description says what the id is.
     static let projectIDProperty: AIJSONValue = [
         "type": "string",
-        "format": "uuid",
-        "description": "The project's id, from list_projects, stop_recording, import_video or create_screenshot_demo.",
+        "description": "The project's id (a UUID), from list_projects, stop_recording, import_video or create_screenshot_demo.",
     ]
 
     private static func schema(_ base: AIJSONValue, scope: MCPToolScope, requiresProjectID: Bool, descriptions: [String: String]) -> AIJSONValue {
@@ -197,6 +214,14 @@ public struct MCPToolCatalog: Sendable {
 
     // MARK: - v1
 
+    /// destructiveHint marks a call that can lose something the same tool
+    /// cannot simply set back: zooms and chapters it removes or replaces,
+    /// automatic zooms a new zoom style regenerates, many settings changed at
+    /// once (update_settings), and existing files an export or assembly
+    /// replaces with overwrite: true. A tool that sets one project setting the
+    /// same tool can set back (background image, music, sound effects) is not
+    /// destructive. Clients such as Codex run non-destructive, closed-world
+    /// calls without asking the person.
     public static let v1 = MCPToolCatalog(tools: [
         // Status and the library.
         MCPToolSpec(
@@ -211,7 +236,7 @@ public struct MCPToolCatalog: Sendable {
         ),
         MCPToolSpec(
             tool: GetProjectTool(), title: "Get project",
-            description: "Describe one project without opening it: title, duration and source size; look, zoom style, audio and export settings under the argument names update_settings, set_zoom_style and set_sound_effects take; the zooms with their ids and numbers (the first 100 in time order, with zoom_count); the chapters (the first 50, with chapter_count; long text is shortened with …); and the recorded clicks and typing moments (at most 200 of each, spread evenly over the recording, with their totals), as times in seconds and positions from 0 to 1 measured from the top-left corner of the recording. Use it to plan zooms and chapters.",
+            description: "Describe one project without opening it: title, duration and source size; look, zoom style and audio settings under the argument names update_settings, set_zoom_style and set_sound_effects take; export_width and frame_rate (change them with update_settings' exportWidth and frameRate, or for one export with export_project's width and frame_rate); the zooms with their ids and numbers (the first 100 in time order, with zoom_count); the chapters (the first 50, with chapter_count; long text is shortened with …); and the recorded clicks and typing moments (at most 200 of each, spread evenly over the recording, with their totals), as times in seconds and positions from 0 to 1 measured from the top-left corner of the recording. Use it to plan zooms and chapters.",
             scope: .projectReadOnly, annotations: .reads
         ),
         MCPToolSpec(
@@ -241,7 +266,8 @@ public struct MCPToolCatalog: Sendable {
         MCPToolSpec(
             tool: ListRecordingSourcesTool(), title: "List recording sources",
             description: "Refresh and list what can be recorded: every display (the main display first) and the largest visible windows, each with its source id, kind, app, title and size in points. Focus Studio shows its recorder screen for this, saving and closing the editor if it is open. Needs the Screen Recording permission (see get_status).",
-            scope: .global, annotations: .reads, navigates: true
+            // Not read-only: it switches Focus Studio to its recorder screen.
+            scope: .global, annotations: MCPToolAnnotations(readOnly: false, idempotent: true), navigates: true
         ),
         MCPToolSpec(
             tool: StartRecordingTool(), title: "Start recording",
@@ -261,7 +287,7 @@ public struct MCPToolCatalog: Sendable {
         ),
         MCPToolSpec(
             tool: RemoveZoomTool(), title: "Remove zoom",
-            description: "Remove one zoom from a project by its id (from get_project or add_zoom; it stays valid when other zooms change) or by its number (1-based, in time order), or every zoom with index \"all\". Focus Studio opens the project in its editor.",
+            description: "Remove one zoom from a project by its id (from get_project or add_zoom; it stays valid when other zooms change) or by its number (index, 1-based, in time order), or every zoom with all: true. Focus Studio opens the project in its editor.",
             scope: .project, annotations: MCPToolAnnotations(readOnly: false, destructive: true)
         ),
         MCPToolSpec(
@@ -306,13 +332,13 @@ public struct MCPToolCatalog: Sendable {
         MCPToolSpec(
             tool: ExportProjectTool(), title: "Export project",
             description: "Render a project with its look, zooms, captions and audio to an MP4 and return its absolute path. An existing file is replaced only with overwrite: true, and the project's own recording and media are never written. Optional width (1280, 1920, 2560 or 3840) and frame_rate (24, 30 or 60) apply to this export only. Reports progress; an export still running after about 200 seconds returns a job_id for wait_for_job. Focus Studio opens the project in its editor.",
-            scope: .project, annotations: MCPToolAnnotations(readOnly: false),
+            scope: .project, annotations: MCPToolAnnotations(readOnly: false, destructive: true),
             propertyDescriptions: ["path": "The .mp4 file or a folder for it: an absolute path, or relative to your working directory. Default: export-<timestamp>.mp4 in the project's assets folder. Not inside the Focus Studio library except the project's ai folder."]
         ),
         MCPToolSpec(
             tool: AssembleVideoTool(), title: "Assemble video",
             description: "Join video clips in order (for example intro + exported demo + outro) into one 1080p or 720p MP4, with a cut or a 0.5 s crossfade; each clip is scaled and letterboxed to fit and its audio kept. An existing file is replaced only with overwrite: true, and a clip is never overwritten. With project_id the default location is that project's assets folder (the project is not opened). A run still going after about 200 seconds returns a job_id for wait_for_job.",
-            scope: .projectReadOnly, requiresProjectID: false, annotations: MCPToolAnnotations(readOnly: false),
+            scope: .projectReadOnly, requiresProjectID: false, annotations: MCPToolAnnotations(readOnly: false, destructive: true),
             propertyDescriptions: [
                 "clips": "Video files in playback order: absolute paths, or relative to your working directory.",
                 "path": "The .mp4 file or a folder for it: an absolute path, or relative to your working directory. Default: assembled-<timestamp>.mp4 in the project's assets folder (with project_id) or in Focus Studio's AI Assets folder.",
@@ -332,7 +358,7 @@ public struct MCPToolCatalog: Sendable {
                 "required": ["job_id"],
                 "properties": [
                     "job_id": ["type": "string", "description": "The job_id of a running result."],
-                    "timeout_seconds": ["type": "number", "minimum": 0, "maximum": AIJSONValue(AutomationJobs.maximumWait), "default": AIJSONValue(AutomationJobs.defaultWait), "description": "How long to wait, in seconds."],
+                    "timeout_seconds": ["type": "number", "minimum": 0, "maximum": AIJSONValue(AutomationJobs.maximumWait), "default": AIJSONValue(AutomationJobs.defaultWait), "description": AIJSONValue("How long to wait, in seconds, from 0 to \(Int(AutomationJobs.maximumWait)) (default \(Int(AutomationJobs.defaultWait))).")],
                 ],
             ],
             annotations: .reads, scope: .global, requiresProjectID: false, returnsImage: false, navigates: false, tool: nil
@@ -342,11 +368,13 @@ public struct MCPToolCatalog: Sendable {
     // MARK: - Instructions
 
     /// The MCP server `instructions`: what Focus Studio is, the workflow and
-    /// the conventions every tool follows.
+    /// the conventions every tool follows. Kept under 2,000 characters, with
+    /// the rule about project.json in the first paragraph: Claude Code cuts
+    /// server instructions at 2,048.
     public static let instructions = """
-    Focus Studio is a macOS app that records the screen and turns the recording into a polished product-demo video: automatic zooms on clicks and typing, a styled background, chapter captions, music and sound effects, MP4 export. These tools operate the Focus Studio app on this Mac while a person watches it.
+    Focus Studio is a macOS app that records the screen and turns the recording into a polished product-demo video: automatic zooms on clicks and typing, a styled background, chapter captions, music and sound effects, MP4 export. These tools operate the Focus Studio app on this Mac while a person watches it. Only Focus Studio writes its library: never edit a project's files (project.json) directly.
 
-    Workflow: get_status (permissions, bundled music) → list_recording_sources → start_recording (Focus Studio shows a 3-second countdown and then a floating control bar; the person performs the demo) → stop_recording when the demo is done (saves a new project and returns its project_id; if the person finished from the control bar instead, the new project is first in list_projects) → edit by project_id: get_project, add_zoom / remove_zoom / set_zoom_style, set_chapters, update_settings, set_background_image, set_background_music, set_sound_effects → capture_frame to check the look → export_project. import_video and create_screenshot_demo make projects from existing files; list_projects, rename_project and delete_project manage the library.
+    Workflow: get_status (permissions, bundled music) → list_recording_sources → start_recording (a 3-second countdown, then the person performs the demo) → stop_recording (returns the new project_id; if the person stopped from the control bar, the new project is first in list_projects) → edit by project_id: get_project, add_zoom, set_chapters, update_settings, set_background_music and the other editing tools → capture_frame to check the look → export_project. import_video and create_screenshot_demo make projects from existing files.
 
     Conventions:
     - Times and durations are seconds within the recording.
@@ -356,7 +384,5 @@ public struct MCPToolCatalog: Sendable {
     - Editing and output tools open their project in the Focus Studio editor first (saving and closing any other open project), so the person sees every change. They are refused while a recording is under way, the app is busy or its own in-app assistant is working on a request; try again afterwards.
     - Calls that change what Focus Studio shows run one at a time, in the order they arrive; reads run at once.
     - A call still running after about 200 seconds (a long export) answers with status "running" and a job_id; call wait_for_job with it to get the result.
-    - Results are English text plus structured content with ids, absolute paths, counts, durations and sizes.
-    - Only Focus Studio writes its library: never edit a project's files (project.json) directly.
     """
 }
