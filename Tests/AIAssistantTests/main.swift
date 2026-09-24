@@ -52,9 +52,10 @@ struct AIAssistantTests {
         step("MCP: one navigating call at a time"); try await callQueue()
         step("MCP: library tools"); try await libraryTools(root: root)
         step("MCP: assemble_video pinned to a project"); try await assemblePinned(root: root)
+        step("recording sessions: returns once live, duration, wait_for_recording, cancel"); try await recordingSessions(root: root)
         step("Ark request bodies"); try arkRequestBodies()
         step("Ark fixture round trip"); try await arkFixtureRoundTrip(root: root)
-        print("AIAssistantTests: PASS (protocol parsing, scripted agent loop, confirmation gate, stop, model resolver, update_settings incl. export width/frame rate, set_chapters, dropped writes, interleaved edits, app control (sources/start/stop/library, permission errors, main display, joined stops), zoom tools, audio tools, export paths, export guard, assemble_video, automation API (JSON values, structured results, result language, working-directory paths, pinned projects, remove_zoom by id, list_projects paging and search, get_project, get_status, per-export width/frame rate with progress and cancellation, assemble_video output), MCP layer (exact v1 catalog with project_id schemas, annotations and instructions, result shape with inline JPEG, jobs with detach/wait_for_job/progress/cancellation/retention, the one-at-a-time call queue, import/screenshot/rename/delete tools, pinned assembly), Ark request bodies, Ark fixture round trip incl. tools)")
+        print("AIAssistantTests: PASS (protocol parsing, scripted agent loop, confirmation gate, stop, model resolver, update_settings incl. export width/frame rate, set_chapters, dropped writes, interleaved edits, app control (sources/start/stop/library, permission errors, main display, joined stops), zoom tools, audio tools, export paths, export guard, assemble_video, automation API (JSON values, structured results, result language, working-directory paths, pinned projects, remove_zoom by id, list_projects paging and search, get_project, get_status, per-export width/frame rate with progress and cancellation, assemble_video output), MCP layer (exact v1 catalog with project_id schemas, annotations and instructions, result shape with inline JPEG, jobs with detach/wait_for_job/progress/cancellation/retention, the one-at-a-time call queue, import/screenshot/rename/delete tools, pinned assembly), recording sessions (start returns once live, per-recording options, duration auto-stop and early Finish, wait_for_recording finished/cancelled/timeout/idle with progress, joined stops, cancellation during the countdown, a start timeout or a cancel as it goes live discards, an untracked recording waited through its save, in-app guidance by duration), Ark request bodies, Ark fixture round trip incl. tools)")
     }
 
     // MARK: - Helpers
@@ -664,35 +665,122 @@ struct AIAssistantTests {
 
         /// Thrown by the next start, like StudioModel's own refusals.
         var startFailure: Error?
+        /// The recorder's own choices; like StudioModel, a start's options
+        /// apply to that recording only (`attemptSettings`) and never change them.
+        var recorderPreferences = AIRecordingOptions(systemAudio: false, microphone: false, automaticZooms: true, browserContentOnly: true, frameRate: 60)
+        /// What each recording actually used: the preferences with the start's overrides.
+        var attemptSettings: [AIRecordingOptions] = []
+        /// The latest attempt, as StudioModel keeps it. `onSessionRead` runs
+        /// on each read, so a test can act at the moment a tool polls it.
+        var recordingSession: AIRecordingSession? {
+            get {
+                onSessionRead?()
+                return storedSession
+            }
+            set { storedSession = newValue }
+        }
+        private var storedSession: AIRecordingSession?
+        var onSessionRead: (() -> Void)?
+        /// Attempts cancelled through discardRecording(id:), in order.
+        var discarded: [UUID] = []
+        /// The discarded attempts that were live (recording) then.
+        var discardedLive: [UUID] = []
+        /// Stops the recording when its duration runs out, like StudioModel.
+        private var automaticStop: Task<Void, Never>?
+        var hasPendingAutomaticStop: Bool { automaticStop != nil }
 
-        func startRecording(sourceID: String, options: AIRecordingOptions) throws {
+        func startRecording(sourceID: String, options: AIRecordingOptions) throws -> UUID {
             if let startFailure { self.startFailure = nil; throw startFailure }
             guard recordingPhase == .idle else { throw AIToolError.failed("A recording is already in progress.") }
             guard sources.contains(where: { $0.id == sourceID }) else { throw AIToolError.invalidArgument("Unknown source \(sourceID).") }
             startedSourceIDs.append(sourceID)
             startedOptions.append(options)
+            var used = recorderPreferences
+            if let value = options.systemAudio { used.systemAudio = value }
+            if let value = options.microphone { used.microphone = value }
+            if let value = options.automaticZooms { used.automaticZooms = value }
+            if let value = options.browserContentOnly { used.browserContentOnly = value }
+            if let value = options.frameRate { used.frameRate = value }
+            used.duration = options.duration
+            attemptSettings.append(used)
             lastReportedError = nil
+            let id = UUID()
+            recordingSession = AIRecordingSession(id: id, sourceID: sourceID, duration: options.duration)
             recordingPhase = .countdown
             switch startBehaviour {
             case let .succeed(delay):
-                Task { try? await Task.sleep(for: .seconds(delay)); self.recordingPhase = .recording }
+                Task {
+                    try? await Task.sleep(for: .seconds(delay))
+                    guard self.recordingSession?.id == id, self.recordingPhase == .countdown else { return }
+                    self.recordingSession?.startedAt = Date()
+                    self.recordingPhase = .recording
+                    self.scheduleAutomaticStop(id)
+                }
             case let .fail(message, delay):
-                Task { try? await Task.sleep(for: .seconds(delay)); self.recordingPhase = .failed(message) }
+                Task {
+                    try? await Task.sleep(for: .seconds(delay))
+                    guard self.recordingSession?.id == id, self.recordingPhase == .countdown else { return }
+                    self.recordingPhase = .failed(message)
+                    self.end(id, .failed(message))
+                }
             case let .cancel(delay):
                 Task {
                     try? await Task.sleep(for: .seconds(delay))
+                    guard self.recordingSession?.id == id, self.recordingPhase == .countdown else { return }
                     self.lastReportedError = "The selected screen or window is no longer available."
                     self.recordingPhase = .idle
+                    self.end(id, .failed("The selected screen or window is no longer available."))
                 }
             case let .permissionDenied(message, delay):
                 Task {
                     try? await Task.sleep(for: .seconds(delay))
+                    guard self.recordingSession?.id == id, self.recordingPhase == .countdown else { return }
                     self.lastReportedError = message
                     self.recordingPhase = .idle
+                    self.end(id, .failed(message))
                 }
             case .hang:
                 break
             }
+            return id
+        }
+
+        private func scheduleAutomaticStop(_ id: UUID) {
+            automaticStop?.cancel()
+            guard let duration = recordingSession?.duration else { return }
+            automaticStop = Task {
+                try? await Task.sleep(for: .seconds(duration))
+                guard !Task.isCancelled, self.recordingSession?.id == id, self.recordingSession?.outcome == nil else { return }
+                self.automaticStop = nil
+                self.automaticStopCount += 1
+                await self.stopRecording()
+            }
+        }
+
+        /// Times the duration stopped a recording.
+        var automaticStopCount = 0
+
+        private func end(_ id: UUID, _ outcome: AIRecordingOutcome) {
+            guard recordingSession?.id == id, recordingSession?.outcome == nil else { return }
+            recordingSession?.outcome = outcome
+            recordingSession?.endedAt = Date()
+            automaticStop?.cancel()
+            automaticStop = nil
+        }
+
+        func discardRecording(id: UUID) async {
+            guard recordingSession?.id == id, recordingSession?.outcome == nil, stopInFlight == nil else { return }
+            discarded.append(id)
+            if recordingPhase == .recording { discardedLive.append(id) }
+            recordingPhase = .idle
+            end(id, .cancelled)
+        }
+
+        /// The person's Cancel, from the countdown or the control bar.
+        func cancelFromControlBar() {
+            guard let id = recordingSession?.id, stopInFlight == nil else { return }
+            recordingPhase = .idle
+            end(id, .cancelled)
         }
 
         var isFinishingRecording: Bool { stopInFlight != nil }
@@ -700,6 +788,8 @@ struct AIAssistantTests {
         /// Joins a stop in flight, and ignores one with nothing recording, like StudioModel does.
         func stopRecording() async {
             stopRequests += 1
+            automaticStop?.cancel()
+            automaticStop = nil
             if let stopInFlight {
                 await stopInFlight.value
                 return
@@ -716,6 +806,7 @@ struct AIAssistantTests {
         private func finalize() async {
             finalizeCount += 1
             recordingPhase = .stopping
+            let id = recordingSession?.id
             switch stopBehaviour {
             case let .succeed(delay):
                 try? await Task.sleep(for: .seconds(delay))
@@ -725,10 +816,12 @@ struct AIAssistantTests {
                 openID = project.id
                 box.project = project
                 recordingPhase = .idle
+                if let id { end(id, .finished(projectID: project.id)) }
             case let .fail(message, delay):
                 try? await Task.sleep(for: .seconds(delay))
                 lastReportedError = message
                 recordingPhase = .idle
+                if let id { end(id, .failed(message)) }
             case .hang:
                 // Until the test gives up on it and resets the phase.
                 while recordingPhase == .stopping { try? await Task.sleep(for: .milliseconds(10)) }
@@ -736,6 +829,10 @@ struct AIAssistantTests {
         }
 
         var recordingElapsed: TimeInterval? { recordingPhase == .recording ? elapsed : nil }
+        var recordingRemaining: TimeInterval? {
+            guard recordingPhase == .recording, let autoStopAt = recordingSession?.autoStopAt else { return nil }
+            return max(0, autoStopAt.timeIntervalSinceNow)
+        }
         var projectSummaries: [AIProjectSummary] { projects.map(AIProjectSummary.init) }
         var openProjectID: UUID? { openID }
 
@@ -874,7 +971,7 @@ struct AIAssistantTests {
         check(app.startedSourceIDs == ["win-1"], "the resolved source was started: \(app.startedSourceIDs)")
         let options = app.startedOptions.last!
         check(options.systemAudio == true && options.frameRate == 60 && options.automaticZooms == false && options.microphone == nil && options.browserContentOnly == nil, "only the given options are set: \(options)")
-        check(app.recordingPhase == .recording && started.text.contains("Recording started (3-second countdown elapsed)") && started.text.contains("win-1") && started.text.contains("60 fps"), "start reports after the countdown: \(started.text)")
+        check(app.recordingPhase == .recording && started.text.contains("Recording started after the 3-second countdown") && started.text.contains("win-1") && started.text.contains("60 fps"), "start reports after the countdown: \(started.text)")
         await expectToolError("second start while recording", { _ = try await start.run(arguments: ["source": "display"], context: context, progress: { _ in }) }) {
             if case let .failed(message) = $0 { return message.contains("already recording") } else { return false }
         }
@@ -903,9 +1000,12 @@ struct AIAssistantTests {
         }
         app.recordingPhase = .idle
         app.startBehaviour = .hang
+        let discardedBefore = app.discarded.count
         await expectToolError("start timeout", { _ = try await StartRecordingTool(startTimeout: 0.3).run(arguments: ["source": "display"], context: context, progress: { _ in }) }) {
-            if case .timedOut = $0 { return true } else { return false }
+            if case let .timedOut(message) = $0 { return message.contains("was cancelled") && message.contains("nothing is recording") } else { return false }
         }
+        check(app.discarded.count == discardedBefore + 1 && app.recordingSession?.outcome == .cancelled && app.recordingPhase == .idle,
+              "a start that timed out is discarded, not left to go live: \(app.discarded)")
         app.recordingPhase = .idle
 
         // stop failures: the app's error and a timeout.
@@ -927,7 +1027,7 @@ struct AIAssistantTests {
         // A countdown in progress is waited out by stop_recording.
         app.startBehaviour = .succeed(after: 0.15)
         app.stopBehaviour = .succeed(after: 0.02)
-        try app.startRecording(sourceID: "win-3", options: AIRecordingOptions())
+        _ = try app.startRecording(sourceID: "win-3", options: AIRecordingOptions())
         check(app.recordingPhase == .countdown, "countdown started directly")
         let afterCountdown = try await stop.run(arguments: [:], context: context, progress: { _ in })
         check(app.projects.count == 2 && afterCountdown.text.contains("Recording 2"), "stop waited for the countdown, then saved: \(afterCountdown.text)")

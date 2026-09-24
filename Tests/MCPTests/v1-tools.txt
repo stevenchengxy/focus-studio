@@ -11,6 +11,7 @@ create_screenshot_demo
 list_recording_sources
 start_recording
 stop_recording
+wait_for_recording
 add_zoom
 remove_zoom
 set_zoom_style

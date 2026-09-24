@@ -14,6 +14,7 @@ public enum AIAssistantToolCatalog {
             ListRecordingSourcesTool(),
             StartRecordingTool(),
             StopRecordingTool(),
+            WaitForRecordingTool(),
             ListProjectsTool(),
             OpenProjectTool(),
             CloseEditorTool(),
@@ -1483,11 +1484,12 @@ struct RevealInFinderTool: AIAssistantTool {
 
 // MARK: - Wait
 
-/// Lets multi-step flows pause, for example between start_recording and
-/// stop_recording, or while a page settles. Cancellable; capped at two minutes.
+/// Lets multi-step flows pause, for example while a page settles.
+/// Cancellable; capped at two minutes. (A recording of a set length passes
+/// duration to start_recording and waits with wait_for_recording instead.)
 struct WaitTool: AIAssistantTool {
     let name = "wait"
-    let summary = "Pause for a number of seconds (1-120) before the next step, e.g. to let a recording run for the requested time or a page load. Reports progress every 5 seconds."
+    let summary = "Pause for a number of seconds (1-120) before the next step, e.g. while a page loads. Not for recordings: pass duration to start_recording and call wait_for_recording. Reports progress every 5 seconds."
 
     var parametersSchema: [String: Any] {
         ["type": "object",

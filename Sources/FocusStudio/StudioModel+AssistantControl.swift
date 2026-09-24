@@ -85,11 +85,29 @@ extension StudioModel: AppControlling {
     }
 
     var recordingPhase: AIRecordingPhase {
+        Self.recordingPhase(
+            destination: destination,
+            isFinishingRecording: isFinishingRecording,
+            engineState: captureEngine.state,
+            attemptIsLive: currentRecording?.isLive == true,
+            isRunningCodexPlan: isRunningCodexPlan
+        )
+    }
+
+    /// The recording phase from the model's state, kept apart so regression
+    /// tests can check it for states only a real capture reaches.
+    static func recordingPhase(
+        destination: Destination,
+        isFinishingRecording: Bool,
+        engineState: RecordingState,
+        attemptIsLive: Bool,
+        isRunningCodexPlan: Bool
+    ) -> AIRecordingPhase {
         if destination == .countdown { return .countdown }
         // Saving the project follows the engine's own stop; the phase stays
         // `.stopping` until the editor shows the result.
         if isFinishingRecording { return .stopping }
-        switch captureEngine.state {
+        switch engineState {
         case .preparing:
             return .countdown
         case .recording:
@@ -101,7 +119,18 @@ extension StudioModel: AppControlling {
             // afterwards the engine keeps the old state until the next start.
             return destination == .recording ? .failed(message) : .idle
         case .idle, .completed:
-            return .idle
+            // A Codex Director plan saves its capture (the project is created
+            // and saved) after the engine completes and before the editor
+            // opens it; it has no recording attempt, so that save is reported
+            // as stopping, not idle (which a waiting tool reads as cancelled).
+            // Its success opens the editor and its failure the Director, both
+            // idle again.
+            if destination == .recording, isRunningCodexPlan { return .stopping }
+            // A capture this model started and nothing has ended yet. In the
+            // app the engine then reports `.recording` itself; a capture
+            // scripted through `startCapture` (regression tests) leaves the
+            // engine idle.
+            return destination == .recording && attemptIsLive ? .recording : .idle
         }
     }
 
@@ -114,8 +143,8 @@ extension StudioModel: AppControlling {
         return nil
     }
 
-    func startRecording(sourceID: String, options: AIRecordingOptions) throws {
-        guard !captureEngine.isRecording, destination != .countdown else {
+    func startRecording(sourceID: String, options: AIRecordingOptions) throws -> UUID {
+        guard !captureEngine.isRecording, destination != .countdown, currentRecording?.isLive != true else {
             throw AIToolError.failed("A recording is already in progress.")
         }
         guard !isManagingProjects, !isRunningCodexPlan else {
@@ -124,29 +153,35 @@ extension StudioModel: AppControlling {
         guard let target = captureEngine.availableTargets.first(where: { $0.id == sourceID }) else {
             throw AIToolError.invalidArgument("Source \(sourceID) is no longer available; call list_recording_sources again.")
         }
-        try startRecording(target: target, options: options)
+        return try startRecording(target: target, options: options)
     }
 
-    /// Applies the options and starts the countdown for a target the engine
-    /// listed. Kept apart from the lookup so regression tests, which cannot
-    /// fill the engine's list without ScreenCaptureKit, can drive it.
-    func startRecording(target: CaptureTargetInfo, options: AIRecordingOptions) throws {
+    /// Starts the countdown for a target the engine listed, recording with
+    /// the recorder's choices overridden by `options` for this recording only
+    /// (the recorder keeps its own), and returns the attempt's id. Kept apart
+    /// from the lookup so regression tests, which cannot fill the engine's
+    /// list without ScreenCaptureKit, can drive it.
+    func startRecording(target: CaptureTargetInfo, options: AIRecordingOptions) throws -> UUID {
+        guard !isFinishingRecording else {
+            throw AIToolError.failed("The last recording is still being saved. Try again when the editor shows it.")
+        }
         if destination == .editor { closeEditor() }
-        if let value = options.systemAudio { recordSystemAudio = value }
-        if let value = options.microphone { recordMicrophone = value }
-        if let value = options.automaticZooms { automaticZooms = value }
-        if let value = options.browserContentOnly { browserContentOnly = value }
-        if let value = options.frameRate { frameRate = value }
         selectedTargetID = target.id
         destination = .recorder
         // Errors from earlier attempts must not be read as this attempt's outcome.
         isShowingError = false
         capturePermissionDenied = false
         captureFailureDetails = nil
-        startRecordingCountdown(allowUnavailableTracking: true)
-        guard destination == .countdown else {
+        let id = beginRecordingCountdown(
+            target: target,
+            settings: recorderSettings.applying(options),
+            duration: options.duration,
+            allowUnavailableTracking: true
+        )
+        guard let id, destination == .countdown else {
             throw AIToolError.failed(lastReportedError ?? "The countdown could not start.")
         }
+        return id
     }
 
     /// Applies an assistant edit to the project open in the editor through the
@@ -164,8 +199,20 @@ extension StudioModel: AppControlling {
     }
 
     var recordingElapsed: TimeInterval? {
-        guard captureEngine.isRecording, let start = captureEngine.recordingStartUptime else { return nil }
-        return max(0, ProcessInfo.processInfo.systemUptime - start)
+        guard recordingPhase == .recording else { return nil }
+        let live = currentRecording.flatMap { $0.isLive ? $0.startUptime : nil }
+        guard let start = live ?? captureEngine.recordingStartUptime else { return nil }
+        return max(0, recordingClock.now() - start)
+    }
+
+    var recordingRemaining: TimeInterval? {
+        guard recordingPhase == .recording, let attempt = currentRecording, attempt.isLive,
+              let deadline = attempt.automaticStopUptime else { return nil }
+        return max(0, deadline - recordingClock.now())
+    }
+
+    var recordingSession: AIRecordingSession? {
+        currentRecording?.session
     }
 
     var projectSummaries: [AIProjectSummary] {

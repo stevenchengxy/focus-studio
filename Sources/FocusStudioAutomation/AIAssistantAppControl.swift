@@ -126,20 +126,72 @@ public struct AIPermissionStatus: Equatable, Sendable {
     }
 }
 
-/// Capture options the assistant may set before a recording. Nil keeps the app's current value.
+/// Options for one recording. They apply to that recording only: nil keeps
+/// the recorder's own choice, and nothing here changes the choices the person
+/// made in the recorder.
 public struct AIRecordingOptions: Equatable, Sendable {
     public var systemAudio: Bool?
     public var microphone: Bool?
     public var automaticZooms: Bool?
     public var browserContentOnly: Bool?
     public var frameRate: Int?
+    /// Seconds after the capture actually starts (after the countdown) at
+    /// which the app stops the recording by itself, through the same stop as
+    /// the Finish button; nil records until stopped.
+    public var duration: TimeInterval?
 
-    public init(systemAudio: Bool? = nil, microphone: Bool? = nil, automaticZooms: Bool? = nil, browserContentOnly: Bool? = nil, frameRate: Int? = nil) {
+    /// What `duration` may be: one second to ten minutes.
+    public static let durationRange: ClosedRange<TimeInterval> = 1...600
+
+    public init(systemAudio: Bool? = nil, microphone: Bool? = nil, automaticZooms: Bool? = nil, browserContentOnly: Bool? = nil, frameRate: Int? = nil, duration: TimeInterval? = nil) {
         self.systemAudio = systemAudio
         self.microphone = microphone
         self.automaticZooms = automaticZooms
         self.browserContentOnly = browserContentOnly
         self.frameRate = frameRate
+        self.duration = duration
+    }
+}
+
+/// How a recording attempt ended.
+public enum AIRecordingOutcome: Equatable, Sendable {
+    /// Saved as this project, which the editor then showed.
+    case finished(projectID: UUID)
+    /// The countdown or the recording was cancelled; nothing was kept.
+    case cancelled
+    /// The capture could not start, or the recording could not be saved.
+    case failed(String)
+}
+
+/// One recording attempt as the tools follow it: from its countdown to how it
+/// ended. The app keeps the latest one.
+public struct AIRecordingSession: Equatable, Sendable {
+    public var id: UUID
+    /// The source being recorded (an id from list_recording_sources).
+    public var sourceID: String
+    /// When frames started arriving: the recording's real start, after the
+    /// countdown and the capture start. Nil until then.
+    public var startedAt: Date?
+    /// Seconds after `startedAt` at which the app stops by itself; nil when
+    /// the recording runs until someone stops it.
+    public var duration: TimeInterval?
+    /// Nil while the attempt is counting down, recording or being saved.
+    public var outcome: AIRecordingOutcome?
+    public var endedAt: Date?
+
+    public init(id: UUID, sourceID: String, startedAt: Date? = nil, duration: TimeInterval? = nil, outcome: AIRecordingOutcome? = nil, endedAt: Date? = nil) {
+        self.id = id
+        self.sourceID = sourceID
+        self.startedAt = startedAt
+        self.duration = duration
+        self.outcome = outcome
+        self.endedAt = endedAt
+    }
+
+    /// When the app stops by itself, for a recording with a duration.
+    public var autoStopAt: Date? {
+        guard let startedAt, let duration else { return nil }
+        return startedAt.addingTimeInterval(duration)
     }
 }
 
@@ -227,17 +279,28 @@ public protocol AppControlling: AnyObject, Sendable {
     /// The error the app is currently showing the user, if any, including the
     /// recorder's Screen Recording permission notice after a refused start.
     var lastReportedError: String? { get }
-    /// Selects the source, applies the options and starts the countdown.
-    /// Throws when the app cannot start (unknown source, recording in progress).
-    func startRecording(sourceID: String, options: AIRecordingOptions) throws
+    /// Selects the source and starts the visible countdown for a recording
+    /// with these options (for this recording only), and returns the new
+    /// attempt's id (``recordingSession``). Throws when the app cannot start
+    /// (unknown source, recording in progress).
+    func startRecording(sourceID: String, options: AIRecordingOptions) throws -> UUID
     /// Finishes the recording; on success the app opens the editor with the new
     /// project. A call while a stop is already under way (the Finish button,
-    /// another tool call) waits for that stop instead of finalizing again; a
-    /// call with no live recording (a stop that already finished, a cancel
-    /// winding down) does nothing.
+    /// the recording's duration running out, another tool call) waits for that
+    /// stop instead of finalizing again; a call with no live recording (a stop
+    /// that already finished, a cancel winding down) does nothing.
     func stopRecording() async
+    /// Cancels attempt `id` (its countdown, its capture start or the
+    /// recording) and keeps nothing, as the Cancel buttons do. Does nothing
+    /// once that attempt has ended or while a stop is saving it.
+    func discardRecording(id: UUID) async
+    /// The latest recording attempt, live or ended; nil before the first.
+    var recordingSession: AIRecordingSession? { get }
     /// Seconds since frames started arriving, while `.recording`; nil otherwise.
     var recordingElapsed: TimeInterval? { get }
+    /// Seconds until a recording with a duration stops by itself, while it
+    /// records; nil otherwise.
+    var recordingRemaining: TimeInterval? { get }
     /// Library entries, newest first.
     var projectSummaries: [AIProjectSummary] { get }
     /// The freshest copy of a library project, without opening it: the
@@ -325,6 +388,99 @@ extension AIToolSupport {
         }
     }
 
+    /// How a recording ended, as stop_recording and wait_for_recording report it.
+    enum RecordingEnd {
+        case finished(AIProjectSummary)
+        case cancelled
+    }
+
+    /// Whether the recording a tool follows has ended, and how: saved as a
+    /// project (the stop is over and the project is in the library),
+    /// cancelled, or failed (the failure). Nil while it has not ended.
+    ///
+    /// `sessionID` is the attempt the tool followed from the start. Without
+    /// one (an app that does not track attempts, or a recording started some
+    /// other way), a new project in the editor after `previousProjectID`
+    /// ends it, as does, with `idleMeansCancelled`, the app going idle
+    /// without one.
+    @MainActor
+    static func recordingEnd(
+        _ app: any AppControlling,
+        sessionID: UUID?,
+        previousProjectID: UUID?,
+        idleMeansCancelled: Bool
+    ) -> Result<RecordingEnd, AIToolError>? {
+        if let sessionID {
+            guard let session = app.recordingSession, session.id == sessionID else {
+                return .failure(.failed("The recording ended and another one has started since. Call get_status for the new one and list_projects for the saved projects."))
+            }
+            switch session.outcome {
+            case let .finished(projectID)?:
+                // Listed and no longer stopping: the editor shows it.
+                guard app.recordingPhase != .stopping, let summary = app.projectSummaries.first(where: { $0.id == projectID }) else { return nil }
+                return .success(.finished(summary))
+            case .cancelled?:
+                return .success(.cancelled)
+            case let .failed(message)?:
+                return .failure(.failed(session.startedAt == nil ? "The recording could not start: \(message)" : "The recording could not be saved: \(message)"))
+            case nil:
+                if case let .failed(message) = app.recordingPhase {
+                    return .failure(.failed("The recording failed: \(message)"))
+                }
+                return nil
+            }
+        }
+        if let id = app.openProjectID, id != previousProjectID, app.recordingPhase != .stopping,
+           let summary = app.projectSummaries.first(where: { $0.id == id }) {
+            return .success(.finished(summary))
+        }
+        if case let .failed(message) = app.recordingPhase {
+            return .failure(.failed("The recording could not be saved: \(message)"))
+        }
+        if app.recordingPhase == .idle, app.openProjectID == previousProjectID {
+            if let error = app.lastReportedError { return .failure(.failed("The recording could not be saved: \(error)")) }
+            if idleMeansCancelled { return .success(.cancelled) }
+        }
+        return nil
+    }
+
+    /// The result for a recording saved as `project`: its id, title,
+    /// duration, size and zoom count, with `state: "finished"`.
+    static func finishedRecording(_ project: AIProjectSummary, isOpen: Bool) -> AIToolResult {
+        var text = "Recording saved as project \"\(project.displayTitle)\" (id \(project.id.uuidString), \(seconds(project.duration)) s, \(project.sourceWidth)×\(project.sourceHeight), \(project.zoomCount) automatic zooms)."
+        if isOpen { text += " It is open in the editor." }
+        let data = merged(AIProjectReport.summaryData(project, isOpen: isOpen), ["project_id": AIJSONValue(project.id.uuidString), "state": "finished"])
+        return AIToolResult(text: text, data: data)
+    }
+
+    /// How the latest recording ended, for a tool that found nothing
+    /// recording: a sentence and the data. Nil when there has been none.
+    @MainActor
+    static func lastRecordingReport(_ app: any AppControlling) -> (text: String, data: AIJSONValue)? {
+        guard let session = app.recordingSession, let outcome = session.outcome else { return nil }
+        let ago = session.endedAt.map { " \(seconds(max(0, Date().timeIntervalSince($0)))) s ago" } ?? ""
+        var fields: [String: AIJSONValue] = [
+            "started_at": session.startedAt.map { AIJSONValue($0) } ?? .null,
+            "ended_at": session.endedAt.map { AIJSONValue($0) } ?? .null,
+        ]
+        let text: String
+        switch outcome {
+        case let .finished(projectID):
+            fields["state"] = "finished"
+            fields["project_id"] = AIJSONValue(projectID.uuidString)
+            let title = app.projectSummaries.first { $0.id == projectID }.map { " \"\($0.displayTitle)\"" } ?? ""
+            text = "The last recording ended\(ago) and was saved as project\(title) (id \(projectID.uuidString))."
+        case .cancelled:
+            fields["state"] = "cancelled"
+            text = "The last recording was cancelled\(ago); nothing was saved."
+        case let .failed(message):
+            fields["state"] = "failed"
+            fields["error"] = AIJSONValue(message)
+            text = "The last recording failed\(ago): \(message)"
+        }
+        return (text, .object(fields))
+    }
+
     static func projectLine(_ summary: AIProjectSummary, isOpen: Bool) -> String {
         var line = "\(summary.displayTitle) · \(seconds(summary.duration)) s · \(summary.sourceWidth)×\(summary.sourceHeight) · \(Self.dateFormatter.string(from: summary.createdAt)) · id \(summary.id.uuidString)"
         if isOpen { line += " · open in the editor" }
@@ -404,7 +560,7 @@ struct ListRecordingSourcesTool: AIAssistantTool {
 
 struct StartRecordingTool: AIAssistantTool {
     let name = "start_recording"
-    let summary = "Select a display or window and start recording after the app's 3-second countdown. Optional capture settings apply to this recording. Returns once frames are being captured; call stop_recording to finish."
+    let summary = "Select a display or window and start recording after the app's 3-second countdown. Returns as soon as the recording is live; the user sees a control bar and can finish or cancel it. Optional capture settings apply to this recording only; with duration the app stops by itself that many seconds after the recording started. Then reply to the user: call stop_recording when they say they are done, or, for a recording with a duration, wait_for_recording."
 
     /// How long the countdown plus capture start may take.
     var startTimeout: TimeInterval = 20
@@ -424,6 +580,10 @@ struct StartRecordingTool: AIAssistantTool {
                 "automatic_zooms": ["type": "boolean", "description": "Generate zooms from clicks and typing (default on)."],
                 "browser_content_only": ["type": "boolean", "description": "Crop a browser window to its page content."],
                 "frame_rate": ["type": "integer", "enum": [30, 60]],
+                "duration": [
+                    "type": "number", "minimum": AIRecordingOptions.durationRange.lowerBound, "maximum": AIRecordingOptions.durationRange.upperBound,
+                    "description": "Stop by itself this many seconds (1-600) after the recording actually started, after the countdown. Without it the recording runs until stop_recording or the user's Finish.",
+                ],
             ],
         ]
     }
@@ -451,6 +611,12 @@ struct StartRecordingTool: AIAssistantTool {
             }
             options.frameRate = rate
         }
+        if arguments.has("duration") {
+            guard let seconds = arguments.double("duration"), AIRecordingOptions.durationRange.contains(seconds) else {
+                throw AIToolError.invalidArgument("\"duration\" must be a number of seconds from 1 to 600.")
+            }
+            options.duration = seconds
+        }
 
         let app = try AIToolSupport.requireApp(context)
         let phase = await app.recordingPhase
@@ -458,7 +624,7 @@ struct StartRecordingTool: AIAssistantTool {
         case .idle, .failed:
             break
         case .countdown, .recording, .stopping:
-            throw AIToolError.failed("A recording is already \(phase.label). Call stop_recording first.")
+            throw AIToolError.failed("A recording is already \(phase.label). Call wait_for_recording or stop_recording first.")
         }
         var sources = await app.recordingSources
         if sources.isEmpty {
@@ -467,49 +633,112 @@ struct StartRecordingTool: AIAssistantTool {
         }
         let source = try Self.resolveSource(query, in: sources)
         let requestedOptions = options
-        try await AIToolSupport.appAction(context) {
+        let sessionID = try await AIToolSupport.appAction(context) {
             try await MainActor.run { try app.startRecording(sourceID: source.id, options: requestedOptions) }
         }
 
         progress(context.tr("Counting down…"))
-        // The app reports `.countdown` from the moment startRecording returns, so
-        // `.idle` while waiting means the countdown was cancelled or the capture
-        // failed; a failure (a missing Screen Recording permission included) is
-        // what the app now shows the user.
-        let outcome = try await AIToolSupport.waitOnMain(timeout: startTimeout) { () -> Result<Void, AIToolError>? in
-            switch app.recordingPhase {
-            case .recording:
-                return .success(())
-            case let .failed(message):
-                return .failure(.failed("The recording could not start: \(message)"))
-            case .countdown, .stopping:
-                return nil
-            case .idle:
-                if let error = app.lastReportedError { return .failure(.failed("The recording could not start: \(error)")) }
-                return .failure(.failed("The recording did not start (the countdown was cancelled)."))
-            }
+        let outcome: Result<AIRecordingSession, AIToolError>?
+        do {
+            outcome = try await AIToolSupport.waitOnMain(timeout: startTimeout) { Self.startOutcome(app, sessionID: sessionID, source: source) }
+        } catch is CancellationError {
+            // The caller gave up during the countdown or the capture start:
+            // a recording it never saw start must not keep running.
+            await app.discardRecording(id: sessionID)
+            throw CancellationError()
         }
         guard let outcome else {
-            throw AIToolError.timedOut("The recording did not start within \(Int(startTimeout)) s. Check the app window.")
+            // Like a cancelled call: an attempt this call reports as not
+            // started must not go live later (a slow capture start).
+            await app.discardRecording(id: sessionID)
+            throw AIToolError.timedOut("The recording did not start within \(Int(startTimeout)) s and was cancelled; nothing is recording. Check the app window (for example a Screen Recording prompt), then call start_recording again.")
         }
-        try outcome.get()
+        let session = try outcome.get()
+        if Task.isCancelled {
+            // Cancelled as the recording went live, before this call answered.
+            await app.discardRecording(id: sessionID)
+            throw CancellationError()
+        }
+
         var settings: [String] = []
         if let value = options.systemAudio { settings.append("system audio \(value ? "on" : "off")") }
         if let value = options.microphone { settings.append("microphone \(value ? "on" : "off")") }
         if let value = options.automaticZooms { settings.append("automatic zooms \(value ? "on" : "off")") }
         if let value = options.browserContentOnly { settings.append("browser content only \(value ? "on" : "off")") }
         if let value = options.frameRate { settings.append("\(value) fps") }
-        var text = "Recording started (3-second countdown elapsed): \(source.summaryLine)."
-        if !settings.isEmpty { text += " Settings: \(settings.joined(separator: ", "))." }
-        text += " Call stop_recording when the demo is done."
+        let startedAt = session.startedAt ?? Date()
+        var text = "Recording started after the 3-second countdown: \(source.summaryLine)."
+        if !settings.isEmpty { text += " Settings for this recording: \(settings.joined(separator: ", "))." }
+        if let duration = session.duration {
+            text += " It stops by itself \(AIToolSupport.seconds(duration)) s after it started (at \(Self.clockTime(startedAt.addingTimeInterval(duration))))."
+        }
+        if context.isExternal {
+            // An MCP client may drive the recorded app itself (computer use, browser automation).
+            text += " The person sees a control bar and can finish or cancel it at any time. Let them perform the demo, or operate the recorded app yourself with your own tools meanwhile; the control bar floats above every app at the top centre of each display, so keep your clicks off it (its x button deletes the recording) and stop with stop_recording. Then call wait_for_recording to get the saved project (or stop_recording to stop now)."
+        } else if session.duration != nil {
+            text += " The user sees a control bar and can finish or cancel it at any time, and performs the demo now; call wait_for_recording to get the saved project when it stops (or stop_recording if the user asks to stop early)."
+        } else {
+            // The in-app chat stays free while the user performs the demo.
+            text += " The user sees a control bar and can finish or cancel it at any time, and performs the demo now. Reply to the user now; when they say they are done, call stop_recording (it also reports the project if they already clicked Finish)."
+        }
         var optionData: [String: AIJSONValue] = [:]
         if let value = options.systemAudio { optionData["system_audio"] = AIJSONValue(value) }
         if let value = options.microphone { optionData["microphone"] = AIJSONValue(value) }
         if let value = options.automaticZooms { optionData["automatic_zooms"] = AIJSONValue(value) }
         if let value = options.browserContentOnly { optionData["browser_content_only"] = AIJSONValue(value) }
         if let value = options.frameRate { optionData["frame_rate"] = AIJSONValue(value) }
-        let data: AIJSONValue = ["status": "recording", "source": source.data, "options": .object(optionData)]
-        return AIToolResult(text: text, data: data)
+        var data: [String: AIJSONValue] = [
+            "state": "recording",
+            "source": source.data,
+            "started_at": AIJSONValue(startedAt),
+            "options": .object(optionData),
+        ]
+        if let duration = session.duration {
+            data["duration"] = .rounded(duration, places: 1)
+            data["auto_stop_at"] = AIJSONValue(startedAt.addingTimeInterval(duration))
+        }
+        return AIToolResult(text: text, data: .object(data))
+    }
+
+    /// How attempt `sessionID` stands while start_recording waits: live (its
+    /// frames arrive), failed or cancelled before that, or still starting (nil).
+    /// An app that does not track attempts is read from its phase alone; its
+    /// `.idle` after the start means the countdown was cancelled or the capture
+    /// failed, and a failure (a missing Screen Recording permission included)
+    /// is what the app now shows the user.
+    @MainActor
+    static func startOutcome(_ app: any AppControlling, sessionID: UUID, source: AIRecordingSource) -> Result<AIRecordingSession, AIToolError>? {
+        let session = app.recordingSession.flatMap { $0.id == sessionID ? $0 : nil }
+        if let session, session.startedAt != nil { return .success(session) }
+        switch session?.outcome {
+        case let .failed(message)?:
+            return .failure(.failed("The recording could not start: \(message)"))
+        case .cancelled?:
+            return .failure(.failed("The recording did not start: its countdown was cancelled (by the user, or by another call)."))
+        case .finished?, nil:
+            break
+        }
+        switch app.recordingPhase {
+        case .recording:
+            var live = session ?? AIRecordingSession(id: sessionID, sourceID: source.id)
+            live.startedAt = live.startedAt ?? Date()
+            return .success(live)
+        case let .failed(message):
+            return .failure(.failed("The recording could not start: \(message)"))
+        case .countdown, .stopping:
+            return nil
+        case .idle:
+            if let error = app.lastReportedError { return .failure(.failed("The recording could not start: \(error)")) }
+            return .failure(.failed("The recording did not start (the countdown was cancelled)."))
+        }
+    }
+
+    /// A local time of day such as 14:03:27, for texts.
+    static func clockTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter.string(from: date)
     }
 
     /// Matches an id, a display request, an app name or a window title.
@@ -567,7 +796,7 @@ struct StartRecordingTool: AIAssistantTool {
 
 struct StopRecordingTool: AIAssistantTool {
     let name = "stop_recording"
-    let summary = "Finish the current recording. The app saves it as a new project and opens it in the editor; returns the project id, title and duration."
+    let summary = "Finish the current recording now (also one with a duration still running). The app saves it as a new project and opens it in the editor; returns the project id, title and duration."
 
     var stopTimeout: TimeInterval = 60
 
@@ -597,38 +826,176 @@ struct StopRecordingTool: AIAssistantTool {
                 throw AIToolError.failed("No recording is in progress (the countdown ended with: \(phase.label)).")
             }
         }
-        // A stop the app already has under way (the Finish button, another call)
-        // is joined: the app finalizes once and every caller reports the same
-        // project. Any other `.stopping` is a cancel, which saves nothing.
+        // A stop the app already has under way (the Finish button, the
+        // recording's duration running out, another call) is joined: the app
+        // finalizes once and every caller reports the same project. Any other
+        // `.stopping` is a cancel, which saves nothing.
         let joining = phase == .stopping && finishing
         guard phase == .recording || joining else {
-            throw AIToolError.failed("No recording is in progress (state: \(phase.label)).")
+            let last = await MainActor.run { AIToolSupport.lastRecordingReport(app)?.text }
+            throw AIToolError.failed("No recording is in progress (state: \(phase.label)).\(last.map { " " + $0 } ?? "")")
         }
         let previousProjectID = openBeforeStop
+        let sessionID = await MainActor.run { app.recordingSession.flatMap { $0.outcome == nil ? $0.id : nil } }
         progress(context.tr("Preparing your editable recording…"))
         // A joined stop is only waited for: asking again could land after it
         // finished and finalize a capture that no longer exists.
         if !joining { Task { @MainActor in await app.stopRecording() } }
-        let outcome = try await AIToolSupport.waitOnMain(timeout: stopTimeout) { () -> Result<AIProjectSummary, AIToolError>? in
-            if let id = app.openProjectID, id != previousProjectID, app.recordingPhase != .stopping,
-               let summary = app.projectSummaries.first(where: { $0.id == id }) {
-                return .success(summary)
-            }
-            if case let .failed(message) = app.recordingPhase {
-                return .failure(.failed("The recording could not be saved: \(message)"))
-            }
-            if app.recordingPhase == .idle, app.openProjectID == previousProjectID, let error = app.lastReportedError {
-                return .failure(.failed("The recording could not be saved: \(error)"))
-            }
-            return nil
+        let outcome = try await AIToolSupport.waitOnMain(timeout: stopTimeout) {
+            AIToolSupport.recordingEnd(app, sessionID: sessionID, previousProjectID: previousProjectID, idleMeansCancelled: false)
         }
         guard let outcome else {
             throw AIToolError.timedOut("The recording is still being saved after \(Int(stopTimeout)) s. Check the app window and call list_projects later.")
         }
-        let project = try outcome.get()
-        let text = "Recording saved as project \"\(project.displayTitle)\" (id \(project.id.uuidString), \(AIToolSupport.seconds(project.duration)) s, \(project.sourceWidth)×\(project.sourceHeight), \(project.zoomCount) automatic zooms). It is open in the editor."
-        let data = AIToolSupport.merged(AIProjectReport.summaryData(project, isOpen: true), ["project_id": AIJSONValue(project.id.uuidString)])
-        return AIToolResult(text: text, data: data)
+        switch try outcome.get() {
+        case let .finished(project):
+            return await MainActor.run { AIToolSupport.finishedRecording(project, isOpen: app.openProjectID == project.id) }
+        case .cancelled:
+            throw AIToolError.failed("The recording was cancelled before it could be saved; nothing was kept.")
+        }
+    }
+}
+
+// MARK: - wait_for_recording
+
+/// Waits for the recording under way to end however it ends (the user's
+/// Finish or Cancel, its duration, stop_recording) without stopping it, so a
+/// caller can start a recording, let the demo happen (or drive the recorded
+/// app itself) and then collect the project. Each call waits a bounded time,
+/// well inside client tool timeouts, and cancelling it never touches the recording.
+struct WaitForRecordingTool: AIAssistantTool {
+    let name = "wait_for_recording"
+    let summary = "Wait until the current recording ends — the user clicks Finish or Cancel, its duration runs out, or stop_recording is called — and its project is saved and open in the editor; returns the new project's id and duration, or that it was cancelled. Waits at most timeout_seconds (default 120, at most 240), then reports that it is still recording: call it again."
+
+    static let defaultTimeout: TimeInterval = 120
+    /// Well inside Codex's 300-second tool timeout.
+    static let maximumTimeout: TimeInterval = 240
+
+    /// How often the app is checked.
+    var pollInterval: TimeInterval
+    /// How often measured progress is reported while waiting.
+    var progressInterval: TimeInterval
+
+    init(pollInterval: TimeInterval = 0.1, progressInterval: TimeInterval = 5) {
+        self.pollInterval = pollInterval
+        self.progressInterval = progressInterval
+    }
+
+    var parametersSchema: [String: Any] {
+        [
+            "type": "object",
+            "properties": [
+                "timeout_seconds": [
+                    "type": "number", "minimum": 0, "maximum": Self.maximumTimeout, "default": Self.defaultTimeout,
+                    "description": "How long to wait, in seconds, from 0 to \(Int(Self.maximumTimeout)) (default \(Int(Self.defaultTimeout))).",
+                ],
+            ],
+        ]
+    }
+
+    func run(
+        arguments raw: [String: Any],
+        context: AIAssistantContext,
+        progress: @escaping @Sendable (String) -> Void
+    ) async throws -> AIToolResult {
+        let arguments = AIToolArguments(raw)
+        var timeout = Self.defaultTimeout
+        if arguments.has("timeout_seconds") {
+            guard let value = arguments.double("timeout_seconds"), (0...Self.maximumTimeout).contains(value) else {
+                throw AIToolError.invalidArgument("\"timeout_seconds\" must be a number of seconds from 0 to \(Int(Self.maximumTimeout)) (default \(Int(Self.defaultTimeout))).")
+            }
+            timeout = value
+        }
+        let app = try AIToolSupport.requireApp(context)
+        let (phase, session, openBefore) = await MainActor.run { (app.recordingPhase, app.recordingSession, app.openProjectID) }
+        switch phase {
+        case .idle:
+            return await MainActor.run { Self.idleResult(app) }
+        case let .failed(message):
+            throw AIToolError.failed("The recording failed: \(message)")
+        case .countdown, .recording, .stopping:
+            break
+        }
+        let sessionID = session.flatMap { $0.outcome == nil ? $0.id : nil }
+        let end: @MainActor @Sendable () -> Result<AIToolSupport.RecordingEnd, AIToolError>? = {
+            AIToolSupport.recordingEnd(app, sessionID: sessionID, previousProjectID: openBefore, idleMeansCancelled: true)
+        }
+
+        progress(context.tr("Waiting for the recording to end…"))
+        let started = Date()
+        var nextReport: TimeInterval = 0
+        while true {
+            try Task.checkCancellation()
+            if let ended = await MainActor.run(body: end) { return try await Self.result(ended, app: app) }
+            let waited = Date().timeIntervalSince(started)
+            guard waited < timeout else { break }
+            if waited >= nextReport {
+                // Measured progress keeps clients with an idle timeout waiting.
+                context.reportProgress(max(waited, 0.001), total: timeout, message: "Waiting for the recording to end")
+                nextReport += max(0.1, progressInterval)
+            }
+            try await Task.sleep(nanoseconds: UInt64(max(0.01, min(pollInterval, timeout - waited)) * 1_000_000_000))
+        }
+        if let ended = await MainActor.run(body: end) { return try await Self.result(ended, app: app) }
+        let waited = timeout
+        return await MainActor.run { Self.stillRecordingResult(app, waited: waited) }
+    }
+
+    private static func result(_ ended: Result<AIToolSupport.RecordingEnd, AIToolError>, app: any AppControlling) async throws -> AIToolResult {
+        switch try ended.get() {
+        case let .finished(project):
+            return await MainActor.run { AIToolSupport.finishedRecording(project, isOpen: app.openProjectID == project.id) }
+        case .cancelled:
+            let session = await app.recordingSession
+            var data: [String: AIJSONValue] = ["state": "cancelled"]
+            if let startedAt = session?.startedAt { data["started_at"] = AIJSONValue(startedAt) }
+            if let endedAt = session?.endedAt { data["ended_at"] = AIJSONValue(endedAt) }
+            return AIToolResult(text: "The recording was cancelled (from its countdown or its control bar); nothing was saved.", data: .object(data))
+        }
+    }
+
+    @MainActor
+    private static func idleResult(_ app: any AppControlling) -> AIToolResult {
+        var text = "Nothing is recording, so there is nothing to wait for."
+        var data: [String: AIJSONValue] = ["state": "idle"]
+        if let last = AIToolSupport.lastRecordingReport(app) {
+            text += " " + last.text
+            data["last_recording"] = last.data
+        } else {
+            text += " Start a recording with start_recording."
+        }
+        data["message"] = AIJSONValue(text)
+        return AIToolResult(text: text, data: .object(data))
+    }
+
+    @MainActor
+    private static func stillRecordingResult(_ app: any AppControlling, waited: TimeInterval) -> AIToolResult {
+        let phase = app.recordingPhase
+        let elapsed = phase == .recording ? app.recordingElapsed : nil
+        let remaining = phase == .recording ? app.recordingRemaining : nil
+        var text: String
+        switch phase {
+        case .countdown: text = "The recording is still counting down"
+        case .stopping: text = "The recording is still being saved"
+        default: text = "Still recording"
+        }
+        text += " after waiting \(AIToolSupport.seconds(waited)) s"
+        var details: [String] = []
+        if let elapsed { details.append("\(AIToolSupport.seconds(elapsed)) s recorded so far") }
+        if let remaining { details.append("it stops by itself in \(AIToolSupport.seconds(remaining)) s") }
+        if !details.isEmpty { text += " (\(details.joined(separator: "; ")))" }
+        text += ". Call wait_for_recording again, or stop_recording to stop it now."
+        var data: [String: AIJSONValue] = [
+            "state": AIJSONValue(phase.code),
+            "elapsed": elapsed.map { .rounded($0, places: 1) } ?? .null,
+            "waited": .rounded(waited, places: 1),
+        ]
+        if let remaining { data["remaining"] = .rounded(remaining, places: 1) }
+        if let session = app.recordingSession, session.outcome == nil {
+            if let startedAt = session.startedAt { data["started_at"] = AIJSONValue(startedAt) }
+            if let autoStopAt = session.autoStopAt { data["auto_stop_at"] = AIJSONValue(autoStopAt) }
+        }
+        return AIToolResult(text: text, data: .object(data))
     }
 }
 

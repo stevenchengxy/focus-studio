@@ -38,7 +38,7 @@ send '{"jsonrpc":"2.0","method":"notifications/initialized"}'
 1. 退出 Focus Studio，确认 `pgrep -x FocusStudio` 没有输出。
 2. `send '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'`
 
-期望：`$QA/out` 里返回 23 个工具；`pgrep -x FocusStudio` 仍然没有输出，Dock 里没有 Focus Studio。
+期望：`$QA/out` 里返回 24 个工具（与 `Tests/MCPTests/v1-tools.txt` 一致）；`pgrep -x FocusStudio` 仍然没有输出，Dock 里没有 Focus Studio。
 
 ## 2. 第一次调用时在后台启动应用
 
@@ -107,6 +107,26 @@ send '{"jsonrpc":"2.0","method":"notifications/initialized"}'
 4. 用 Codex 重复一遍（`codex mcp list` 确认已连接）。
 5. 验证结束后，在“设置 › AI 工具”里撤销这两个测试时批准的客户端（如果不是在单独的测试用户下验证的话）。
 
+## 9. 通过 MCP 录制
+
+`zsh scripts/test.sh` 用脚本化的采集和手动时钟覆盖了录制流程（`Tests/FocusStudioAppRegression/RecordingSessionRegression.swift`）：倒计时、从第一帧算起的 `duration`、自动停止与“结束”/`stop_recording`/`wait_for_recording` 共用一次停止、选项只对本次录制有效、等待期间 `get_status` 照常返回、取消。真实的 ScreenCaptureKit 时序和悬浮面板的外观只能手动验证。这一节会真的录屏，并在项目库里新建项目，验证完后可以删掉；需要已授予屏幕录制权限。
+
+1. 让终端保持前台（Focus Studio 在后台，或被其他窗口挡住）。
+2. `send '{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"start_recording","arguments":{"source":"display","duration":8,"system_audio":true},"_meta":{"progressToken":"rec"}}}'`
+
+   期望：
+   - 每个显示器顶部中央出现悬浮倒计时条（3、2、1，样式与录制控制条相同，带“取消”），写着“Focus Studio is about to record”、“<客户端名> asked to record <来源>”和“Recording system audio”；键盘焦点仍在终端，菜单栏仍是终端的，主窗口没有被提到前面。倒计时结束后它被录制控制条取代，控制条在计时旁显示剩余时间（“Stops in 0:08”），逐秒减少，并有扬声器图标（悬停提示“Recording system audio”），“结束”和 ✕ 仍可用。
+   - 调用在倒计时结束、录制真正开始后就返回（约 3–4 秒，而不是 11 秒），`structuredContent` 为 `state: "recording"`，带 `started_at`、`duration: 8` 和比 `started_at` 晚 8 秒的 `auto_stop_at`。
+   - 录下的视频里看不到倒计时条和控制条（显示器录制排除 Focus Studio 的所有窗口，包括之后新开的）。
+   - 录制器里的“系统音频”开关没有被打开：调用的选项只对这一次录制有效。
+3. 立即 `send` 一个 `wait_for_recording`（`"arguments":{"timeout_seconds":60}`，带 `_meta.progressToken`）。等待期间 `send` 一个 `get_status`：它马上返回，`recording.state` 为 `recording`，`remaining` 递减。再 `send` 一个 `list_recording_sources`：它返回来源列表，Focus Studio 的主窗口不会被提到终端前面。
+
+   期望：从录制真正开始算起约 8 秒后自动停止，和点“结束”一样保存项目并打开编辑器；`wait_for_recording` 返回 `state: "finished"` 和 `project_id`，等待期间有递增的 `notifications/progress`；项目时长约 8 秒，不含倒计时。
+4. 再 `start_recording`（不带 `duration`），录制中点控制条上的 ✕，然后 `send` 一个 `wait_for_recording`。期望：返回 `state: "idle"`，`last_recording.state` 为 `cancelled`；项目库里没有新项目。录制中先发 `wait_for_recording` 再点 ✕ 时，它返回 `state: "cancelled"`。
+5. 再 `start_recording`，倒计时期间点悬浮倒计时条上的“取消”。期望：调用返回 `isError`，说明倒计时被取消；没有开始录制。
+6. 再 `start_recording`，倒计时结束前 `send '{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":<这次调用的 id>}}'`。期望：倒计时消失，没有开始录制，录制器显示出来。
+7. 把 Focus Studio 切到前台，再 `start_recording` 一次：只有主窗口里的倒计时，没有悬浮倒计时条；倒计时期间用 ⌘Tab 切回终端，悬浮倒计时条立刻出现。然后 `stop_recording`，返回 `state: "finished"`，主窗口不会在停止前被提到前面。
+
 ## 开发构建的 helper
 
 用 `swift build` 构建出来的 helper 不在 .app 里面，所以需要设置 `FOCUS_STUDIO_APP_PATH="$APP"` 才知道要启动哪个应用；这个变量必须指向 bundle id 为 `com.local.focusstudio` 的 .app。只有开发构建会把 `FOCUS_STUDIO_CONTROL_SOCKET` 传给它启动的应用，其他环境变量都不传。release 构建的 helper 什么环境变量都不传：如果它自己设置了 `FOCUS_STUDIO_CONTROL_SOCKET`，它启动的应用仍然监听默认路径，这时调用会在 30 秒后返回说明原因的 `isError`。
@@ -123,3 +143,4 @@ send '{"jsonrpc":"2.0","method":"notifications/initialized"}'
 | 6 多副本 | | |
 | 7 Gatekeeper | | |
 | 8 Claude Code / Codex | | |
+| 9 MCP 录制：悬浮倒计时不抢焦点、说明谁请求录制和录哪些声音、倒计时中切走也出现、录制中主窗口不被提前、录制开始即返回、剩余时间、duration 自动停止、wait_for_recording、各种取消、不进视频 | | |

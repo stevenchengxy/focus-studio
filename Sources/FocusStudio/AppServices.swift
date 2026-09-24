@@ -41,6 +41,12 @@ final class AppServices {
             readiness: { await model.bootstrap() }
         )
         connector = MCPClientConnector(helperPath: MCPClientConnector.bundledHelperPath(), search: .current())
+        // The floating countdown names the AI tool whose start_recording call
+        // is starting the recording.
+        let activity = activity
+        RecordingCountdownPanelCoordinator.shared.automationRequester = {
+            activity.running.last(where: { $0.tool == "start_recording" })?.clientName
+        }
     }
 }
 

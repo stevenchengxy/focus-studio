@@ -60,6 +60,14 @@ final class StudioModel: ObservableObject {
     @Published private(set) var isExportingFromEditor = false
     /// In-memory live thumbnails for the recording picker; released on leaving it.
     let sourcePreview = SourcePreviewProvider()
+    /// The latest recording attempt, from its countdown to how it ended: the
+    /// options it records with, its real start, its duration and its outcome.
+    @Published private(set) var currentRecording: RecordingAttempt?
+    /// The clock countdowns and automatic stops are measured on.
+    let recordingClock: RecordingClock
+    /// Shows the floating countdown while another app is in front (the
+    /// shared coordinator; regression tests substitute their own).
+    var countdownPanels: RecordingCountdownPanelCoordinator = .shared
 
     let captureEngine = CaptureEngine()
     let codexDirector = CodexDirectorService()
@@ -83,6 +91,13 @@ final class StudioModel: ObservableObject {
     /// regression tests substitute a scripted result to drive a stop without
     /// ScreenCaptureKit.
     private let finishCapture: @MainActor (CaptureEngine) async throws -> RecordingResult
+    /// Starts the capture when a countdown ends and answers the uptime of its
+    /// first frame. The engine by default; regression tests script it (with
+    /// `recordingClock`) to run a whole recording without ScreenCaptureKit.
+    private let startCapture: CaptureStarter
+    /// Stops and deletes a capture that is being cancelled (Cancel, a
+    /// discarded start). The engine by default; regression tests count it.
+    private let cancelCapture: @MainActor (CaptureEngine) async -> Void
     /// Answers the in-app assistant instead of the brain chosen in Settings;
     /// regression tests script the assistant's turns with it.
     private let scriptedAssistantCompletion: (any TextCompletionProviding)?
@@ -90,6 +105,11 @@ final class StudioModel: ObservableObject {
     private var bootstrapTask: Task<Void, Never>?
     /// The stop in flight, which a second Finish request joins.
     private var stopRecordingTask: Task<Void, Never>?
+    /// Stops the live recording when its duration runs out. Any other end
+    /// (Finish, Cancel, a tool's stop, a new recording) cancels it.
+    private var automaticStopTask: Task<Void, Never>?
+    /// Ends the current attempt when its capture fails on its own.
+    private var captureFailureObserver: AnyCancellable?
     private var screenshotNoticeTask: Task<Void, Never>?
     private var recordingCountdownTask: Task<Void, Never>?
     /// Identifies the task stored in `recordingCountdownTask`. This is kept
@@ -111,9 +131,18 @@ final class StudioModel: ObservableObject {
         inputMonitoringAccess: @escaping @MainActor () -> Bool = { CGPreflightListenEventAccess() },
         screenCaptureAccess: @escaping @MainActor () -> Bool = { CGPreflightScreenCaptureAccess() },
         finishCapture: @escaping @MainActor (CaptureEngine) async throws -> RecordingResult = { try await $0.stopRecording() },
+        startCapture: @escaping CaptureStarter = { engine, target, outputURL, options in
+            try await engine.startRecording(target: target, outputURL: outputURL, options: options)
+            return engine.recordingStartUptime ?? ProcessInfo.processInfo.systemUptime
+        },
+        cancelCapture: @escaping @MainActor (CaptureEngine) async -> Void = { await $0.cancelRecording() },
+        recordingClock: RecordingClock = .system,
         assistantCompletion: (any TextCompletionProviding)? = nil
     ) {
         self.store = store
+        self.startCapture = startCapture
+        self.cancelCapture = cancelCapture
+        self.recordingClock = recordingClock
         scriptedAssistantCompletion = assistantCompletion
         assistantAssetsLocator = AssistantAssetsLocator(sharedDirectory: AssistantAssetsLocator.sharedDirectory(forLibrary: store.projectsDirectory))
         self.interactionTrackingAccess = interactionTrackingAccess
@@ -121,6 +150,13 @@ final class StudioModel: ObservableObject {
         self.screenCaptureAccess = screenCaptureAccess
         self.finishCapture = finishCapture
         refreshInteractionTrackingPermission()
+        // A capture can fail by itself (the stream stops, the window closes):
+        // its attempt then ends as failed, without waiting for Finish or Cancel,
+        // and so does its automatic stop. The engine publishes on the main actor.
+        captureFailureObserver = captureEngine.$state.sink { [weak self] state in
+            guard case let .failed(message) = state else { return }
+            MainActor.assumeIsolated { self?.endRecordingAttempt(nil, .failed(message)) }
+        }
     }
 
     var selectedTarget: CaptureTargetInfo? {
@@ -487,9 +523,9 @@ final class StudioModel: ObservableObject {
 
     /// Acknowledge missing input access before recording a demo that expects
     /// automatic effects. This never requests access or opens System Settings.
-    func confirmInteractionTrackingBeforeRecording(allowUnavailable: Bool = false) -> Bool {
+    func confirmInteractionTrackingBeforeRecording(allowUnavailable: Bool = false, automaticZooms: Bool? = nil) -> Bool {
         refreshInteractionTrackingPermission()
-        let needsConfirmation = automaticZooms && !interactionTrackingAuthorized && !allowUnavailable
+        let needsConfirmation = (automaticZooms ?? self.automaticZooms) && !interactionTrackingAuthorized && !allowUnavailable
         isShowingInteractionSetup = needsConfirmation
         return !needsConfirmation
     }
@@ -528,20 +564,55 @@ final class StudioModel: ObservableObject {
         }
     }
 
+    /// The recorder's own choices, which a recording uses unless a call
+    /// overrides them for that recording (``RecordingSettings``).
+    var recorderSettings: RecordingSettings {
+        RecordingSettings(
+            systemAudio: recordSystemAudio,
+            microphone: recordMicrophone,
+            automaticZooms: automaticZooms,
+            browserContentOnly: browserContentOnly,
+            frameRate: frameRate
+        )
+    }
+
     func startRecordingCountdown(allowUnavailableTracking: Bool = false) {
         guard let target = selectedTarget else {
             showMessage("Choose a display, window, or area to record.")
             return
         }
-        guard recordingCountdownTask == nil, !captureEngine.isRecording else { return }
-        guard confirmInteractionTrackingBeforeRecording(allowUnavailable: allowUnavailableTracking) else { return }
+        beginRecordingCountdown(target: target, settings: recorderSettings, duration: nil, allowUnavailableTracking: allowUnavailableTracking)
+    }
 
+    /// Starts the visible 3-second countdown for a new recording attempt of
+    /// `target` with `settings` (for this recording only), stopping by itself
+    /// `duration` seconds after its capture starts. Returns the attempt's id,
+    /// or nil when no countdown started (one is running, a capture is live, or
+    /// the person must first confirm recording without input access).
+    @discardableResult
+    func beginRecordingCountdown(
+        target: CaptureTargetInfo,
+        settings: RecordingSettings,
+        duration: TimeInterval?,
+        allowUnavailableTracking: Bool = false
+    ) -> UUID? {
+        guard recordingCountdownTask == nil, !captureEngine.isRecording, currentRecording?.isLive != true, !isFinishingRecording else { return nil }
+        guard confirmInteractionTrackingBeforeRecording(allowUnavailable: allowUnavailableTracking, automaticZooms: settings.automaticZooms) else { return nil }
+
+        cancelAutomaticStop()
         let targetSnapshot = target
-        let attemptID = UUID()
+        let attempt = RecordingAttempt(target: target, settings: settings, duration: duration)
+        let attemptID = attempt.id
+        currentRecording = attempt
         recordingAttemptID = attemptID
         recordingCountdownTaskID = attemptID
         destination = .countdown
         recordingCountdown = 3
+        // Someone working in another app (a recording an AI tool started),
+        // or switching to one during the countdown, still sees the countdown
+        // and can cancel it.
+        countdownPanels.countdownStarted(model: self)
+        let clock = recordingClock
         recordingCountdownTask = Task { @MainActor [weak self] in
             guard let self else { return }
             defer {
@@ -555,25 +626,15 @@ final class StudioModel: ObservableObject {
                     try Task.checkCancellation()
                     guard self.recordingAttemptID == attemptID else { return }
                     self.recordingCountdown = value
-                    try await Task.sleep(for: .seconds(1))
+                    try await clock.sleep(1)
                 }
                 try Task.checkCancellation()
                 guard self.recordingAttemptID == attemptID else { return }
-                let refreshedTarget: CaptureTargetInfo?
-                if targetSnapshot.kind == .area {
-                    let displayStillExists = self.captureEngine.availableTargets.contains {
-                        $0.kind == .display && $0.nativeID == targetSnapshot.nativeID
-                    }
-                    refreshedTarget = displayStillExists ? targetSnapshot : nil
-                } else {
-                    refreshedTarget = self.captureEngine.availableTargets.first(
-                        where: { $0.id == targetSnapshot.id }
-                    )
-                }
-                guard let refreshedTarget else {
+                guard let refreshedTarget = self.listedTarget(for: targetSnapshot) else {
                     self.recordingAttemptID = nil
                     self.destination = .recorder
                     self.showMessage("The selected screen or window is no longer available.")
+                    self.endRecordingAttempt(attemptID, .failed("The selected screen or window is no longer available."))
                     return
                 }
                 await self.startRecordingNow(target: refreshedTarget, attemptID: attemptID)
@@ -582,11 +643,28 @@ final class StudioModel: ObservableObject {
             } catch {
                 self.destination = .recorder
                 self.show(error)
+                self.endRecordingAttempt(attemptID, .failed(error.localizedDescription))
             }
         }
+        return attemptID
+    }
+
+    /// `target` as the engine last listed it, checked when a countdown ends.
+    /// An empty list (the engine could not list sources, or never has) is
+    /// left to the capture start, which reports the real reason.
+    private func listedTarget(for target: CaptureTargetInfo) -> CaptureTargetInfo? {
+        let listed = captureEngine.availableTargets
+        guard !listed.isEmpty else { return target }
+        if target.kind == .area {
+            let displayStillExists = listed.contains { $0.kind == .display && $0.nativeID == target.nativeID }
+            return displayStillExists ? target : nil
+        }
+        return listed.first { $0.id == target.id }
     }
 
     func cancelRecordingCountdown() {
+        // Cleared once the capture has started: then only Cancel ends it.
+        let attemptID = recordingAttemptID
         recordingAttemptID = nil
         recordingCountdownTaskID = nil
         recordingCountdownTask?.cancel()
@@ -594,7 +672,70 @@ final class StudioModel: ObservableObject {
         recordingCountdown = 3
         pendingSourceCropInsets = nil
         destination = .recorder
+        if let attemptID { endRecordingAttempt(attemptID, .cancelled) }
     }
+
+    /// Cancels attempt `id` and keeps nothing, as the Cancel buttons do: its
+    /// countdown or capture start, or the recording itself. Does nothing once
+    /// it has ended or while a stop is saving it.
+    func discardRecording(id: UUID) async {
+        guard let attempt = currentRecording, attempt.id == id, attempt.outcome == nil, !isFinishingRecording else { return }
+        if recordingAttemptID == id {
+            cancelRecordingCountdown()
+        } else if attempt.startUptime != nil, destination == .recording {
+            await cancelRecording()
+        }
+    }
+
+    /// Records how attempt `id` (nil: the current one) ended, once.
+    private func endRecordingAttempt(_ id: UUID?, _ outcome: AIRecordingOutcome) {
+        guard var attempt = currentRecording, attempt.outcome == nil, id == nil || attempt.id == id else { return }
+        attempt.outcome = outcome
+        attempt.endedAt = Date()
+        currentRecording = attempt
+        cancelAutomaticStop()
+    }
+
+    /// The capture of attempt `id` delivered its first frame at `startUptime`:
+    /// the recording's real start, which its duration is measured from.
+    private func recordingDidStart(_ id: UUID, startUptime: TimeInterval) {
+        guard var attempt = currentRecording, attempt.id == id else { return }
+        attempt.startUptime = startUptime
+        attempt.startedAt = Date().addingTimeInterval(startUptime - recordingClock.now())
+        currentRecording = attempt
+        scheduleAutomaticStop(for: attempt)
+    }
+
+    /// Stops `attempt` through the Finish button's own path (a stop already
+    /// under way is joined) once its duration has passed since its first frame.
+    private func scheduleAutomaticStop(for attempt: RecordingAttempt) {
+        cancelAutomaticStop()
+        guard let deadline = attempt.automaticStopUptime else { return }
+        let id = attempt.id
+        let clock = recordingClock
+        automaticStopTask = Task { @MainActor [weak self] in
+            do {
+                while true {
+                    let remaining = deadline - clock.now()
+                    guard remaining > 0 else { break }
+                    try await clock.sleep(remaining)
+                }
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled, self.currentRecording?.id == id, self.currentRecording?.isLive == true else { return }
+            self.automaticStopTask = nil
+            await self.stopRecording()
+        }
+    }
+
+    private func cancelAutomaticStop() {
+        automaticStopTask?.cancel()
+        automaticStopTask = nil
+    }
+
+    /// Whether the live recording's duration is set to stop it.
+    var hasPendingAutomaticStop: Bool { automaticStopTask != nil }
 
     private func startRecordingNow(target: CaptureTargetInfo, attemptID: UUID) async {
 
@@ -610,26 +751,25 @@ final class StudioModel: ObservableObject {
                 destination = .recorder
                 return
             }
+            // This recording's own options; the recorder's choices stay as they are.
+            let settings = currentRecording.flatMap { $0.id == attemptID ? $0.settings : nil } ?? recorderSettings
             var options = CaptureOptions()
-            options.systemAudio = recordSystemAudio
-            options.microphone = recordMicrophone
-            options.frameRate = frameRate
-            pendingSourceCropInsets = browserContentOnly
+            options.systemAudio = settings.systemAudio
+            options.microphone = settings.microphone
+            options.frameRate = settings.frameRate
+            pendingSourceCropInsets = settings.browserContentOnly
                 ? defaultBrowserCrop(for: target)
                 : nil
-            try await captureEngine.startRecording(
-                target: target,
-                outputURL: outputURL,
-                options: options
-            )
+            let startUptime = try await startCapture(captureEngine, target, outputURL, options)
             guard recordingAttemptID == attemptID, !Task.isCancelled else {
-                await captureEngine.cancelRecording()
+                await cancelCapture(captureEngine)
                 pendingSourceCropInsets = nil
                 destination = .recorder
                 return
             }
             recordingAttemptID = nil
             inputWarning = captureEngine.eventCaptureWarning
+            recordingDidStart(attemptID, startUptime: startUptime)
             destination = .recording
             RecordingControlPanelCoordinator.shared.show(model: self)
         } catch {
@@ -653,6 +793,7 @@ final class StudioModel: ObservableObject {
                 destination = .recorder
                 show(error)
             }
+            endRecordingAttempt(attemptID, .failed(error.localizedDescription))
         }
     }
 
@@ -662,9 +803,11 @@ final class StudioModel: ObservableObject {
             codexPlanTask?.cancel()
             return
         }
-        // The Finish button and the assistant can both ask to stop. A second
-        // request waits for the stop in flight instead of finalizing the
-        // capture again, and sees the same outcome.
+        // Any stop request ends the wait for the recording's duration.
+        cancelAutomaticStop()
+        // The Finish button, the duration and the tools can all ask to stop. A
+        // second request waits for the stop in flight instead of finalizing
+        // the capture again, and sees the same outcome.
         if let stopRecordingTask {
             await stopRecordingTask.value
             return
@@ -693,11 +836,14 @@ final class StudioModel: ObservableObject {
             RecordingControlPanelCoordinator.shared.hide()
         }
 
+        // The recording being stopped, with the options it was made with.
+        let attempt = currentRecording.flatMap { $0.isLive ? $0 : nil }
+        let recorded = attempt?.settings ?? recorderSettings
         do {
             let result = try await finishCapture(captureEngine)
             var settings = ProjectSettings()
-            settings.autoZoomEnabled = automaticZooms
-            settings.frameRate = min(frameRate, 60)
+            settings.autoZoomEnabled = recorded.automaticZooms
+            settings.frameRate = min(recorded.frameRate, 60)
             settings.sourceCropInsets = pendingSourceCropInsets
             let title = "Recording \(Date().formatted(date: .abbreviated, time: .shortened))"
             let project = try await store.createProject(
@@ -713,12 +859,14 @@ final class StudioModel: ObservableObject {
             projects.removeAll { $0.id == project.id }
             projects.insert(project, at: 0)
             destination = .editor
+            if let attempt { endRecordingAttempt(attempt.id, .finished(projectID: project.id)) }
         } catch {
             // CaptureEngine has already torn down a failed finalization. Return
             // to a retryable source picker instead of leaving a dead recording
             // timer and Finish button on screen.
             destination = .recorder
             show(error)
+            if let attempt { endRecordingAttempt(attempt.id, .failed(error.localizedDescription)) }
         }
         pendingSourceCropInsets = nil
     }
@@ -729,10 +877,15 @@ final class StudioModel: ObservableObject {
             codexPlanTask?.cancel()
             return
         }
-        await captureEngine.cancelRecording()
+        // A stop is already saving the recording as a project.
+        guard !isFinishingRecording else { return }
+        cancelAutomaticStop()
+        let attemptID = currentRecording.flatMap { $0.isLive ? $0.id : nil }
+        await cancelCapture(captureEngine)
         pendingSourceCropInsets = nil
         RecordingControlPanelCoordinator.shared.hide()
         destination = .library
+        if let attemptID { endRecordingAttempt(attemptID, .cancelled) }
     }
 
     func takeScreenshot() async {

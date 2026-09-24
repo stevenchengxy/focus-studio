@@ -18,7 +18,7 @@ enum AssistantControlRegression {
         try await droppedEditsThrow()
         try await concurrentBootstrapWaitsForLibrary()
         try await secondStopJoinsTheFirst()
-        try permissionFailureIsReported()
+        try await permissionFailureIsReported()
         try await automationReadsStayPut()
         print("AssistantControlRegression: PASS (dropped assistant edits throw, export library guard wiring, concurrent bootstrap, joined stops with one finalization, permission failure reporting, get_project/get_status read the model without navigating)")
     }
@@ -195,7 +195,7 @@ enum AssistantControlRegression {
                    "A later stop must not be swallowed by the finished one")
     }
 
-    private static func permissionFailureIsReported() throws {
+    private static func permissionFailureIsReported() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
         let model = fixture.makeModel()
@@ -217,21 +217,31 @@ enum AssistantControlRegression {
         try expect(model.lastReportedError == nil, "Nothing is reported once the notice is gone")
 
         // The next start clears what the refused one left, so its own outcome
-        // (a cancelled countdown, say) is not read back as the old refusal. The
-        // engine lists nothing here, so this start ends at the source check.
+        // (a cancelled countdown, say) is not read back as the old refusal.
         model.capturePermissionDenied = true
         model.captureFailureDetails = details
-        let unlisted = CaptureTargetInfo(id: "display-1", kind: .display, nativeID: 1, title: "Test display",
-                                         frame: CaptureRect(x: 0, y: 0, width: 64, height: 64))
-        var reported = ""
-        do {
-            try model.startRecording(target: unlisted, options: AIRecordingOptions())
-        } catch AIToolError.failed(let message) {
-            reported = message
-        }
+        let target = CaptureTargetInfo(id: "display-1", kind: .display, nativeID: 1, title: "Test display",
+                                       frame: CaptureRect(x: 0, y: 0, width: 64, height: 64))
+        let attempt = try model.startRecording(target: target, options: AIRecordingOptions())
         try expect(!model.capturePermissionDenied && model.captureFailureDetails == nil, "A new start must clear the last permission notice")
-        try expect(reported.contains("Choose a display") && model.lastReportedError == reported,
-                   "The start must report its own outcome, got \(reported)")
+        try expect(model.lastReportedError == nil && model.recordingPhase == .countdown && model.recordingSession?.id == attempt,
+                   "The start must report its own outcome, got \(model.lastReportedError ?? "nil")")
+        model.cancelRecordingCountdown()
+        try expect(model.recordingSession?.outcome == .cancelled && model.lastReportedError == nil && model.recordingPhase == .idle,
+                   "A cancelled countdown reads as cancelled, not as the old refusal")
+
+        // A capture start refused for the permission ends the attempt with that
+        // failure, which start_recording reports instead of a cancelled countdown.
+        let refusing = StudioModel(
+            store: fixture.store, interactionTrackingAccess: { true }, inputMonitoringAccess: { true },
+            startCapture: { _, _, _, _ in throw CaptureEngineError.screenRecordingPermissionDenied("Enable Focus Studio in System Settings.") },
+            recordingClock: RecordingClock(now: { 0 }, sleep: { _ in })
+        )
+        let refused = try refusing.startRecording(target: target, options: AIRecordingOptions())
+        try await waitUntil("The refused capture did not end the attempt") { refusing.recordingSession?.outcome != nil }
+        try expect(refusing.recordingSession?.id == refused && refusing.recordingSession?.outcome == .failed(details) && refusing.capturePermissionDenied
+                   && refusing.lastReportedError == details && refusing.recordingPhase == .idle && refusing.destination == .recorder,
+                   "The permission failure is the attempt's outcome: \(String(describing: refusing.recordingSession?.outcome))")
     }
 
     private static func waitUntil(_ message: String, predicate: () -> Bool) async throws {

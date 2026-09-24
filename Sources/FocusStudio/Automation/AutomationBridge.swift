@@ -16,17 +16,20 @@ import Foundation
 /// - for an editing or output tool, opens the project in the editor first,
 ///   saving and closing any other, so the person using the app watches each
 ///   change (a main window is put on screen first, without activating the
-///   app); refused while recording or busy. Every call that changes what
-///   the app shows is also refused while the in-app assistant is partway
-///   through a request, an export from the editor runs or a save or open
-///   panel is up. Read-only tools never navigate;
+///   app, except during a countdown or a recording, when the recorded app
+///   stays in front); refused while recording or busy. Every call that
+///   changes what the app shows is also refused while the in-app assistant
+///   is partway through a request, an export from the editor runs or a save
+///   or open panel is up. Read-only tools never navigate;
 /// - runs the calls that change what the app shows one at a time, in order,
 ///   so parallel calls never switch the editor under each other;
 /// - builds a fresh English tool context with the client's working directory
 ///   and the project's assets folder;
 /// - runs the tool as a job, which answers with a running status and a
 ///   job_id when the call outlasts ``AutomationJobs/detachAfter`` counted
-///   from its arrival, its wait for a turn included;
+///   from its arrival, its wait for a turn included (never for a tool that
+///   bounds its own wait: wait_for_recording, which also never takes a turn,
+///   so status reads and stop_recording go on while it waits);
 /// - returns MCP's result shape: text, an inline JPEG for capture_frame,
 ///   the structured data, and `isError` with the error's text on failure.
 @MainActor
@@ -38,8 +41,8 @@ final class AutomationBridge {
     /// detached job lets the next call go while it keeps running).
     let queue = AutomationCallQueue()
     /// Puts a main window on screen, without activating the app, before a
-    /// call changes what it shows (``MainWindowPresenter`` in the app; nil
-    /// in tests).
+    /// call changes what it shows, unless a countdown or a recording is
+    /// under way (``MainWindowPresenter`` in the app; nil in tests).
     var presentWindow: (@MainActor () -> Void)?
 
     init(model: StudioModel, catalog: MCPToolCatalog = .v1, jobs: AutomationJobs? = nil) {
@@ -81,7 +84,7 @@ final class AutomationBridge {
             return .result(.failure(error))
         }
         let includesImage = spec.returnsImage
-        return await jobs.run(tool: spec.name, clientName: clientName, arrivedAt: arrived, progress: progress) { report in
+        return await jobs.run(tool: spec.name, clientName: clientName, arrivedAt: arrived, detaches: spec.detaches, progress: progress) { report in
             var context = prepared.context
             context.numericProgress = report
             do {
@@ -120,7 +123,17 @@ final class AutomationBridge {
         }
         if spec.navigates {
             if let refusal = model.automationNavigationRefusal { throw AIToolError.failed(refusal) }
-            presentWindow?()
+            // During a countdown or a recording the recorded app stays in
+            // front (the person or the AI is operating it); the countdown
+            // panel and the control bar keep the recording visible. A call
+            // refused afterwards, or one allowed then (list_recording_sources,
+            // stop_recording), must not put the main window over it.
+            switch model.recordingPhase {
+            case .countdown, .recording, .stopping:
+                break
+            case .idle, .failed:
+                presentWindow?()
+            }
         }
         if let projectID, spec.scope == .project { try model.openProjectForAutomation(id: projectID) }
         let context = model.makeAutomationContext(projectID: projectID, workingDirectory: workingDirectory)

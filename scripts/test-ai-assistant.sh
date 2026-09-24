@@ -6,8 +6,9 @@
 # the automation API (structured results, result language, working-directory
 # paths, per-export options with progress and cancellation, get_project,
 # get_status), the MCP layer (tool catalog, result shape and inline images,
-# long-call jobs, library tools), AVFoundation clip assembly and the Ark
-# client against a local Python fixture server.
+# long-call jobs, library tools), recording sessions (start returns once
+# live, duration auto-stop, wait_for_recording, cancellation), AVFoundation
+# clip assembly and the Ark client against a local Python fixture server.
 set -euo pipefail
 SCRIPT_DIR="${0:A:h}"
 PROJECT_DIR="${SCRIPT_DIR:h}"
@@ -38,6 +39,7 @@ swiftc -parse-as-library -g \
   Tests/AIAssistantTests/main.swift \
   Tests/AIAssistantTests/AutomationAPITests.swift \
   Tests/AIAssistantTests/MCPAutomationTests.swift \
+  Tests/AIAssistantTests/RecordingSessionTests.swift \
   "${CORE_OBJECTS[@]}" \
   -o "$TEST_DIR/AIAssistantTests"
 chmod +x Tests/AIAssistantTests/fake-ark.py

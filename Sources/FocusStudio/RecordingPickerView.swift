@@ -687,6 +687,9 @@ struct ActiveRecordingView: View {
                     .overlay(Circle().stroke(Color.white.opacity(0.65), lineWidth: 3))
             }
             RecordingDurationLabel(captureEngine: model.captureEngine)
+            if let attempt = model.currentRecording, attempt.isLive, let limit = attempt.duration {
+                RecordingRemainingLabel(captureEngine: model.captureEngine, limit: limit)
+            }
             Text("Recording \(model.selectedTarget?.title ?? L10n.tr("screen"))")
                 .font(.system(size: 14))
                 .foregroundStyle(StudioTheme.secondaryText)
@@ -782,6 +785,21 @@ private struct RecordingInteractionStatusLabel: View {
             .foregroundStyle(!hasInteractions && captureEngine.duration > 5 ? StudioTheme.yellow : StudioTheme.secondaryText)
             .multilineTextAlignment(.center)
             .accessibilityIdentifier("recording.interactionStatus")
+    }
+}
+
+/// How long until a recording with a duration stops by itself, counted on
+/// the engine's clock like the timer above it.
+private struct RecordingRemainingLabel: View {
+    @ObservedObject var captureEngine: CaptureEngine
+    let limit: TimeInterval
+
+    var body: some View {
+        Label(L10n.format("Stops automatically in %@", max(0, limit - captureEngine.duration).rounded(.up).formattedDuration), systemImage: "timer")
+            .font(.system(size: 12, weight: .medium))
+            .monospacedDigit()
+            .foregroundStyle(StudioTheme.secondaryText)
+            .accessibilityIdentifier("recording.remaining")
     }
 }
 

@@ -44,18 +44,23 @@ public final class AutomationJobs {
     /// call answers in time as well. It still gets a short grace (a tenth of
     /// the threshold, at most a second) so a quick call that waited long
     /// answers with its result.
+    ///
+    /// With `detaches` false the call is never detached: it answers when the
+    /// work does, for work that bounds its own time (wait_for_recording).
     public func run(
         tool: String,
         clientName: String? = nil,
         arrivedAt: Date? = nil,
+        detaches: Bool = true,
         progress: AIToolProgressHandler?,
         _ work: @escaping @Sendable (_ progress: @escaping AIToolProgressHandler) async throws -> MCPToolCallResult
     ) async -> AutomationCallResult {
         prune()
-        var budget = detachAfter
+        var budget: TimeInterval? = detachAfter
         if let arrivedAt {
             budget = max(min(1, detachAfter / 10), detachAfter - Date().timeIntervalSince(arrivedAt))
         }
+        if !detaches { budget = nil }
         let job = Job(id: UUID().uuidString.lowercased(), tool: tool, clientName: clientName)
         let relay = job.progress
         let listener = relay.attach(progress)
@@ -204,14 +209,17 @@ private final class Job {
         for waiter in pending { waiter.resume() }
     }
 
-    /// The outcome once the job finishes, or nil when `seconds` pass or the
-    /// waiting task is cancelled first. The job itself is left running.
-    func outcome(within seconds: TimeInterval) async -> Outcome? {
+    /// The outcome once the job finishes, or nil when `seconds` pass (never,
+    /// for nil) or the waiting task is cancelled first. The job itself is
+    /// left running.
+    func outcome(within seconds: TimeInterval?) async -> Outcome? {
         if let outcome { return outcome }
         let token = UUID()
-        let timer = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
-            self?.resume(token)
+        let timer = seconds.map { seconds in
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
+                self?.resume(token)
+            }
         }
         await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
@@ -224,7 +232,7 @@ private final class Job {
         } onCancel: {
             Task { @MainActor [weak self] in self?.resume(token) }
         }
-        timer.cancel()
+        timer?.cancel()
         return outcome
     }
 

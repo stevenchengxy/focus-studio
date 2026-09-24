@@ -66,6 +66,10 @@ public struct MCPToolSpec: Sendable {
     /// time (``AutomationCallQueue``) so parallel calls never switch the
     /// editor under each other; reads run at once.
     public let navigates: Bool
+    /// A call still running after about 200 seconds answers with a job_id
+    /// for wait_for_job (``AutomationJobs``). False for a tool that bounds
+    /// its own wait well inside client timeouts (wait_for_recording).
+    public let detaches: Bool
     /// The shared tool that runs the call; nil for wait_for_job, which the
     /// automation layer answers itself.
     public let tool: (any AIAssistantTool)?
@@ -87,6 +91,7 @@ public struct MCPToolSpec: Sendable {
         annotations: MCPToolAnnotations,
         returnsImage: Bool = false,
         navigates: Bool? = nil,
+        detaches: Bool = true,
         propertyDescriptions: [String: String] = [:]
     ) {
         let required = scope == .global ? false : (requiresProjectID ?? true)
@@ -95,13 +100,13 @@ public struct MCPToolSpec: Sendable {
             name: tool.name, title: title, description: description,
             inputSchema: Self.schema(base, scope: scope, requiresProjectID: required, descriptions: propertyDescriptions),
             annotations: annotations, scope: scope, requiresProjectID: required, returnsImage: returnsImage,
-            navigates: navigates ?? Self.navigatesByDefault(scope: scope, annotations: annotations), tool: tool
+            navigates: navigates ?? Self.navigatesByDefault(scope: scope, annotations: annotations), detaches: detaches, tool: tool
         )
     }
 
     init(
         name: String, title: String, description: String, inputSchema: AIJSONValue, annotations: MCPToolAnnotations,
-        scope: MCPToolScope, requiresProjectID: Bool, returnsImage: Bool, navigates: Bool, tool: (any AIAssistantTool)?
+        scope: MCPToolScope, requiresProjectID: Bool, returnsImage: Bool, navigates: Bool, detaches: Bool = true, tool: (any AIAssistantTool)?
     ) {
         self.name = name
         self.title = title
@@ -112,6 +117,7 @@ public struct MCPToolSpec: Sendable {
         self.requiresProjectID = requiresProjectID
         self.returnsImage = returnsImage
         self.navigates = navigates
+        self.detaches = detaches
         self.tool = tool
     }
 
@@ -154,7 +160,7 @@ public struct MCPToolSpec: Sendable {
     /// (some reject `uuid`), so the description says what the id is.
     static let projectIDProperty: AIJSONValue = [
         "type": "string",
-        "description": "The project's id (a UUID), from list_projects, stop_recording, import_video or create_screenshot_demo.",
+        "description": "The project's id (a UUID), from list_projects, stop_recording, wait_for_recording, import_video or create_screenshot_demo.",
     ]
 
     private static func schema(_ base: AIJSONValue, scope: MCPToolScope, requiresProjectID: Bool, descriptions: [String: String]) -> AIJSONValue {
@@ -226,7 +232,7 @@ public struct MCPToolCatalog: Sendable {
         // Status and the library.
         MCPToolSpec(
             tool: GetStatusTool(), title: "Get status",
-            description: "Report Focus Studio's state: its version, whether it is counting down or recording (and for how many seconds), which project is open in the editor, how many projects the library has, which macOS permissions it holds (Screen Recording is needed to record; Accessibility and Input Monitoring give automatic zooms on clicks and typing) and the bundled music tracks with their ids for set_background_music. Call it first to check that recording will work.",
+            description: "Report Focus Studio's state: its version, whether it is counting down or recording (for how many seconds, and the seconds remaining when a duration will stop it), which project is open in the editor, how many projects the library has, which macOS permissions it holds (Screen Recording is needed to record; Accessibility and Input Monitoring give automatic zooms on clicks and typing) and the bundled music tracks with their ids for set_background_music. Call it first to check that recording will work.",
             scope: .global, annotations: .reads
         ),
         MCPToolSpec(
@@ -271,13 +277,19 @@ public struct MCPToolCatalog: Sendable {
         ),
         MCPToolSpec(
             tool: StartRecordingTool(), title: "Start recording",
-            description: "Start recording a display or window. Focus Studio shows a visible 3-second countdown, then a floating control bar while the person performs the demo; the call returns once frames are being captured. Call stop_recording when the demo is done. Optional capture settings (system audio, microphone, automatic zooms, browser content only, frame rate) are set in Focus Studio before the countdown.",
+            description: "Start recording a display or window. The person sees a 3-second countdown, then a floating control bar (Finish, Cancel) for the whole recording, and may cancel at any time. The call returns as soon as the recording is live: state \"recording\" with started_at. Meanwhile, let the person perform the demo, or operate the recorded app yourself with your own tools (computer use, browser automation); then call wait_for_recording, or stop_recording to stop at once. The control bar floats above every app at the top centre of each display, just below the menu bar (about 590 x 72 points), and is not in the video: mouse clicks there land on the bar, and its x cancels and deletes the recording at once. When you click the recorded app yourself, keep its controls out of that area (move or resize its window, or scroll), and stop with stop_recording, never with the bar's buttons. With duration, Focus Studio stops by itself that many seconds after the recording started (auto_stop_at). Capture settings given here apply to this recording only. Clicks and typing sent over a browser's DevTools protocol (Playwright, Chrome automation) are not real mouse or key events and make no automatic zooms: add zooms afterwards with add_zoom.",
             scope: .global, annotations: MCPToolAnnotations(readOnly: false)
         ),
         MCPToolSpec(
             tool: StopRecordingTool(), title: "Stop recording",
-            description: "Finish the current recording. Focus Studio saves it as a new project, with automatic zooms on the recorded clicks and typing, and opens it in the editor. Returns the project_id, title, duration in seconds, source size and number of zooms.",
+            description: "Stop the current recording now (also one whose duration is still running) and wait until Focus Studio has saved it as a new project, with automatic zooms on the recorded clicks and typing, and opened it in the editor. Returns state \"finished\" with the project_id, title, duration in seconds, source size and number of zooms. A stop already under way (the person's Finish, the duration running out) is joined, never repeated.",
             scope: .global, annotations: MCPToolAnnotations(readOnly: false)
+        ),
+        MCPToolSpec(
+            tool: WaitForRecordingTool(), title: "Wait for recording",
+            description: "Wait, without stopping it, until the current recording ends: the person clicks Finish or Cancel, its duration runs out, or stop_recording is called. Returns state \"finished\" with the project_id and duration once the project is saved and open in the editor, or \"cancelled\" when the person cancelled (nothing is saved). Waits at most timeout_seconds (default 120, at most 240); if it is still recording then, it returns state \"recording\" with elapsed (and remaining, with a duration): call it again. Returns state \"idle\" when nothing is recording, with how the last recording ended. Other calls, get_status included, keep working while it waits.",
+            // Bounds its own wait, so it is never turned into a job.
+            scope: .global, annotations: .reads, detaches: false
         ),
         // Editing a project (opened in the editor first).
         MCPToolSpec(
@@ -361,7 +373,7 @@ public struct MCPToolCatalog: Sendable {
                     "timeout_seconds": ["type": "number", "minimum": 0, "maximum": AIJSONValue(AutomationJobs.maximumWait), "default": AIJSONValue(AutomationJobs.defaultWait), "description": AIJSONValue("How long to wait, in seconds, from 0 to \(Int(AutomationJobs.maximumWait)) (default \(Int(AutomationJobs.defaultWait))).")],
                 ],
             ],
-            annotations: .reads, scope: .global, requiresProjectID: false, returnsImage: false, navigates: false, tool: nil
+            annotations: .reads, scope: .global, requiresProjectID: false, returnsImage: false, navigates: false, detaches: false, tool: nil
         ),
     ])
 
@@ -372,17 +384,17 @@ public struct MCPToolCatalog: Sendable {
     /// the rule about project.json in the first paragraph: Claude Code cuts
     /// server instructions at 2,048.
     public static let instructions = """
-    Focus Studio is a macOS app that records the screen and turns the recording into a polished product-demo video: automatic zooms on clicks and typing, a styled background, chapter captions, music and sound effects, MP4 export. These tools operate the Focus Studio app on this Mac while a person watches it. Only Focus Studio writes its library: never edit a project's files (project.json) directly.
+    Focus Studio is a macOS app that records the screen and turns the recording into a polished product-demo video: automatic zooms on clicks and typing, a styled background, chapter captions, music and sound effects, MP4 export. These tools operate the Focus Studio app on this Mac while a person watches. Only Focus Studio writes its library: never edit a project's files (project.json) directly.
 
-    Workflow: get_status (permissions, bundled music) → list_recording_sources → start_recording (a 3-second countdown, then the person performs the demo) → stop_recording (returns the new project_id; if the person stopped from the control bar, the new project is first in list_projects) → edit by project_id: get_project, add_zoom, set_chapters, update_settings, set_background_music and the other editing tools → capture_frame to check the look → export_project. import_video and create_screenshot_demo make projects from existing files.
+    Workflow: get_status (permissions, bundled music) → list_recording_sources → start_recording (the person sees a 3-second countdown, then a control bar to finish or cancel; it returns once recording) → the person performs the demo, or you operate the app with your own tools → wait_for_recording, or stop_recording to stop now (both return the new project_id) → edit by project_id: get_project, add_zoom, set_chapters, update_settings and the other editing tools → capture_frame to check the look → export_project. import_video and create_screenshot_demo make projects from existing files.
 
     Conventions:
     - Times and durations are seconds within the recording.
     - Positions x and y run from 0 to 1, measured from the top-left corner of the recording (0.5, 0.5 is the centre).
     - Paths are absolute or relative to your working directory; ~ is expanded. An existing file is replaced only with overwrite: true, and a project's own recording is never written.
-    - project_id comes from list_projects, stop_recording, import_video or create_screenshot_demo.
-    - Editing and output tools open their project in the Focus Studio editor first (saving and closing any other open project), so the person sees every change. They are refused while a recording is under way, the app is busy or its own in-app assistant is working on a request; try again afterwards.
-    - Calls that change what Focus Studio shows run one at a time, in the order they arrive; reads run at once.
-    - A call still running after about 200 seconds (a long export) answers with status "running" and a job_id; call wait_for_job with it to get the result.
+    - Editing and output tools open their project in the Focus Studio editor first (saving and closing any other), so the person sees every change. They are refused while recording, while the app is busy or while its in-app assistant works; try again later.
+    - Calls that change what Focus Studio shows run one at a time; reads run at once.
+    - Clicks and typing sent over a browser's DevTools protocol (Playwright, Chrome automation) are not real input events and make no automatic zooms; use add_zoom.
+    - A call still running after about 200 seconds (a long export) answers with status "running" and a job_id; call wait_for_job with it.
     """
 }

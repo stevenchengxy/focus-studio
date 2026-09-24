@@ -220,10 +220,11 @@ extension AIAssistantTests {
         check(sources["sources"]?[0]?["id"] == "display-1" && sources["sources"]?[0]?["kind"] == "display" && sources["sources"]?[2]?["id"] == "win-3" && sources["sources"]?[2]?["app"] == "Xcode" && sources["sources"]?[2]?["width"] == 1_600, "displays first, then windows by size, with app and size")
 
         let started = try structured(try await StartRecordingTool(startTimeout: 2).run(arguments: ["source": "Safari", "microphone": true, "frame_rate": 30], context: context, progress: { _ in }), "start_recording")
-        check(started["status"] == "recording" && started["source"]?["id"] == "win-1" && started["options"] == ["microphone": true, "frame_rate": 30], "start reports the source and only the given options: \(started)")
+        check(started["state"] == "recording" && started["source"]?["id"] == "win-1" && started["options"] == ["microphone": true, "frame_rate": 30], "start reports the source and only the given options: \(started)")
+        check(started["started_at"]?.stringValue?.contains("T") == true && started["duration"] == nil && started["auto_stop_at"] == nil, "start reports when it started, and no automatic stop without a duration: \(started)")
         let stopped = try structured(try await StopRecordingTool(stopTimeout: 2).run(arguments: [:], context: context, progress: { _ in }), "stop_recording")
         let recorded = app.projects[0]
-        check(stopped["project_id"]?.stringValue == recorded.id.uuidString && stopped["id"]?.stringValue == recorded.id.uuidString && stopped["duration"] == 12 && stopped["open_in_editor"] == true && stopped["title"] == "Recording 1", "stop returns the new project: \(stopped)")
+        check(stopped["project_id"]?.stringValue == recorded.id.uuidString && stopped["id"]?.stringValue == recorded.id.uuidString && stopped["duration"] == 12 && stopped["open_in_editor"] == true && stopped["title"] == "Recording 1" && stopped["state"] == "finished", "stop returns the new project: \(stopped)")
 
         var older = makeProject(sourceVideoPath: "/nonexistent.mp4", duration: 4)
         older.title = "Older"
@@ -486,7 +487,7 @@ extension AIAssistantTests {
 
         let idle = try await GetStatusTool().run(arguments: [:], context: context, progress: { _ in })
         let data = try structured(idle, "get_status")
-        check(data["recording"] == ["state": "idle", "elapsed": nil, "error": nil] && data["open_project_id"] == .null && data["library_count"] == 2, "idle state: \(data)")
+        check(data["recording"] == ["state": "idle", "elapsed": nil, "remaining": nil, "error": nil] && data["open_project_id"] == .null && data["library_count"] == 2, "idle state: \(data)")
         check(data["permissions"] == ["screen_recording": false, "accessibility": true, "input_monitoring": false], "permissions: \(data["permissions"] ?? .null)")
         check(data["music_tracks"] == [["id": "calm-gradient", "title": "Calm Gradient", "mood": "Soft, airy pads", "duration": 61.3, "suggested_volume": 0.17]], "bundled music: \(data["music_tracks"] ?? .null)")
         check(data["app"]?["name"] == "Focus Studio" && data["app"]?["path"]?.stringValue?.isEmpty == false && data["app"]?["version"] != nil, "app identity (version from Bundle.main, null outside the app): \(data["app"] ?? .null)")
@@ -498,14 +499,14 @@ extension AIAssistantTests {
         app.recordingPhase = .recording
         app.elapsed = 12.34
         let recording = try structured(try await GetStatusTool().run(arguments: [:], context: context, progress: { _ in }), "get_status recording")
-        check(recording["recording"] == ["state": "recording", "elapsed": 12.3, "error": nil] && recording["open_project_id"]?.stringValue == project.id.uuidString, "recording with elapsed time: \(recording)")
+        check(recording["recording"] == ["state": "recording", "elapsed": 12.3, "remaining": nil, "error": nil] && recording["open_project_id"]?.stringValue == project.id.uuidString, "recording with elapsed time: \(recording)")
         app.recordingPhase = .countdown
         let countdown = try await GetStatusTool().run(arguments: [:], context: context, progress: { _ in })
         let countdownData = try structured(countdown, "get_status countdown")
         check(countdownData["recording"]?["state"] == "countdown" && countdown.text.contains("Screen Recording granted") && !countdown.text.contains("System Settings"), "countdown: \(countdown.text)")
         app.recordingPhase = .failed("The stream stopped")
         let failed = try structured(try await GetStatusTool().run(arguments: [:], context: context, progress: { _ in }), "get_status failed")
-        check(failed["recording"] == ["state": "failed", "elapsed": nil, "error": "The stream stopped"], "failure message: \(failed)")
+        check(failed["recording"] == ["state": "failed", "elapsed": nil, "remaining": nil, "error": "The stream stopped"], "failure message: \(failed)")
         app.recordingPhase = .idle
         await expectToolError("no app", { _ = try await GetStatusTool().run(arguments: [:], context: makeContext(root: root, box: ProjectBox(nil)), progress: { _ in }) }) { $0 == .appUnavailable }
     }

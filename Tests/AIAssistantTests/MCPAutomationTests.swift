@@ -10,7 +10,7 @@ import ImageIO
 extension AIAssistantTests {
     static let mcpV1ToolNames = [
         "get_status", "list_projects", "get_project", "rename_project", "delete_project", "import_video", "create_screenshot_demo",
-        "list_recording_sources", "start_recording", "stop_recording", "add_zoom", "remove_zoom", "set_zoom_style", "update_settings",
+        "list_recording_sources", "start_recording", "stop_recording", "wait_for_recording", "add_zoom", "remove_zoom", "set_zoom_style", "update_settings",
         "set_chapters", "set_background_image", "set_background_music", "set_sound_effects", "capture_frame", "export_project",
         "assemble_video", "list_assets", "wait_for_job",
     ]
@@ -42,20 +42,22 @@ extension AIAssistantTests {
         for mcpOnly in ["get_project", "get_status", "rename_project", "delete_project", "import_video", "create_screenshot_demo", "wait_for_job"] {
             check(!inAppNames.contains(mcpOnly), "\(mcpOnly) is not in the in-app catalog")
         }
-        check(inApp.count == 23, "the in-app catalog keeps its 23 tools: \(inApp.count)")
+        check(inApp.count == 24 && inAppNames.contains("wait_for_recording"), "the in-app catalog has its 24 tools, wait_for_recording included: \(inApp.count)")
 
         let scopes: [String: MCPToolScope] = [
             "get_status": .global, "list_projects": .global, "import_video": .global, "create_screenshot_demo": .global,
-            "list_recording_sources": .global, "start_recording": .global, "stop_recording": .global, "wait_for_job": .global,
+            "list_recording_sources": .global, "start_recording": .global, "stop_recording": .global, "wait_for_recording": .global, "wait_for_job": .global,
             "get_project": .projectReadOnly, "list_assets": .projectReadOnly, "assemble_video": .projectReadOnly,
             "rename_project": .library, "delete_project": .library,
             "add_zoom": .project, "remove_zoom": .project, "set_zoom_style": .project, "update_settings": .project, "set_chapters": .project,
             "set_background_image": .project, "set_background_music": .project, "set_sound_effects": .project, "capture_frame": .project,
             "export_project": .project,
         ]
-        let readOnly: Set<String> = ["get_status", "list_projects", "get_project", "list_assets", "wait_for_job"]
+        let readOnly: Set<String> = ["get_status", "list_projects", "get_project", "list_assets", "wait_for_recording", "wait_for_job"]
         // Calls that make the app show something else run one at a time.
-        let stayPut: Set<String> = ["get_status", "list_projects", "get_project", "list_assets", "assemble_video", "wait_for_job"]
+        let stayPut: Set<String> = ["get_status", "list_projects", "get_project", "list_assets", "assemble_video", "wait_for_recording", "wait_for_job"]
+        // Tools that bound their own wait are never turned into jobs.
+        let boundedWaits: Set<String> = ["wait_for_recording", "wait_for_job"]
         // Replacing an existing file (overwrite: true) is destructive too.
         let destructive: Set<String> = ["delete_project", "remove_zoom", "set_chapters", "update_settings", "set_zoom_style", "export_project", "assemble_video"]
         let idempotent: Set<String> = ["rename_project", "delete_project", "list_recording_sources", "set_zoom_style", "update_settings", "set_background_image", "set_background_music", "set_sound_effects"]
@@ -102,6 +104,7 @@ extension AIAssistantTests {
             check(annotations.readOnly ? json?["destructiveHint"] == nil : json?["destructiveHint"] == AIJSONValue(annotations.destructive), "\(name) destructiveHint is explicit for writers")
             check(spec.returnsImage == (name == "capture_frame"), "\(name) returnsImage")
             check(spec.navigates == !stayPut.contains(name), "\(name) navigates: \(spec.navigates)")
+            check(spec.detaches == !boundedWaits.contains(name), "\(name) detaches: \(spec.detaches)")
             check(spec.descriptor["name"]?.stringValue == name && spec.descriptor["inputSchema"] == schema && spec.descriptor["description"]?.stringValue == spec.description, "\(name) descriptor")
         }
 
@@ -109,7 +112,19 @@ extension AIAssistantTests {
         let addZoom = catalog.tool(named: "add_zoom")!
         check(addZoom.inputSchema["required"] == ["project_id", "start", "end", "x", "y"], "add_zoom keeps its own required arguments: \(addZoom.inputSchema["required"] ?? .null)")
         check(addZoom.description.contains("top-left") && addZoom.description.contains("seconds"), "add_zoom explains coordinates and times")
-        check(catalog.tool(named: "start_recording")!.inputSchema["required"] == ["source"], "start_recording requires only its source")
+        let start = catalog.tool(named: "start_recording")!
+        check(start.inputSchema["required"] == ["source"], "start_recording requires only its source")
+        check(start.inputSchema["properties"]?["duration"]?["minimum"] == 1 && start.inputSchema["properties"]?["duration"]?["maximum"] == 600 && start.inputSchema["properties"]?["duration"]?["type"] == "number", "start_recording takes a bounded duration: \(start.inputSchema["properties"]?["duration"] ?? .null)")
+        for phrase in ["returns as soon as the recording is live", "countdown", "control bar", "cancel", "wait_for_recording", "stop_recording", "duration", "this recording only", "DevTools", "Clicks and typing", "add_zoom", "your own tools",
+                       "top centre", "deletes the recording", "never with the bar's buttons"] {
+            check(start.description.contains(phrase), "start_recording's description mentions \(phrase)")
+        }
+        let wait = catalog.tool(named: "wait_for_recording")!
+        check(wait.inputSchema["required"] == nil && wait.inputSchema["properties"]?["timeout_seconds"]?["maximum"] == 240 && wait.inputSchema["properties"]?["timeout_seconds"]?["default"] == 120, "wait_for_recording takes an optional bounded timeout: \(wait.inputSchema)")
+        for phrase in ["finished", "cancelled", "recording", "idle", "timeout_seconds", "get_status"] {
+            check(wait.description.contains(phrase), "wait_for_recording's description mentions \(phrase)")
+        }
+        check(catalog.tool(named: "stop_recording")!.description.contains("joined"), "stop_recording says a stop under way is joined")
         check(catalog.tool(named: "get_project")!.inputSchema["required"] == ["project_id"], "get_project's own optional project_id becomes required")
         check(catalog.tool(named: "rename_project")!.inputSchema["required"] == ["project_id", "title"], "rename_project requires the id and the title")
         check(catalog.tool(named: "list_assets")!.inputSchema["required"] == nil, "list_assets requires nothing")
@@ -140,7 +155,8 @@ extension AIAssistantTests {
         check(instructions.utf16.count <= 2_000, "the server instructions fit Claude Code's 2,048-character limit: \(instructions.utf16.count)")
         check(String(instructions.prefix(1_024)).contains("project.json"), "the project.json rule is near the top of the instructions")
         for phrase in ["list_recording_sources → start_recording", "stop_recording", "project_id", "top-left", "seconds", "working directory", "countdown",
-                       "control bar", "editor", "in-app assistant", "wait_for_job", "overwrite", "project.json"] {
+                       "control bar", "editor", "in-app assistant", "wait_for_job", "overwrite", "project.json", "wait_for_recording", "your own tools",
+                       "DevTools", "Clicks and typing", "add_zoom"] {
             check(instructions.contains(phrase), "the server instructions mention \(phrase)")
         }
     }
