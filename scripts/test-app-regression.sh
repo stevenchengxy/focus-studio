@@ -10,7 +10,7 @@ BUILD_DIR="$(swift build --show-bin-path)"
 TEST_DIR="$PROJECT_DIR/.artifacts/app-regression"
 mkdir -p "$TEST_DIR"
 # (N): the assistant UI subfolder may not exist yet on every checkout.
-APP_SOURCES=(Sources/FocusStudio/*.swift Sources/FocusStudio/AI/*.swift Sources/FocusStudio/AI/Assistant/*.swift Sources/FocusStudio/AI/Assistant/UI/*.swift(N))
+APP_SOURCES=(Sources/FocusStudio/*.swift Sources/FocusStudio/AI/*.swift Sources/FocusStudio/AI/Assistant/*.swift Sources/FocusStudio/AI/Assistant/UI/*.swift(N) Sources/FocusStudio/Automation/*.swift(N))
 APP_SOURCES=("${(@)APP_SOURCES:#Sources/FocusStudio/FocusStudioApp.swift}")
 CORE_OBJECTS=("$BUILD_DIR"/FocusStudioCore.build/*.swift.o)
 CAPTURE_OBJECTS=("$BUILD_DIR"/FocusStudioCapture.build/*.swift.o)

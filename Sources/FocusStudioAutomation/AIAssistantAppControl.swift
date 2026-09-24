@@ -44,6 +44,19 @@ public struct AIRecordingSource: Equatable, Sendable, Identifiable {
 
     var area: Int { max(0, width) * max(0, height) }
 
+    /// The source for a program: id, kind, app, title, size and whether it is the main display.
+    var data: AIJSONValue {
+        [
+            "id": AIJSONValue(id),
+            "kind": AIJSONValue(kind.rawValue),
+            "app": appName.map { AIJSONValue($0) } ?? .null,
+            "title": AIJSONValue(title),
+            "width": AIJSONValue(width),
+            "height": AIJSONValue(height),
+            "main": AIJSONValue(isMainDisplay),
+        ]
+    }
+
     /// One line for the model, e.g. `id win-12 · window · Safari — Docs · 1440×900`.
     var summaryLine: String {
         var parts = ["id \(id)", kind.rawValue]
@@ -82,6 +95,34 @@ public enum AIRecordingPhase: Equatable, Sendable {
         case .stopping: return "stopping"
         case let .failed(message): return "failed: \(message)"
         }
+    }
+
+    /// A stable word for programs: idle, countdown, recording, stopping or failed.
+    var code: String {
+        switch self {
+        case .idle: return "idle"
+        case .countdown: return "countdown"
+        case .recording: return "recording"
+        case .stopping: return "stopping"
+        case .failed: return "failed"
+        }
+    }
+}
+
+/// Which privacy permissions the app holds, read with the non-prompting
+/// preflight calls so asking never shows a system dialog.
+public struct AIPermissionStatus: Equatable, Sendable {
+    /// `CGPreflightScreenCaptureAccess`: needed for any recording.
+    public var screenRecording: Bool
+    /// `AXIsProcessTrusted`: needed for automatic zooms on clicks.
+    public var accessibility: Bool
+    /// `CGPreflightListenEventAccess`: needed for automatic zooms on typing.
+    public var inputMonitoring: Bool
+
+    public init(screenRecording: Bool, accessibility: Bool, inputMonitoring: Bool) {
+        self.screenRecording = screenRecording
+        self.accessibility = accessibility
+        self.inputMonitoring = inputMonitoring
     }
 }
 
@@ -195,13 +236,43 @@ public protocol AppControlling: AnyObject, Sendable {
     /// call with no live recording (a stop that already finished, a cancel
     /// winding down) does nothing.
     func stopRecording() async
+    /// Seconds since frames started arriving, while `.recording`; nil otherwise.
+    var recordingElapsed: TimeInterval? { get }
     /// Library entries, newest first.
     var projectSummaries: [AIProjectSummary] { get }
+    /// The freshest copy of a library project, without opening it: the
+    /// editor's copy when it is the open project, else the library's. Nil for
+    /// an unknown id.
+    func project(id: UUID) -> RecordingProject?
+    /// The projects library root (one `<UUID>/` folder per project).
+    var libraryDirectory: URL { get }
     /// The project shown in the editor, or nil when the editor is closed.
     var openProjectID: UUID? { get }
     func openProject(id: UUID) throws
     func closeEditor()
     var bundledMusicTracks: [AIMusicTrack] { get }
+    /// Screen Recording, Accessibility and Input Monitoring, without prompting.
+    var permissionStatus: AIPermissionStatus { get }
+
+    // Library changes an external client may make. Each goes through the
+    // app's own action and throws the reason it could not, the app's own
+    // reasons as an ``AILocalizedFailure``.
+
+    /// Creates a library project from a movie file and opens it in the
+    /// editor (saving and closing any open project first), as Import video
+    /// does. A nil title is the file name.
+    func importVideo(from url: URL, title: String?) async throws -> RecordingProject
+    /// Turns a PNG or JPEG screenshot into an editable demo project and opens
+    /// it in the editor, as Animate screenshot does. A nil title is
+    /// "<file name> Demo".
+    func importScreenshotDemo(from url: URL, title: String?) async throws -> RecordingProject
+    /// Renames a library project (its title only) and returns it as saved.
+    /// The app returns to the library first, saving and closing the editor.
+    func renameLibraryProject(id: UUID, to title: String) async throws -> RecordingProject
+    /// Moves a library project's folder to the Trash, never deleting it, and
+    /// returns the project as it was. The app returns to the library first,
+    /// saving and closing the editor.
+    func trashLibraryProject(id: UUID) async throws -> RecordingProject
 }
 
 // MARK: - Shared helpers
@@ -210,6 +281,32 @@ extension AIToolSupport {
     static func requireApp(_ context: AIAssistantContext) throws -> any AppControlling {
         guard let app = context.app else { throw AIToolError.appUnavailable }
         return app
+    }
+
+    /// Runs an app action and words its failure in the call's language: the
+    /// app's own reasons are translated, tool errors and cancellation pass
+    /// through, and any other error is reported by its description.
+    static func appAction<Value>(_ context: AIAssistantContext, _ action: () async throws -> Value) async throws -> Value {
+        do {
+            return try await action()
+        } catch let failure as AILocalizedFailure {
+            throw AIToolError.failed(failure.message(in: context.resultLanguage))
+        } catch let error as AIToolError {
+            throw error
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw AIToolError.failed(L10n.tr(error.localizedDescription, language: context.resultLanguage))
+        }
+    }
+
+    /// The project a call concerns without opening it: the project the call
+    /// is pinned to as the app has it now, else the one open in the editor.
+    static func referencedProject(_ context: AIAssistantContext) async -> RecordingProject? {
+        if let pinned = context.projectID, let app = context.app {
+            return await app.project(id: pinned)
+        }
+        return await MainActor.run { context.readProject() }
     }
 
     /// Polls `poll` on the main actor every `interval` until it returns a
@@ -277,20 +374,29 @@ struct ListRecordingSourcesTool: AIAssistantTool {
         progress: @escaping @Sendable (String) -> Void
     ) async throws -> AIToolResult {
         let app = try AIToolSupport.requireApp(context)
-        progress(L10n.tr("Finding screens and windows…"))
-        let sources = try await app.refreshRecordingSources()
+        progress(context.tr("Finding screens and windows…"))
+        let sources = try await AIToolSupport.appAction(context) { try await app.refreshRecordingSources() }
         guard !sources.isEmpty else {
-            return AIToolResult(text: "No displays or windows are available. Screen Recording permission may be missing: System Settings › Privacy & Security › Screen Recording.")
+            let data: AIJSONValue = ["display_count": 0, "window_count": 0, "sources": [], "omitted_windows": 0]
+            return AIToolResult(text: "No displays or windows are available. Screen Recording permission may be missing: System Settings › Privacy & Security › Screen Recording.", data: data)
         }
         let displays = AIRecordingSource.orderedDisplays(sources)
         let windows = sources.filter { $0.kind == .window }.sorted { $0.area > $1.area }
+        let listedWindows = windows.prefix(Self.maximumListedWindows)
         var lines = ["\(displays.count) displays, \(windows.count) windows"]
         lines.append(contentsOf: displays.map { "- " + $0.summaryLine })
-        lines.append(contentsOf: windows.prefix(Self.maximumListedWindows).map { "- " + $0.summaryLine })
+        lines.append(contentsOf: listedWindows.map { "- " + $0.summaryLine })
         if windows.count > Self.maximumListedWindows {
             lines.append("(\(windows.count - Self.maximumListedWindows) smaller windows omitted)")
         }
-        return AIToolResult(text: lines.joined(separator: "\n"))
+        let data: AIJSONValue = [
+            "display_count": AIJSONValue(displays.count),
+            "window_count": AIJSONValue(windows.count),
+            // Displays (main first), then the largest windows.
+            "sources": .array((displays + listedWindows).map(\.data)),
+            "omitted_windows": AIJSONValue(windows.count - listedWindows.count),
+        ]
+        return AIToolResult(text: lines.joined(separator: "\n"), data: data)
     }
 }
 
@@ -356,14 +462,16 @@ struct StartRecordingTool: AIAssistantTool {
         }
         var sources = await app.recordingSources
         if sources.isEmpty {
-            progress(L10n.tr("Finding screens and windows…"))
-            sources = try await app.refreshRecordingSources()
+            progress(context.tr("Finding screens and windows…"))
+            sources = try await AIToolSupport.appAction(context) { try await app.refreshRecordingSources() }
         }
         let source = try Self.resolveSource(query, in: sources)
         let requestedOptions = options
-        try await MainActor.run { try app.startRecording(sourceID: source.id, options: requestedOptions) }
+        try await AIToolSupport.appAction(context) {
+            try await MainActor.run { try app.startRecording(sourceID: source.id, options: requestedOptions) }
+        }
 
-        progress(L10n.tr("Counting down…"))
+        progress(context.tr("Counting down…"))
         // The app reports `.countdown` from the moment startRecording returns, so
         // `.idle` while waiting means the countdown was cancelled or the capture
         // failed; a failure (a missing Screen Recording permission included) is
@@ -394,7 +502,14 @@ struct StartRecordingTool: AIAssistantTool {
         var text = "Recording started (3-second countdown elapsed): \(source.summaryLine)."
         if !settings.isEmpty { text += " Settings: \(settings.joined(separator: ", "))." }
         text += " Call stop_recording when the demo is done."
-        return AIToolResult(text: text)
+        var optionData: [String: AIJSONValue] = [:]
+        if let value = options.systemAudio { optionData["system_audio"] = AIJSONValue(value) }
+        if let value = options.microphone { optionData["microphone"] = AIJSONValue(value) }
+        if let value = options.automaticZooms { optionData["automatic_zooms"] = AIJSONValue(value) }
+        if let value = options.browserContentOnly { optionData["browser_content_only"] = AIJSONValue(value) }
+        if let value = options.frameRate { optionData["frame_rate"] = AIJSONValue(value) }
+        let data: AIJSONValue = ["status": "recording", "source": source.data, "options": .object(optionData)]
+        return AIToolResult(text: text, data: data)
     }
 
     /// Matches an id, a display request, an app name or a window title.
@@ -473,7 +588,7 @@ struct StopRecordingTool: AIAssistantTool {
         var (phase, openBeforeStop, finishing) = await MainActor.run { (app.recordingPhase, app.openProjectID, app.isFinishingRecording) }
         if phase == .countdown {
             // The countdown cannot be stopped as a recording; let it start first.
-            progress(L10n.tr("Counting down…"))
+            progress(context.tr("Counting down…"))
             let started = try await AIToolSupport.waitOnMain(timeout: 8) { () -> Bool? in
                 app.recordingPhase == .recording ? true : (app.recordingPhase == .countdown ? nil : false)
             }
@@ -490,7 +605,7 @@ struct StopRecordingTool: AIAssistantTool {
             throw AIToolError.failed("No recording is in progress (state: \(phase.label)).")
         }
         let previousProjectID = openBeforeStop
-        progress(L10n.tr("Preparing your editable recording…"))
+        progress(context.tr("Preparing your editable recording…"))
         // A joined stop is only waited for: asking again could land after it
         // finished and finalize a capture that no longer exists.
         if !joining { Task { @MainActor in await app.stopRecording() } }
@@ -512,7 +627,8 @@ struct StopRecordingTool: AIAssistantTool {
         }
         let project = try outcome.get()
         let text = "Recording saved as project \"\(project.displayTitle)\" (id \(project.id.uuidString), \(AIToolSupport.seconds(project.duration)) s, \(project.sourceWidth)×\(project.sourceHeight), \(project.zoomCount) automatic zooms). It is open in the editor."
-        return AIToolResult(text: text)
+        let data = AIToolSupport.merged(AIProjectReport.summaryData(project, isOpen: true), ["project_id": AIJSONValue(project.id.uuidString)])
+        return AIToolResult(text: text, data: data)
     }
 }
 
@@ -523,9 +639,17 @@ struct ListProjectsTool: AIAssistantTool {
     let summary = "List the recordings in the library, newest first, with id, title, duration and creation time."
 
     static let maximumListed = 30
+    static let maximumLimit = 100
 
     var parametersSchema: [String: Any] {
-        ["type": "object", "properties": [String: Any]()]
+        [
+            "type": "object",
+            "properties": [
+                "query": ["type": "string", "description": "Only projects whose title contains this text (case-insensitive)."],
+                "offset": ["type": "integer", "minimum": 0, "description": "How many matching projects to skip (default 0)."],
+                "limit": ["type": "integer", "minimum": 1, "maximum": Self.maximumLimit, "description": "How many to return (default \(Self.maximumListed), at most \(Self.maximumLimit))."],
+            ],
+        ]
     }
 
     func run(
@@ -534,14 +658,37 @@ struct ListProjectsTool: AIAssistantTool {
         progress: @escaping @Sendable (String) -> Void
     ) async throws -> AIToolResult {
         let app = try AIToolSupport.requireApp(context)
+        let arguments = AIToolArguments(raw)
+        let query = arguments.string("query")
+        let offset = max(0, arguments.int("offset") ?? 0)
+        let limit = min(Self.maximumLimit, max(1, arguments.int("limit") ?? Self.maximumListed))
         let (projects, openID) = await MainActor.run { (app.projectSummaries, app.openProjectID) }
-        guard !projects.isEmpty else { return AIToolResult(text: "The library is empty. Record a demo with start_recording.") }
-        var lines = ["\(projects.count) projects (newest first)"]
-        for (index, project) in projects.prefix(Self.maximumListed).enumerated() {
-            lines.append("\(index + 1). " + AIToolSupport.projectLine(project, isOpen: project.id == openID))
+        let matching = query.map { query in projects.filter { $0.displayTitle.localizedCaseInsensitiveContains(query) } } ?? projects
+        let listed = matching.dropFirst(offset).prefix(limit)
+        let hasMore = offset + listed.count < matching.count
+        let data: AIJSONValue = [
+            "total": AIJSONValue(projects.count),
+            "matched": AIJSONValue(matching.count),
+            "offset": AIJSONValue(offset),
+            "has_more": AIJSONValue(hasMore),
+            "open_project_id": openID.map { AIJSONValue($0.uuidString) } ?? .null,
+            "projects": .array(listed.map { AIProjectReport.summaryData($0, isOpen: $0.id == openID) }),
+            "omitted": AIJSONValue(matching.count - listed.count),
+        ]
+        guard !projects.isEmpty else { return AIToolResult(text: "The library is empty. Record a demo with start_recording.", data: data) }
+        if let query, matching.isEmpty { return AIToolResult(text: "No project title contains \"\(query)\".", data: data) }
+        var lines = [query.map { "\(matching.count) of \(projects.count) projects contain \"\($0)\" (newest first)" } ?? "\(projects.count) projects (newest first)"]
+        for (index, project) in listed.enumerated() {
+            lines.append("\(offset + index + 1). " + AIToolSupport.projectLine(project, isOpen: project.id == openID))
         }
-        if projects.count > Self.maximumListed { lines.append("(\(projects.count - Self.maximumListed) older projects omitted)") }
-        return AIToolResult(text: lines.joined(separator: "\n"))
+        if listed.isEmpty { lines.append("(nothing after offset \(offset))") }
+        if hasMore {
+            let remaining = matching.count - offset - listed.count
+            // The in-app assistant's default call keeps its wording; paging callers learn the next offset.
+            let paging = query != nil || arguments.int("offset") != nil || arguments.int("limit") != nil
+            lines.append(paging ? "(\(remaining) more; call again with offset: \(offset + listed.count))" : "(\(remaining) older projects omitted)")
+        }
+        return AIToolResult(text: lines.joined(separator: "\n"), data: data)
     }
 }
 
@@ -570,7 +717,7 @@ struct OpenProjectTool: AIAssistantTool {
         let app = try AIToolSupport.requireApp(context)
         let projects = await app.projectSummaries
         let project = try Self.resolveProject(query, in: projects)
-        try await MainActor.run { try app.openProject(id: project.id) }
+        try await AIToolSupport.appAction(context) { try await MainActor.run { try app.openProject(id: project.id) } }
         let opened = await app.projectSummaries.first { $0.id == project.id } ?? project
         return AIToolResult(text: "Opened \"\(opened.displayTitle)\" in the editor (\(AIToolSupport.seconds(opened.duration)) s, \(opened.zoomCount) zooms, \(opened.chapterCount) chapters, id \(opened.id.uuidString)).")
     }
@@ -683,7 +830,15 @@ public struct AddZoomTool: AIAssistantTool {
         }
         var text = "Added zoom #\(updated.index): \(AIToolSupport.zoomLine(segment)). The project now has \(updated.count) zooms."
         if !notes.isEmpty { text += " (\(notes.joined(separator: ", ")))" }
-        return AIToolResult(text: text)
+        let data: AIJSONValue = [
+            "project_id": AIJSONValue(project.id.uuidString),
+            "index": AIJSONValue(updated.index),
+            "zoom_id": AIJSONValue(segment.id.uuidString),
+            "zoom": AIProjectReport.zoomData(index: updated.index, segment: segment),
+            "zoom_count": AIJSONValue(updated.count),
+            "notes": .array(notes.map { AIJSONValue($0) }),
+        ]
+        return AIToolResult(text: text, data: data)
     }
 }
 
@@ -691,14 +846,14 @@ public struct AddZoomTool: AIAssistantTool {
 
 struct RemoveZoomTool: AIAssistantTool {
     let name = "remove_zoom"
-    let summary = "Remove one zoom by its number (1-based, in time order as listed in the project summary) or all zooms."
+    let summary = "Remove one zoom by its number (1-based, in time order as listed in the project summary) or by its id, or remove all zooms."
 
     var parametersSchema: [String: Any] {
         [
             "type": "object",
-            "required": ["index"],
             "properties": [
-                "index": ["type": ["integer", "string"], "description": "The zoom number, or \"all\"."],
+                "index": ["type": ["integer", "string"], "description": "The zoom number, or \"all\". Give index or id."],
+                "id": ["type": "string", "description": "The zoom's id (from get_project or add_zoom); unlike the number it stays valid when other zooms are added or removed."],
             ],
         ]
     }
@@ -711,22 +866,49 @@ struct RemoveZoomTool: AIAssistantTool {
         let arguments = AIToolArguments(raw)
         let project = try await AIToolSupport.requireProject(context)
         let ordered = AIToolSupport.orderedZooms(project)
+        if let rawID = arguments.string("id") ?? arguments.string("zoom_id") {
+            guard let id = UUID(uuidString: rawID) else {
+                throw AIToolError.invalidArgument("\"id\" must be a zoom id from get_project or add_zoom (got \"\(rawID)\").")
+            }
+            guard let entry = ordered.first(where: { $0.segment.id == id }) else {
+                throw AIToolError.invalidArgument(ordered.isEmpty ? "The project has no zooms." : "No zoom has the id \(rawID); it may have been removed already. Check the project's current zooms.")
+            }
+            if arguments.has("index") {
+                guard let index = arguments.int("index"), index == entry.index else {
+                    throw AIToolError.invalidArgument("Zoom \(rawID) is #\(entry.index), which does not match \"index\"; give only one of them.")
+                }
+            }
+            return try await remove(entry, from: project, context: context)
+        }
         let rawIndex = arguments.string("index") ?? (arguments.bool("all") == true ? "all" : nil)
-        guard let rawIndex else { throw AIToolError.invalidArgument("Missing required argument \"index\" (a zoom number or \"all\").") }
+        guard let rawIndex else { throw AIToolError.invalidArgument("Missing required argument \"index\" (a zoom number or \"all\") or \"id\".") }
         if rawIndex.lowercased() == "all" {
-            guard !ordered.isEmpty else { return AIToolResult(text: "The project has no zooms.") }
+            let projectID = AIJSONValue(project.id.uuidString)
+            guard !ordered.isEmpty else {
+                return AIToolResult(text: "The project has no zooms.", data: ["project_id": projectID, "removed_count": 0, "remaining": 0])
+            }
             let removed = try await AIToolSupport.edit(context, projectID: project.id) { current -> Int in
                 let count = current.zoomSegments.count
                 current.zoomSegments.removeAll()
                 return count
             }
-            return AIToolResult(text: "Removed all \(removed) zooms. Automatic zooms return if the zoom style is regenerated; set autoZoomEnabled false to keep them off.")
+            return AIToolResult(text: "Removed all \(removed) zooms. Automatic zooms return if the zoom style is regenerated; set autoZoomEnabled false to keep them off.",
+                                data: ["project_id": projectID, "removed_count": AIJSONValue(removed), "remaining": 0])
         }
         guard let index = arguments.int("index") else { throw AIToolError.invalidArgument("\"index\" must be a zoom number or \"all\".") }
         guard let entry = ordered.first(where: { $0.index == index }) else {
             throw AIToolError.invalidArgument(ordered.isEmpty ? "The project has no zooms." : "Zoom #\(index) does not exist; the project has zooms 1–\(ordered.count).")
         }
+        return try await remove(entry, from: project, context: context)
+    }
+
+    private func remove(
+        _ entry: (index: Int, position: Int, segment: ZoomSegment),
+        from project: RecordingProject,
+        context: AIAssistantContext
+    ) async throws -> AIToolResult {
         let id = entry.segment.id
+        let index = entry.index
         let remaining = try await AIToolSupport.edit(context, projectID: project.id) { current -> Int in
             guard current.zoomSegments.contains(where: { $0.id == id }) else {
                 throw AIToolError.failed("Zoom #\(index) was already removed or changed; nothing was removed. Check the project's zooms and try again.")
@@ -734,7 +916,13 @@ struct RemoveZoomTool: AIAssistantTool {
             current.zoomSegments.removeAll { $0.id == id }
             return current.zoomSegments.count
         }
-        return AIToolResult(text: "Removed zoom #\(index) (\(AIToolSupport.zoomLine(entry.segment))). \(remaining) zooms remain.")
+        let data: AIJSONValue = [
+            "project_id": AIJSONValue(project.id.uuidString),
+            "removed": AIProjectReport.zoomData(index: index, segment: entry.segment),
+            "removed_count": 1,
+            "remaining": AIJSONValue(remaining),
+        ]
+        return AIToolResult(text: "Removed zoom #\(index) (\(AIToolSupport.zoomLine(entry.segment))). \(remaining) zooms remain.", data: data)
     }
 }
 
@@ -804,7 +992,7 @@ struct SetZoomStyleTool: AIAssistantTool {
         let values = numbers
         let requestedAutoZoom = autoZoom
         // One write for every key, so a parallel edit never lands between halves.
-        let count = try await AIToolSupport.edit(context, projectID: project.id) { project -> Int in
+        let (count, settings) = try await AIToolSupport.edit(context, projectID: project.id) { project -> (Int, ProjectSettings) in
             try sharedUpdate?.apply(&project.settings)
             if let hold = values["zoomHold"] {
                 let delta = hold - project.settings.zoomHold
@@ -830,9 +1018,18 @@ struct SetZoomStyleTool: AIAssistantTool {
             if regenerate, project.settings.autoZoomEnabled {
                 TimelineMath.regenerateAutomaticZoomSegments(in: &project)
             }
-            return project.zoomSegments.filter(\.isEnabled).count
+            return (project.zoomSegments.filter(\.isEnabled).count, project.settings)
         }
-        return AIToolResult(text: L10n.format("Updated %@", changes.joined(separator: ", ")) + " · \(count) zooms")
+        let data: AIJSONValue = [
+            "project_id": AIJSONValue(project.id.uuidString),
+            "changes": .array(changes.map { AIJSONValue($0) }),
+            "zoom_style": AIToolSupport.merged(AIProjectReport.zoomStyleData(settings), [
+                "screenAnimation": AIJSONValue(settings.screenAnimation.rawValue),
+                "zoomScale": .rounded(settings.zoomScale),
+            ]),
+            "zoom_count": AIJSONValue(count),
+        ]
+        return AIToolResult(text: context.format("Updated %@", changes.joined(separator: ", ")) + " · \(count) zooms", data: data)
     }
 }
 
@@ -873,14 +1070,16 @@ struct SetBackgroundMusicTool: AIAssistantTool {
                 audio.backgroundMusicPath = nil
                 project.settings.productDemoAudio = audio
             }
-            return AIToolResult(text: "Background music removed.")
+            return AIToolResult(text: "Background music removed.", data: ["project_id": AIJSONValue(project.id.uuidString), "track": nil])
         }
 
         let tracks = await Self.availableTracks(context)
         let track: AIMusicTrack
+        var isBundled = false
         if let bundled = Self.resolveTrack(query, in: tracks) {
             track = bundled
-        } else if case let .local(url) = AIToolPaths.reference(query, context: context), FileManager.default.fileExists(atPath: url.path) {
+            isBundled = true
+        } else if case let .local(url) = try AIToolPaths.reference(query, context: context), FileManager.default.fileExists(atPath: url.path) {
             guard AIToolPaths.kind(of: url) == .audio else { throw AIToolError.invalidArgument("\(url.lastPathComponent) is not an audio file.") }
             track = AIMusicTrack(id: url.path, title: url.deletingPathExtension().lastPathComponent, suggestedVolume: 0.22, path: url.path)
         } else {
@@ -894,7 +1093,17 @@ struct SetBackgroundMusicTool: AIAssistantTool {
             audio.backgroundMusicVolume = level
             project.settings.productDemoAudio = audio
         }
-        return AIToolResult(text: "Background music set to \"\(track.title)\" at volume \(String(format: "%.2f", level)).")
+        let data: AIJSONValue = [
+            "project_id": AIJSONValue(project.id.uuidString),
+            "track": [
+                "id": isBundled ? AIJSONValue(track.id) : .null,
+                "title": AIJSONValue(track.title),
+                "path": AIJSONValue(track.path),
+                "bundled": AIJSONValue(isBundled),
+            ],
+            "volume": .rounded(level),
+        ]
+        return AIToolResult(text: "Background music set to \"\(track.title)\" at volume \(String(format: "%.2f", level)).", data: data)
     }
 
     static func availableTracks(_ context: AIAssistantContext) async -> [AIMusicTrack] {
@@ -968,7 +1177,14 @@ struct SetSoundEffectsTool: AIAssistantTool {
             project.settings.productDemoAudio = audio
             return audio
         }
-        return AIToolResult(text: "Sound effects: click \(resolved.clickSoundEnabled ? "on" : "off") (volume \(String(format: "%.2f", resolved.clickSoundVolume))), zoom whoosh \(resolved.zoomTransitionSoundEnabled ? "on" : "off") (volume \(String(format: "%.2f", resolved.zoomTransitionSoundVolume))).")
+        let data: AIJSONValue = [
+            "project_id": AIJSONValue(project.id.uuidString),
+            "click": AIJSONValue(resolved.clickSoundEnabled),
+            "click_volume": .rounded(resolved.clickSoundVolume),
+            "zoom": AIJSONValue(resolved.zoomTransitionSoundEnabled),
+            "zoom_volume": .rounded(resolved.zoomTransitionSoundVolume),
+        ]
+        return AIToolResult(text: "Sound effects: click \(resolved.clickSoundEnabled ? "on" : "off") (volume \(String(format: "%.2f", resolved.clickSoundVolume))), zoom whoosh \(resolved.zoomTransitionSoundEnabled ? "on" : "off") (volume \(String(format: "%.2f", resolved.zoomTransitionSoundVolume))).", data: data)
     }
 }
 
@@ -979,7 +1195,7 @@ public struct ExportProjectTool: AIAssistantTool {
     public let summary: String
 
     init() {
-        self.init(name: "export_project", summary: "Render the open project with its look, zooms, captions and audio to an MP4. Default location: export-<timestamp>.mp4 in the assets folder; an optional path may name a file (.mp4) or a folder. An existing file is only replaced with overwrite: true, and the project's own recording and media are never written.")
+        self.init(name: "export_project", summary: "Render the open project with its look, zooms, captions and audio to an MP4. Default location: export-<timestamp>.mp4 in the assets folder; an optional path may name a file (.mp4) or a folder. An existing file is only replaced with overwrite: true, and the project's own recording and media are never written. Optional width and frame_rate apply to this export only.")
     }
 
     init(name: String, summary: String) {
@@ -993,6 +1209,8 @@ public struct ExportProjectTool: AIAssistantTool {
             "properties": [
                 "path": ["type": "string", "description": "Optional output file or folder; ~ is expanded, a bare name lands in the assets folder. Not inside the Focus Studio library except the project's ai folder."],
                 "overwrite": ["type": "boolean", "default": false, "description": "Replace the file at path if it already exists."],
+                "width": ["type": "integer", "enum": UpdateSettingsTool.exportWidths, "description": "Width of this export in pixels (the height follows the aspect ratio). The project's export width is not changed."],
+                "frame_rate": ["type": "integer", "enum": UpdateSettingsTool.exportFrameRates, "description": "Frames per second of this export. The project's frame rate is not changed."],
             ],
         ]
     }
@@ -1003,24 +1221,35 @@ public struct ExportProjectTool: AIAssistantTool {
         progress: @escaping @Sendable (String) -> Void
     ) async throws -> AIToolResult {
         let arguments = AIToolArguments(raw)
-        var overwrite = false
-        if arguments.has("overwrite") {
-            guard let value = arguments.bool("overwrite") else { throw AIToolError.invalidArgument("\"overwrite\" must be true or false.") }
-            overwrite = value
-        }
-        let project = try await AIToolSupport.requireProject(context)
+        let overwrite = try Self.overwriteArgument(arguments)
+        let width = try arguments.option("width", in: UpdateSettingsTool.exportWidths)
+        let frameRate = try arguments.option("frame_rate", in: UpdateSettingsTool.exportFrameRates)
+        var project = try await AIToolSupport.requireProject(context)
         let output = try Self.resolveOutputURL(path: arguments.string("path"), context: context, project: project, overwrite: overwrite)
-        progress(L10n.tr("Exporting…"))
-        let result = try await ProjectVideoRenderer.export(project: project, to: output)
-        let text = L10n.format("Exported %@ (%@ s, %lld × %lld)", output.lastPathComponent, AIToolSupport.seconds(result.duration), result.width, result.height)
-        return AIToolResult(text: text + "\n" + output.path, attachments: [output])
+        // Per-call choices shape this render only; nothing is written back.
+        if let width { project.settings.exportWidth = width }
+        if let frameRate { project.settings.frameRate = frameRate }
+        let rendering = AIToolSupport.renderProgress(context.tr("Exporting…"), context: context, progress: progress)
+        let result = try await ProjectVideoRenderer.export(project: project, to: output, progress: rendering)
+        let text = context.format("Exported %@ (%@ s, %lld × %lld)", output.lastPathComponent, AIToolSupport.seconds(result.duration), result.width, result.height)
+        let data = AIToolSupport.merged(
+            AIToolSupport.videoData(output, duration: result.duration, width: result.width, height: result.height),
+            ["project_id": AIJSONValue(project.id.uuidString), "frame_rate": AIJSONValue(result.frameRate), "includes_audio": AIJSONValue(result.includesAudio)]
+        )
+        return AIToolResult(text: text + "\n" + output.path, attachments: [output], data: data)
     }
 
-    /// Nil → a fresh `export-<timestamp>.mp4` in the assets folder. A folder
-    /// (existing directory or trailing slash) gets that default name inside it;
-    /// a file name gets an `.mp4` extension when it lacks one. With a project,
-    /// the destination must also pass ``OutputGuard``, checked before any
-    /// folder is created.
+    /// The optional "overwrite" flag of the tools that write a file.
+    static func overwriteArgument(_ arguments: AIToolArguments) throws -> Bool {
+        guard arguments.has("overwrite") else { return false }
+        guard let value = arguments.bool("overwrite") else { throw AIToolError.invalidArgument("\"overwrite\" must be true or false.") }
+        return value
+    }
+
+    /// Nil → a fresh `export-<timestamp>.mp4` in the assets folder; otherwise
+    /// see ``AIToolPaths/outputFile(path:context:prefix:fileExtension:date:outputGuard:overwrite:)``.
+    /// With a project, the destination must also pass ``OutputGuard``,
+    /// checked before any folder is created.
     public static func resolveOutputURL(
         path: String?,
         context: AIAssistantContext,
@@ -1028,60 +1257,39 @@ public struct ExportProjectTool: AIAssistantTool {
         project: RecordingProject? = nil,
         overwrite: Bool = false
     ) throws -> URL {
-        let outputGuard = project.map { OutputGuard(project: $0, context: context) }
-        guard let raw = path?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
-            let url = try context.newAssetURL(prefix: "export", fileExtension: "mp4", date: date)
-            try outputGuard?.check(url, overwrite: overwrite)
-            return url
-        }
-        guard case let .local(url) = AIToolPaths.reference(raw, context: context) else {
-            throw AIToolError.invalidArgument("\"path\" must be a local file or folder path.")
-        }
-        var isDirectory: ObjCBool = false
-        let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
-        if raw.hasSuffix("/") || (exists && isDirectory.boolValue) {
-            try outputGuard?.checkFolder(url)
-            var folderContext = context
-            folderContext.assetsDirectory = url
-            let file = try folderContext.newAssetURL(prefix: "export", fileExtension: "mp4", date: date)
-            try outputGuard?.check(file, overwrite: overwrite)
-            return file
-        }
-        let file: URL
-        if url.pathExtension.lowercased() == "mp4" {
-            file = url
-        } else if url.pathExtension.isEmpty {
-            file = url.appendingPathExtension("mp4")
-        } else {
-            file = url.deletingPathExtension().appendingPathExtension("mp4")
-        }
-        try outputGuard?.check(file, overwrite: overwrite)
-        return file
+        try AIToolPaths.outputFile(
+            path: path, context: context, prefix: "export", fileExtension: "mp4", date: date,
+            outputGuard: project.map { OutputGuard(project: $0, context: context) }, overwrite: overwrite
+        )
     }
 
-    /// Where an export may be written for `project`. Never over the recording
-    /// or any media the project uses; never inside the projects library except
-    /// the project's own `ai/` folder; never over an existing file unless the
+    /// Where a tool may write a file for `project`. Never over the recording
+    /// or any media the project uses (or any other `protecting` file, such as
+    /// the clips being joined); never inside the projects library except the
+    /// project's own `ai/` folder; never over an existing file unless the
     /// caller asked to overwrite it. Paths are compared with symlinks resolved.
+    /// Without a project only the library rule and the extra files apply.
     struct OutputGuard {
         let protectedFiles: [String]
         let libraryRoot: URL?
         let allowedFolders: [URL]
 
-        init(project: RecordingProject, context: AIAssistantContext) {
-            let source = project.sourceVideoPath
-            let projectFolder = context.projectsDirectory?.appendingPathComponent(project.id.uuidString, isDirectory: true)
-                ?? (source.hasPrefix("/") ? URL(fileURLWithPath: source).deletingLastPathComponent() : nil)
+        init(project: RecordingProject?, context: AIAssistantContext, protecting extraFiles: [URL] = []) {
+            let source = project?.sourceVideoPath ?? ""
+            let projectFolder = project.flatMap { project in
+                context.projectsDirectory?.appendingPathComponent(project.id.uuidString, isDirectory: true)
+                    ?? (source.hasPrefix("/") ? URL(fileURLWithPath: source).deletingLastPathComponent() : nil)
+            }
             func resolved(_ path: String?) -> URL? {
                 guard let path = path?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty else { return nil }
                 if path.hasPrefix("/") { return URL(fileURLWithPath: path) }
                 return projectFolder?.appendingPathComponent(path)
             }
-            let settings = project.settings
-            let audio = settings.productDemoAudio
-            protectedFiles = [source, settings.backgroundImagePath, audio?.backgroundMusicPath, audio?.clickSoundPath, audio?.zoomTransitionSoundPath]
+            let settings = project?.settings
+            let audio = settings?.productDemoAudio
+            let projectFiles = [source, settings?.backgroundImagePath, audio?.backgroundMusicPath, audio?.clickSoundPath, audio?.zoomTransitionSoundPath]
                 .compactMap(resolved)
-                .map(AIToolPaths.canonicalPath)
+            protectedFiles = (projectFiles + extraFiles).map(AIToolPaths.canonicalPath)
             libraryRoot = context.projectsDirectory
             // The canonical ai folder, and the one next to a nested legacy source
             // (the assistant's assets folder for that project).
@@ -1099,7 +1307,7 @@ public struct ExportProjectTool: AIAssistantTool {
         func check(_ url: URL, overwrite: Bool) throws {
             let destination = AIToolPaths.canonicalPath(url)
             if protectedFiles.contains(where: { $0.lowercased() == destination.lowercased() }) {
-                throw AIToolError.invalidArgument("\"path\" is \(url.lastPathComponent), a file this project uses (its recording or media); exporting there would destroy it. Choose another file name.")
+                throw AIToolError.invalidArgument("\"path\" is \(url.lastPathComponent), a file this project uses (its recording or media) or an input of this call; writing there would destroy it. Choose another file name.")
             }
             try checkLocation(destination)
             if !overwrite, FileManager.default.fileExists(atPath: url.path) {

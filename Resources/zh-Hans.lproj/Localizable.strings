@@ -538,6 +538,8 @@
 "The project could not be moved to Trash. Its files were kept." = "无法将项目移到废纸篓，文件已保留。";
 "Finish the current library operation before starting another." = "请等待当前项目库操作完成后再进行下一项操作。";
 "Return to the project library before managing projects." = "请先返回项目库，再管理项目。";
+"Focus Studio is recording. Try again after the recording is stopped." = "Focus Studio 正在录制。请在录制停止后重试。";
+"Focus Studio is busy. Try again when the current task finishes." = "Focus Studio 正忙。请在当前任务完成后重试。";
 "Project “%@” could not be renamed: %@" = "无法重命名项目“%@”：%@";
 "Moved %lld of %lld selected projects to Trash. The remaining projects were kept.\n%@" = "已将所选项目中的 %lld / %lld 个移到废纸篓，其余项目已保留。\n%@";
 "“%@”: %@" = "“%@”：%@";

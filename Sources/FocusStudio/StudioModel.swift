@@ -56,6 +56,8 @@ final class StudioModel: ObservableObject {
     @Published private(set) var recordingCountdown = 3
     @Published private(set) var isRunningCodexPlan = false
     @Published private(set) var isManagingProjects = false
+    /// The editor's Export is rendering (see ``exportFromEditor(_:to:)``).
+    @Published private(set) var isExportingFromEditor = false
     /// In-memory live thumbnails for the recording picker; released on leaving it.
     let sourcePreview = SourcePreviewProvider()
 
@@ -70,16 +72,20 @@ final class StudioModel: ObservableObject {
     /// The one assistant conversation for the whole app, created on first use.
     /// Its context follows whatever project is open; see ``AIAssistantContext``.
     private(set) lazy var assistantSession: AIAssistantSession = makeAssistantSession()
-    private let assistantAssetsLocator = AssistantAssetsLocator()
+    private let assistantAssetsLocator: AssistantAssetsLocator
     private var assistantObservers: Set<AnyCancellable> = []
     private var didCreateAssistantSession = false
     private let store: ProjectStore
     private let interactionTrackingAccess: @MainActor () -> Bool
     private let inputMonitoringAccess: @MainActor () -> Bool
+    private let screenCaptureAccess: @MainActor () -> Bool
     /// Finalizes the capture when a recording is stopped. The engine by default;
     /// regression tests substitute a scripted result to drive a stop without
     /// ScreenCaptureKit.
     private let finishCapture: @MainActor (CaptureEngine) async throws -> RecordingResult
+    /// Answers the in-app assistant instead of the brain chosen in Settings;
+    /// regression tests script the assistant's turns with it.
+    private let scriptedAssistantCompletion: (any TextCompletionProviding)?
     /// The one launch pass; every `bootstrap()` caller awaits it.
     private var bootstrapTask: Task<Void, Never>?
     /// The stop in flight, which a second Finish request joins.
@@ -103,11 +109,16 @@ final class StudioModel: ObservableObject {
         store: ProjectStore = ProjectStore(),
         interactionTrackingAccess: @escaping @MainActor () -> Bool = { AXIsProcessTrusted() },
         inputMonitoringAccess: @escaping @MainActor () -> Bool = { CGPreflightListenEventAccess() },
-        finishCapture: @escaping @MainActor (CaptureEngine) async throws -> RecordingResult = { try await $0.stopRecording() }
+        screenCaptureAccess: @escaping @MainActor () -> Bool = { CGPreflightScreenCaptureAccess() },
+        finishCapture: @escaping @MainActor (CaptureEngine) async throws -> RecordingResult = { try await $0.stopRecording() },
+        assistantCompletion: (any TextCompletionProviding)? = nil
     ) {
         self.store = store
+        scriptedAssistantCompletion = assistantCompletion
+        assistantAssetsLocator = AssistantAssetsLocator(sharedDirectory: AssistantAssetsLocator.sharedDirectory(forLibrary: store.projectsDirectory))
         self.interactionTrackingAccess = interactionTrackingAccess
         self.inputMonitoringAccess = inputMonitoringAccess
+        self.screenCaptureAccess = screenCaptureAccess
         self.finishCapture = finishCapture
         refreshInteractionTrackingPermission()
     }
@@ -195,6 +206,13 @@ final class StudioModel: ObservableObject {
         didCreateAssistantSession ? assistantSession : nil
     }
 
+    /// The in-app assistant is partway through a request. Its tools follow
+    /// whatever project is open, so automation must not switch the editor
+    /// under it.
+    var isAssistantRunning: Bool {
+        assistantSessionIfLoaded?.isRunning == true
+    }
+
     /// Builds the app-wide assistant: tools read the current project and the
     /// app through `self`, generated media lands in the open project's `ai/`
     /// folder (else the shared AI Assets folder), and the brain is resolved on
@@ -203,22 +221,7 @@ final class StudioModel: ObservableObject {
         didCreateAssistantSession = true
         assistantAssetsLocator.update(sourceVideoPath: activeProject?.sourceVideoPath)
         let locator = assistantAssetsLocator
-        let arkBase = URL(string: aiGateway.configuration(for: .volcengineArk).effectiveBaseURL)
-            ?? URL(string: "https://ark.cn-beijing.volces.com/api/v3")!
-        let context = AIAssistantContext(
-            assetsDirectoryProvider: { locator.directory },
-            uiLanguageProvider: { Self.assistantLanguage() },
-            readProject: { [weak self] in self?.activeProject },
-            updateProject: { [weak self] mutate in
-                guard let self else { throw AIToolError.noProject }
-                try self.applyAssistantEdit(mutate)
-            },
-            // The env file is a fallback so the skills' key works in-app without re-entering it.
-            arkAPIKey: { [weak self] in self?.aiGateway.apiKey(for: .volcengineArk) ?? Self.arkEnvironmentKey() },
-            arkBaseURL: arkBase,
-            projectsDirectory: store.projectsDirectory,
-            app: self
-        )
+        let context = makeToolContext(assetsDirectory: { locator.directory }, language: { Self.assistantLanguage() })
         let session = AIAssistantSession(
             context: context,
             completionResolver: { [weak self] in self?.assistantCompletion() }
@@ -240,8 +243,41 @@ final class StudioModel: ObservableObject {
         return session
     }
 
+    /// A tool context on this model, shared by the in-app assistant and
+    /// automation calls: tools read and edit the project open in the editor
+    /// through the inspector's path, reach the app through `self` and know
+    /// the library root. The assets folder and the language are the caller's:
+    /// the assistant follows the open project and the UI language, an
+    /// automation call is pinned to its project and English.
+    func makeToolContext(
+        assetsDirectory: @escaping @Sendable () -> URL,
+        language: @escaping @Sendable () -> String
+    ) -> AIAssistantContext {
+        let arkBase = URL(string: aiGateway.configuration(for: .volcengineArk).effectiveBaseURL)
+            ?? URL(string: "https://ark.cn-beijing.volces.com/api/v3")!
+        return AIAssistantContext(
+            assetsDirectoryProvider: assetsDirectory,
+            uiLanguageProvider: language,
+            readProject: { [weak self] in self?.activeProject },
+            updateProject: { [weak self] mutate in
+                guard let self else { throw AIToolError.noProject }
+                try self.applyAssistantEdit(mutate)
+            },
+            // The env file is a fallback so the skills' key works in-app without re-entering it.
+            arkAPIKey: { [weak self] in self?.aiGateway.apiKey(for: .volcengineArk) ?? Self.arkEnvironmentKey() },
+            arkBaseURL: arkBase,
+            projectsDirectory: store.projectsDirectory,
+            app: self
+        )
+    }
+
+    /// The shared AI Assets folder, next to the library: where generated
+    /// files go when no project is open.
+    var sharedAssetsDirectory: URL { assistantAssetsLocator.sharedDirectory }
+
     /// The provider for the next assistant message, per the Settings brain.
     func assistantCompletion() -> (any TextCompletionProviding)? {
+        if let scriptedAssistantCompletion { return scriptedAssistantCompletion }
         switch aiGateway.assistantBrain {
         case .gatewayModel:
             return aiGateway.defaultTextModel == nil ? nil : AIGatewayTextCompletion(store: aiGateway)
@@ -429,6 +465,19 @@ final class StudioModel: ObservableObject {
 
     var needsInputMonitoring: Bool { !CGPreflightListenEventAccess() }
     var needsAccessibility: Bool { !AXIsProcessTrusted() }
+
+    /// The privacy permissions as the preflight calls report them, which never
+    /// prompt (the assistant and external clients ask through `get_status`).
+    var permissionStatus: AIPermissionStatus {
+        AIPermissionStatus(
+            screenRecording: screenCaptureAccess(),
+            accessibility: interactionTrackingAccess(),
+            inputMonitoring: inputMonitoringAccess()
+        )
+    }
+
+    /// The projects library root.
+    var libraryDirectory: URL { store.projectsDirectory }
 
     func refreshInteractionTrackingPermission() {
         accessibilityAuthorized = interactionTrackingAccess()
@@ -727,24 +776,31 @@ final class StudioModel: ObservableObject {
         panel.allowedContentTypes = [.mpeg4Movie, .movie]
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
-
-        busy("Importing video…")
-        defer { isBusy = false }
         do {
-            let settings = ProjectSettings()
-            let project = try await store.createProject(
-                from: url,
-                title: url.deletingPathExtension().lastPathComponent,
-                cursorSamples: [],
-                clickEvents: [],
-                settings: settings
-            )
-            activeProject = project
-            projects.insert(project, at: 0)
-            destination = .editor
+            try await importVideo(from: url)
         } catch {
             show(error)
         }
+    }
+
+    /// Creates a library project from a movie file and opens it in the
+    /// editor; the open panel and automation share it. A nil title is the
+    /// file name. Throws why it could not, worded for the person using the app.
+    @discardableResult
+    func importVideo(from url: URL, title: String? = nil) async throws -> RecordingProject {
+        let title = try newProjectTitle(title, default: url.deletingPathExtension().lastPathComponent)
+        try prepareForNewProject()
+        busy("Importing video…")
+        defer { isBusy = false }
+        let project = try await store.createProject(
+            from: url,
+            title: title,
+            cursorSamples: [],
+            clickEvents: [],
+            settings: ProjectSettings()
+        )
+        present(project)
+        return project
     }
 
     func importScreenshotDemo() async {
@@ -755,17 +811,42 @@ final class StudioModel: ObservableObject {
         panel.allowedContentTypes = [.png, .jpeg]
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let imageURL = panel.url else { return }
-
-        busy("Turning the screenshot into an editable demo…")
-        defer { isBusy = false }
         do {
-            try await createScreenshotDemo(
-                from: imageURL,
-                title: "\(imageURL.deletingPathExtension().lastPathComponent) Demo"
-            )
+            try await importScreenshotDemo(from: imageURL)
         } catch {
             show(error)
         }
+    }
+
+    /// Turns a PNG or JPEG screenshot into an editable demo project and opens
+    /// it in the editor; the open panel and automation share it. A nil title
+    /// is "<file name> Demo". Throws why it could not.
+    @discardableResult
+    func importScreenshotDemo(from imageURL: URL, title: String? = nil) async throws -> RecordingProject {
+        let title = try newProjectTitle(title, default: "\(imageURL.deletingPathExtension().lastPathComponent) Demo")
+        try prepareForNewProject()
+        busy("Turning the screenshot into an editable demo…")
+        defer { isBusy = false }
+        return try await createScreenshotDemo(from: imageURL, title: title)
+    }
+
+    /// A caller's title, checked like a rename; nil takes `defaultTitle`
+    /// (a file name, used as it is).
+    private func newProjectTitle(_ title: String?, default defaultTitle: String) throws -> String {
+        guard let title else { return defaultTitle }
+        do {
+            return try ProjectStore.validatedProjectName(title)
+        } catch {
+            throw AILocalizedFailure(error.localizedDescription)
+        }
+    }
+
+    /// Refuses a new project while a recording, a library operation or
+    /// another task is under way, then saves and closes the editor so the new
+    /// project can open.
+    private func prepareForNewProject() throws {
+        if let blocker = automationBlocker { throw blocker.failure }
+        if destination == .editor { closeEditor() }
     }
 
     /// Runs a validated, user-approved Director plan. The runner can only open
@@ -945,12 +1026,13 @@ final class StudioModel: ObservableObject {
         return FileManager.default.fileExists(atPath: url.path) ? url.path : nil
     }
 
+    @discardableResult
     private func createScreenshotDemo(
         from imageURL: URL,
         title: String,
         clickEvents: [ClickEvent] = [],
         duration: Double = 12
-    ) async throws {
+    ) async throws -> RecordingProject {
         let safeDuration = duration.clamped(to: 6...30)
         let outputURL = try await store.temporaryRecordingURL()
         _ = try await StillImageVideoBuilder.build(
@@ -980,6 +1062,7 @@ final class StudioModel: ObservableObject {
         )
         try await store.save(project)
         present(project)
+        return project
     }
 
     private func screenshotURL(for capture: CodexCaptureDirective) throws -> URL {
@@ -1330,6 +1413,16 @@ final class StudioModel: ObservableObject {
         await projectSaveTask?.value
     }
 
+    /// Renders the editor's project for its Export button. The editor shows
+    /// its overlay meanwhile, and automation leaves the editor alone until
+    /// the export ends (see ``automationBlocker``).
+    @discardableResult
+    func exportFromEditor(_ project: RecordingProject, to url: URL) async throws -> VideoExportResult {
+        isExportingFromEditor = true
+        defer { isExportingFromEditor = false }
+        return try await ProjectVideoRenderer.export(project: project, to: url)
+    }
+
     func closeEditor() {
         if let project = activeProject {
             updateActiveProject(project)
@@ -1344,82 +1437,116 @@ final class StudioModel: ObservableObject {
 
     @discardableResult
     func renameProject(id: UUID, to proposedTitle: String) async -> Bool {
-        guard beginManagingProjects() else { return false }
-        defer { isManagingProjects = false }
-        guard let initial = projects.first(where: { $0.id == id }) else {
-            showProjectManagementMessage(L10n.tr("The project is no longer available. Refresh the library and try again."))
+        do {
+            try await renameProjectInLibrary(id: id, to: proposedTitle)
+            return true
+        } catch {
+            showProjectManagementMessage(error.localizedDescription)
             return false
         }
+    }
+
+    /// Renames a library project (its metadata title only) from the library
+    /// and returns it as saved. Throws why it could not, as an
+    /// ``AILocalizedFailure``, and shows nothing: the rename sheet and
+    /// automation each report a failure their own way.
+    @discardableResult
+    func renameProjectInLibrary(id: UUID, to proposedTitle: String) async throws -> RecordingProject {
+        if let refusal = projectManagementRefusal() { throw refusal }
+        isManagingProjects = true
+        defer { isManagingProjects = false }
+        guard let initial = projects.first(where: { $0.id == id }) else {
+            throw AILocalizedFailure("The project is no longer available. Refresh the library and try again.")
+        }
+        func failure(_ error: Error) -> AILocalizedFailure {
+            AILocalizedFailure("Project “%@” could not be renamed: %@", .verbatim(initial.title), .text(error.localizedDescription))
+        }
+        let title: String
+        do { title = try ProjectStore.validatedProjectName(proposedTitle) } catch { throw failure(error) }
+        await flushProjectEdits()
+        guard destination == .library else {
+            throw AILocalizedFailure("Return to the project library before managing projects.")
+        }
         do {
-            let title = try ProjectStore.validatedProjectName(proposedTitle)
-            await flushProjectEdits()
-            guard destination == .library else {
-                showProjectManagementMessage(L10n.tr("Return to the project library before managing projects."))
-                return false
-            }
             let renamed = try await store.renameProject(id: id, to: title)
             if let index = projects.firstIndex(where: { $0.id == id }) {
                 projects[index] = renamed
             }
-            return true
+            return renamed
         } catch {
-            showProjectManagementMessage(L10n.format("Project “%@” could not be renamed: %@", initial.title, L10n.tr(error.localizedDescription)))
-            return false
+            throw failure(error)
         }
     }
 
     @discardableResult
     func deleteProjects(ids: Set<UUID>) async -> Set<UUID> {
         guard !ids.isEmpty else { return [] }
-        guard beginManagingProjects() else { return [] }
+        let outcome = await moveProjectsToTrash(ids: ids)
+        if let refusal = outcome.refusal {
+            showProjectManagementMessage(refusal.localizedDescription)
+        } else if !outcome.failures.isEmpty {
+            showProjectManagementMessage(L10n.format(
+                "Moved %lld of %lld selected projects to Trash. The remaining projects were kept.\n%@",
+                outcome.deleted.count, ids.count, outcome.failures.map(\.localizedDescription).joined(separator: "\n")
+            ))
+        }
+        return outcome.deleted
+    }
+
+    /// What a Move to Trash did: the projects moved, and why the others stayed.
+    struct TrashOutcome {
+        var deleted: Set<UUID> = []
+        /// Why nothing was attempted (another library operation, not in the library).
+        var refusal: AILocalizedFailure?
+        /// One reason per project, or group of projects, that stayed.
+        var failures: [AILocalizedFailure] = []
+    }
+
+    /// Moves library projects' folders to the Trash, never deleting them
+    /// permanently, and reports the outcome without showing anything: the
+    /// library and automation each report failures their own way.
+    func moveProjectsToTrash(ids: Set<UUID>) async -> TrashOutcome {
+        guard !ids.isEmpty else { return TrashOutcome() }
+        if let refusal = projectManagementRefusal() { return TrashOutcome(refusal: refusal) }
+        isManagingProjects = true
         defer { isManagingProjects = false }
         // Resolve exactly the IDs visible in this library. Never infer a target
         // from a stale card's video path or arbitrary filesystem path.
         let targets = projects.filter { ids.contains($0.id) }
-        var failures: [String] = []
+        var outcome = TrashOutcome()
         let missingCount = ids.subtracting(Set(targets.map(\.id))).count
         if missingCount > 0 {
-            failures.append(L10n.format("%lld selected projects are no longer in the library.", missingCount))
+            outcome.failures.append(AILocalizedFailure("%lld selected projects are no longer in the library.", .count(missingCount)))
         }
         await flushProjectEdits()
         guard destination == .library else {
-            showProjectManagementMessage(L10n.tr("Return to the project library before managing projects."))
-            return []
+            return TrashOutcome(refusal: AILocalizedFailure("Return to the project library before managing projects."))
         }
-        var deleted: Set<UUID> = []
         for project in targets {
             guard destination == .library else {
-                failures.append(L10n.tr("Return to the project library before managing projects."))
+                outcome.failures.append(AILocalizedFailure("Return to the project library before managing projects."))
                 break
             }
             do {
                 try await store.deleteProject(id: project.id)
-                deleted.insert(project.id)
+                outcome.deleted.insert(project.id)
                 projects.removeAll { $0.id == project.id }
             } catch {
-                failures.append(L10n.format("“%@”: %@", project.title, L10n.tr(error.localizedDescription)))
+                outcome.failures.append(AILocalizedFailure("“%@”: %@", .verbatim(project.title), .text(error.localizedDescription)))
             }
         }
-        if !failures.isEmpty {
-            showProjectManagementMessage(L10n.format(
-                "Moved %lld of %lld selected projects to Trash. The remaining projects were kept.\n%@",
-                deleted.count, ids.count, failures.joined(separator: "\n")
-            ))
-        }
-        return deleted
+        return outcome
     }
 
-    private func beginManagingProjects() -> Bool {
-        guard !isManagingProjects else {
-            showProjectManagementMessage(L10n.tr("Finish the current library operation before starting another."))
-            return false
+    /// Why a library action (rename, delete) cannot start now, or nil.
+    private func projectManagementRefusal() -> AILocalizedFailure? {
+        if isManagingProjects {
+            return AILocalizedFailure("Finish the current library operation before starting another.")
         }
         guard destination == .library, !isBusy, !isRunningCodexPlan, !captureEngine.isRecording else {
-            showProjectManagementMessage(L10n.tr("Return to the project library before managing projects."))
-            return false
+            return AILocalizedFailure("Return to the project library before managing projects.")
         }
-        isManagingProjects = true
-        return true
+        return nil
     }
 
     private func showProjectManagementMessage(_ message: String) {

@@ -19,7 +19,53 @@ enum AssistantControlRegression {
         try await concurrentBootstrapWaitsForLibrary()
         try await secondStopJoinsTheFirst()
         try permissionFailureIsReported()
-        print("AssistantControlRegression: PASS (dropped assistant edits throw, export library guard wiring, concurrent bootstrap, joined stops with one finalization, permission failure reporting)")
+        try await automationReadsStayPut()
+        print("AssistantControlRegression: PASS (dropped assistant edits throw, export library guard wiring, concurrent bootstrap, joined stops with one finalization, permission failure reporting, get_project/get_status read the model without navigating)")
+    }
+
+    /// get_project and get_status read StudioModel through AppControlling: the
+    /// editor's copy of the open project, the library's copy of any other,
+    /// never a navigation, and permissions from the non-prompting probes.
+    private static func automationReadsStayPut() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let model = StudioModel(store: fixture.store, interactionTrackingAccess: { true }, inputMonitoringAccess: { false }, screenCaptureAccess: { false })
+        var first = RecordingProject(title: "Open one", sourceVideoPath: "raw.mp4", duration: 10, sourceWidth: 1280, sourceHeight: 720)
+        first.clickEvents = [ClickEvent(time: 2, x: 0.25, y: 0.5, button: .left)]
+        let second = RecordingProject(title: "Library one", sourceVideoPath: "raw.mp4", duration: 6, sourceWidth: 640, sourceHeight: 360)
+        for project in [first, second] { try await fixture.store.save(project) }
+        model.projects = [first, second]
+        model.open(first)
+        var edited = first
+        edited.title = "Edited in the editor"
+        try expect(model.updateActiveProject(edited), "The editor must take the edit")
+        let context = model.assistantSession.context
+
+        let other = try await GetProjectTool().run(arguments: ["project_id": second.id.uuidString], context: context, progress: { _ in })
+        try expect(model.destination == .editor && model.activeProject?.id == first.id, "get_project must not open another project")
+        try expect(other.data?["title"] == "Library one" && other.data?["open_in_editor"] == false && other.data?["duration"] == 6,
+                   "A closed project is read from the library, got \(other.data.map { "\($0)" } ?? "nil")")
+        let expectedAssets = fixture.store.projectsDirectory.appendingPathComponent("\(second.id.uuidString)/ai").path
+        try expect(other.data?["assets_dir"]?.stringValue == expectedAssets, "A relative recording's assets folder is inside its library folder, got \(other.data?["assets_dir"]?.stringValue ?? "nil")")
+        let open = try await GetProjectTool().run(arguments: ["project_id": first.id.uuidString], context: context, progress: { _ in })
+        try expect(open.data?["title"] == "Edited in the editor" && open.data?["open_in_editor"] == true && open.data?["clicks"]?["count"] == 1,
+                   "The open project is read from the editor")
+        try expect(model.project(id: UUID()) == nil && model.project(id: second.id)?.title == "Library one", "Unknown ids read as nil")
+
+        let status = try await GetStatusTool().run(arguments: [:], context: context, progress: { _ in })
+        try expect(status.data?["library_count"] == 2 && status.data?["open_project_id"]?.stringValue == first.id.uuidString && status.data?["recording"]?["state"] == "idle",
+                   "get_status reads the model, got \(status.data.map { "\($0)" } ?? "nil")")
+        try expect(status.data?["permissions"] == ["screen_recording": false, "accessibility": true, "input_monitoring": false],
+                   "Permissions come from the injected probes, got \(status.data?["permissions"].map { "\($0)" } ?? "nil")")
+        try expect(model.permissionStatus == AIPermissionStatus(screenRecording: false, accessibility: true, inputMonitoring: false) && model.recordingElapsed == nil,
+                   "Nothing is recording")
+        try expect(model.libraryDirectory == fixture.store.projectsDirectory && model.destination == .editor, "The library root is the store's; reads never navigate")
+
+        model.closeEditor()
+        await model.flushProjectEdits()
+        let closed = try await GetProjectTool().run(arguments: ["project_id": first.id.uuidString], context: context, progress: { _ in })
+        try expect(closed.data?["title"] == "Edited in the editor" && closed.data?["open_in_editor"] == false && model.destination == .library,
+                   "After closing, the saved edit is read from the library without reopening it")
     }
 
     private static func droppedEditsThrow() async throws {

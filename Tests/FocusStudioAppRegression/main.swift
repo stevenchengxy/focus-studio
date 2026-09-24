@@ -126,6 +126,7 @@ struct AppRegression {
         await model.flushProjectEdits()
         try await ProjectLibraryRegression.run()
         try await AssistantControlRegression.run()
-        print("FocusStudioAppRegression: PASS (interaction preflight, 50 open/edit/back cycles, stale binding reads/writes, autosave, zoom timing edit/save/reload/regeneration, assistant control)")
+        try await AutomationBridgeRegression.run()
+        print("FocusStudioAppRegression: PASS (interaction preflight, 50 open/edit/back cycles, stale binding reads/writes, autosave, zoom timing edit/save/reload/regeneration, assistant control, automation bridge)")
     }
 }

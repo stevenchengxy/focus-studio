@@ -443,12 +443,19 @@ struct ArkMediaClient: Sendable {
     /// Encodes a local image as `data:image/jpeg;base64,…`, downscaled to
     /// `maxSide` pixels and kept under `maxBytes` (Ark rejects very large inline images).
     static func imageDataURL(for fileURL: URL, maxSide: Int = 2_048, maxBytes: Int = 4 * 1_024 * 1_024) throws -> String {
+        "data:image/jpeg;base64," + (try jpegThumbnail(for: fileURL, maxSide: maxSide, maxEncodedBytes: maxBytes)).base64EncodedString()
+    }
+
+    /// A local image as JPEG, downscaled to `maxSide` pixels (never enlarged)
+    /// and re-encoded with less quality, then smaller, until its base64 form
+    /// fits `maxEncodedBytes` (a floor of quality 0.4 at 512 pixels wins).
+    static func jpegThumbnail(for fileURL: URL, maxSide: Int, maxEncodedBytes: Int, quality initialQuality: Double = 0.92) throws -> Data {
         guard FileManager.default.fileExists(atPath: fileURL.path) else { throw ArkMediaError.fileNotFound(fileURL.path) }
         guard let source = CGImageSourceCreateWithURL(fileURL as CFURL, nil), CGImageSourceGetCount(source) > 0 else {
             throw ArkMediaError.unreadableImage(fileURL.path)
         }
         var side = maxSide
-        var quality = 0.92
+        var quality = initialQuality
         while true {
             let options: [CFString: Any] = [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -459,8 +466,9 @@ struct ArkMediaClient: Sendable {
                 throw ArkMediaError.unreadableImage(fileURL.path)
             }
             let data = try jpegData(image, quality: quality)
-            if data.count * 4 / 3 <= maxBytes || (quality <= 0.4 && side <= 512) {
-                return "data:image/jpeg;base64," + data.base64EncodedString()
+            // Base64 writes 4 characters for every 3 bytes, rounding up.
+            if (data.count + 2) / 3 * 4 <= maxEncodedBytes || (quality <= 0.4 && side <= 512) {
+                return data
             }
             if quality > 0.4 {
                 quality -= 0.1

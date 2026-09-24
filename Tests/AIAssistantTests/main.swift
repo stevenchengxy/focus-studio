@@ -36,9 +36,25 @@ struct AIAssistantTests {
         step("export paths"); try exportPaths(root: root)
         step("export guard"); try await exportGuard(root: root)
         step("assemble_video"); try await assembleVideo(root: root)
+        step("automation: JSON values"); try jsonValues()
+        step("automation: result language"); try await resultLanguage(root: root)
+        step("automation: working-directory paths"); try await workingDirectoryPaths(root: root)
+        step("automation: structured results, pinned project"); try await structuredResults(root: root)
+        step("automation: remove_zoom by id"); try await removeZoomByID(root: root)
+        step("automation: list_projects paging and search"); try await listProjectsPaging(root: root)
+        step("automation: get_project"); try await getProject(root: root)
+        step("automation: get_status"); try await getStatus(root: root)
+        step("automation: export width/frame rate, progress, cancellation"); try await exportOptions(root: root)
+        step("automation: assemble_video output"); try await assembleOutput(root: root)
+        step("MCP: tool catalog"); try mcpCatalog()
+        step("MCP: result shape, inline images"); try mcpResults(root: root)
+        step("MCP: long calls as jobs"); try await automationJobs()
+        step("MCP: one navigating call at a time"); try await callQueue()
+        step("MCP: library tools"); try await libraryTools(root: root)
+        step("MCP: assemble_video pinned to a project"); try await assemblePinned(root: root)
         step("Ark request bodies"); try arkRequestBodies()
         step("Ark fixture round trip"); try await arkFixtureRoundTrip(root: root)
-        print("AIAssistantTests: PASS (protocol parsing, scripted agent loop, confirmation gate, stop, model resolver, update_settings incl. export width/frame rate, set_chapters, dropped writes, interleaved edits, app control (sources/start/stop/library, permission errors, main display, joined stops), zoom tools, audio tools, export paths, export guard, assemble_video, Ark request bodies, Ark fixture round trip incl. tools)")
+        print("AIAssistantTests: PASS (protocol parsing, scripted agent loop, confirmation gate, stop, model resolver, update_settings incl. export width/frame rate, set_chapters, dropped writes, interleaved edits, app control (sources/start/stop/library, permission errors, main display, joined stops), zoom tools, audio tools, export paths, export guard, assemble_video, automation API (JSON values, structured results, result language, working-directory paths, pinned projects, remove_zoom by id, list_projects paging and search, get_project, get_status, per-export width/frame rate with progress and cancellation, assemble_video output), MCP layer (exact v1 catalog with project_id schemas, annotations and instructions, result shape with inline JPEG, jobs with detach/wait_for_job/progress/cancellation/retention, the one-at-a-time call queue, import/screenshot/rename/delete tools, pinned assembly), Ark request bodies, Ark fixture round trip incl. tools)")
     }
 
     // MARK: - Helpers
@@ -631,6 +647,10 @@ struct AIAssistantTests {
         var openID: UUID?
         var closeCount = 0
         var tracks: [AIMusicTrack] = []
+        /// Seconds recorded so far, reported while `.recording`.
+        var elapsed: TimeInterval = 0
+        var permissions = AIPermissionStatus(screenRecording: true, accessibility: true, inputMonitoring: true)
+        var library = FileManager.default.temporaryDirectory.appendingPathComponent("FakeAppLibrary", isDirectory: true)
 
         init(box: ProjectBox) { self.box = box }
 
@@ -642,7 +662,11 @@ struct AIAssistantTests {
             return sources
         }
 
+        /// Thrown by the next start, like StudioModel's own refusals.
+        var startFailure: Error?
+
         func startRecording(sourceID: String, options: AIRecordingOptions) throws {
+            if let startFailure { self.startFailure = nil; throw startFailure }
             guard recordingPhase == .idle else { throw AIToolError.failed("A recording is already in progress.") }
             guard sources.contains(where: { $0.id == sourceID }) else { throw AIToolError.invalidArgument("Unknown source \(sourceID).") }
             startedSourceIDs.append(sourceID)
@@ -711,8 +735,18 @@ struct AIAssistantTests {
             }
         }
 
+        var recordingElapsed: TimeInterval? { recordingPhase == .recording ? elapsed : nil }
         var projectSummaries: [AIProjectSummary] { projects.map(AIProjectSummary.init) }
         var openProjectID: UUID? { openID }
+
+        /// Like StudioModel: the editor's copy of the open project, else the library's.
+        func project(id: UUID) -> RecordingProject? {
+            if openID == id, let current = box.project, current.id == id { return current }
+            return projects.first { $0.id == id }
+        }
+
+        var libraryDirectory: URL { library }
+        var permissionStatus: AIPermissionStatus { permissions }
 
         func openProject(id: UUID) throws {
             guard let project = projects.first(where: { $0.id == id }) else { throw AIToolError.invalidArgument("No project \(id).") }
@@ -727,6 +761,55 @@ struct AIAssistantTests {
         }
 
         var bundledMusicTracks: [AIMusicTrack] { tracks }
+
+        /// Thrown by the next library action, like StudioModel's own reasons.
+        var libraryFailure: AILocalizedFailure?
+        /// Files imported, in order.
+        var imported: [URL] = []
+        /// Projects moved to the Trash, in order.
+        var trashed: [UUID] = []
+
+        /// Like StudioModel: the editor is saved and closed, then the new project opens.
+        func importVideo(from url: URL, title: String?) async throws -> RecordingProject {
+            try newProject(from: url, title: title ?? url.deletingPathExtension().lastPathComponent, duration: 8)
+        }
+
+        func importScreenshotDemo(from url: URL, title: String?) async throws -> RecordingProject {
+            try newProject(from: url, title: title ?? "\(url.deletingPathExtension().lastPathComponent) Demo", duration: 12)
+        }
+
+        private func newProject(from url: URL, title: String, duration: Double) throws -> RecordingProject {
+            if let failure = libraryFailure { libraryFailure = nil; throw failure }
+            if openID != nil { closeEditor() }
+            var project = makeProject(sourceVideoPath: library.appendingPathComponent("\(UUID().uuidString)/raw.mp4").path, duration: duration)
+            project.title = title
+            projects.insert(project, at: 0)
+            imported.append(url)
+            try openProject(id: project.id)
+            return project
+        }
+
+        /// Like StudioModel: back to the library first, then the title only.
+        func renameLibraryProject(id: UUID, to title: String) async throws -> RecordingProject {
+            guard let index = projects.firstIndex(where: { $0.id == id }) else { throw AIToolError.invalidArgument("No project \(id).") }
+            if openID != nil { closeEditor() }
+            if let failure = libraryFailure { libraryFailure = nil; throw failure }
+            let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                throw AILocalizedFailure("Project “%@” could not be renamed: %@", .verbatim(projects[index].title), .text("Please enter a project name."))
+            }
+            projects[index].title = trimmed
+            return projects[index]
+        }
+
+        func trashLibraryProject(id: UUID) async throws -> RecordingProject {
+            guard let project = project(id: id) else { throw AIToolError.invalidArgument("No project \(id).") }
+            if openID != nil { closeEditor() }
+            if let failure = libraryFailure { libraryFailure = nil; throw failure }
+            projects.removeAll { $0.id == id }
+            trashed.append(id)
+            return project
+        }
     }
 
     @MainActor
@@ -1598,24 +1681,8 @@ enum SolidClipWriter {
         let format = audio ? try audioFormat(sampleRate: sampleRate) : nil
         let totalSamples = Int(duration * Double(sampleRate))
         var sampleOffset = 0
-        func appendAudio(until limit: Int) async throws {
-            guard let format else { return }
-            while sampleOffset < limit {
-                while !audioInput.isReadyForMoreMediaData {
-                    guard writer.status == .writing else { throw writer.error ?? NSError(domain: "SolidClipWriter", code: 7) }
-                    try await Task.sleep(nanoseconds: 1_000_000)
-                }
-                let count = min(1_024, limit - sampleOffset)
-                let sample = try toneBuffer(offset: sampleOffset, count: count, sampleRate: sampleRate, format: format)
-                guard audioInput.append(sample) else { throw writer.error ?? NSError(domain: "SolidClipWriter", code: 5) }
-                sampleOffset += count
-            }
-        }
-        for frameIndex in 0..<frameCount {
-            while !videoInput.isReadyForMoreMediaData {
-                guard writer.status == .writing else { throw writer.error ?? NSError(domain: "SolidClipWriter", code: 7) }
-                try await Task.sleep(nanoseconds: 1_000_000)
-            }
+        var frameIndex = 0
+        func appendFrame() throws {
             guard let pool = adaptor.pixelBufferPool else { throw NSError(domain: "SolidClipWriter", code: 2) }
             var maybeBuffer: CVPixelBuffer?
             CVPixelBufferPoolCreatePixelBuffer(nil, pool, &maybeBuffer)
@@ -1631,13 +1698,45 @@ enum SolidClipWriter {
             guard adaptor.append(buffer, withPresentationTime: CMTime(value: CMTimeValue(frameIndex), timescale: CMTimeScale(frameRate))) else {
                 throw writer.error ?? NSError(domain: "SolidClipWriter", code: 4)
             }
-            // Feed audio chronologically: offline inputs back-pressure each other.
-            try await appendAudio(until: min(totalSamples, Int(Double(frameIndex + 1) / Double(frameRate) * Double(sampleRate))))
+            frameIndex += 1
         }
-        videoInput.markAsFinished()
-        if audio {
-            try await appendAudio(until: totalSamples)
-            audioInput.markAsFinished()
+        func appendAudio(_ format: CMAudioFormatDescription) throws {
+            let count = min(1_024, totalSamples - sampleOffset)
+            let sample = try toneBuffer(offset: sampleOffset, count: count, sampleRate: sampleRate, format: format)
+            guard audioInput.append(sample) else { throw writer.error ?? NSError(domain: "SolidClipWriter", code: 5) }
+            sampleOffset += count
+        }
+        // Offline inputs back-pressure each other, and the encoders hold
+        // samples back: waiting on one input while the writer waits for the
+        // other deadlocks. Feed whichever input is ready and finish each
+        // input as soon as its samples are in.
+        // A writer that stops asking for samples fails the test instead of hanging it.
+        var videoDone = false
+        var audioDone = format == nil
+        var lastProgress = ProcessInfo.processInfo.systemUptime
+        while !videoDone || !audioDone {
+            var progressed = false
+            if !videoDone, videoInput.isReadyForMoreMediaData {
+                if frameIndex < frameCount { try appendFrame() }
+                if frameIndex >= frameCount { videoInput.markAsFinished(); videoDone = true }
+                progressed = true
+            }
+            if !audioDone, let format, audioInput.isReadyForMoreMediaData {
+                if sampleOffset < totalSamples { try appendAudio(format) }
+                if sampleOffset >= totalSamples { audioInput.markAsFinished(); audioDone = true }
+                progressed = true
+            }
+            if progressed {
+                lastProgress = ProcessInfo.processInfo.systemUptime
+                continue
+            }
+            guard writer.status == .writing else { throw writer.error ?? NSError(domain: "SolidClipWriter", code: 7) }
+            guard ProcessInfo.processInfo.systemUptime < lastProgress + 15 else {
+                writer.cancelWriting()
+                throw NSError(domain: "SolidClipWriter", code: 8, userInfo: [NSLocalizedDescriptionKey:
+                    "FAIL: SolidClipWriter made no progress for 15 s (video \(frameIndex)/\(frameCount), audio \(sampleOffset)/\(totalSamples)) writing \(url.lastPathComponent)"])
+            }
+            try await Task.sleep(nanoseconds: 1_000_000)
         }
         writer.endSession(atSourceTime: CMTime(seconds: duration, preferredTimescale: 600))
         await withCheckedContinuation { continuation in writer.finishWriting { continuation.resume() } }

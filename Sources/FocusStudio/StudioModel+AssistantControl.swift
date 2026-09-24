@@ -9,11 +9,18 @@ import Foundation
 final class AssistantAssetsLocator: @unchecked Sendable {
     private let lock = NSLock()
     private var projectFolder: URL?
+    /// Used when no project is open.
+    let sharedDirectory: URL
 
-    /// `~/Library/Application Support/FocusStudio/AI Assets`, used when no project is open.
-    static let sharedDirectory: URL = FileManager.default
-        .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("FocusStudio/AI Assets", isDirectory: true)
+    init(sharedDirectory: URL) {
+        self.sharedDirectory = sharedDirectory
+    }
+
+    /// `AI Assets` next to the library: `~/Library/Application Support/FocusStudio/AI Assets`
+    /// for the real library, and inside the temporary folder of a test library.
+    static func sharedDirectory(forLibrary library: URL) -> URL {
+        library.standardizedFileURL.deletingLastPathComponent().appendingPathComponent("AI Assets", isDirectory: true)
+    }
 
     /// Loaded projects carry an absolute raw.mp4 path inside their own folder.
     func update(sourceVideoPath: String?) {
@@ -30,7 +37,7 @@ final class AssistantAssetsLocator: @unchecked Sendable {
     var directory: URL {
         lock.lock()
         defer { lock.unlock() }
-        return projectFolder?.appendingPathComponent("ai", isDirectory: true) ?? Self.sharedDirectory
+        return projectFolder?.appendingPathComponent("ai", isDirectory: true) ?? sharedDirectory
     }
 }
 
@@ -44,7 +51,7 @@ extension StudioModel: AppControlling {
             return try await captureEngine.refreshAvailableTargets().map(AIRecordingSource.init)
         }
         guard !isManagingProjects else {
-            throw AIToolError.failed(L10n.tr("Finish the current library operation before starting another."))
+            throw AILocalizedFailure("Finish the current library operation before starting another.")
         }
         if destination == .editor { closeEditor() }
         if destination == .recorder {
@@ -63,7 +70,8 @@ extension StudioModel: AppControlling {
             let wasShowingError = isShowingError
             await showRecorder()
             if capturePermissionDenied {
-                throw AIToolError.failed(captureFailureDetails ?? L10n.tr("Screen Recording permission is required."))
+                if let captureFailureDetails { throw AIToolError.failed(captureFailureDetails) }
+                throw AILocalizedFailure("Screen Recording permission is required.")
             }
             if isShowingError, !wasShowingError, captureEngine.availableTargets.isEmpty {
                 throw AIToolError.failed(errorMessage)
@@ -111,7 +119,7 @@ extension StudioModel: AppControlling {
             throw AIToolError.failed("A recording is already in progress.")
         }
         guard !isManagingProjects, !isRunningCodexPlan else {
-            throw AIToolError.failed(L10n.tr("Finish the current library operation before starting another."))
+            throw AILocalizedFailure("Finish the current library operation before starting another.")
         }
         guard let target = captureEngine.availableTargets.first(where: { $0.id == sourceID }) else {
             throw AIToolError.invalidArgument("Source \(sourceID) is no longer available; call list_recording_sources again.")
@@ -147,7 +155,7 @@ extension StudioModel: AppControlling {
     func applyAssistantEdit(_ mutate: (inout RecordingProject) throws -> Void) throws {
         guard destination == .editor, var project = activeProject else { throw AIToolError.noProject }
         guard !isManagingProjects else {
-            throw AIToolError.failed(L10n.tr("Finish the current library operation before starting another."))
+            throw AILocalizedFailure("Finish the current library operation before starting another.")
         }
         try mutate(&project)
         guard updateActiveProject(project) else {
@@ -155,8 +163,20 @@ extension StudioModel: AppControlling {
         }
     }
 
+    var recordingElapsed: TimeInterval? {
+        guard captureEngine.isRecording, let start = captureEngine.recordingStartUptime else { return nil }
+        return max(0, ProcessInfo.processInfo.systemUptime - start)
+    }
+
     var projectSummaries: [AIProjectSummary] {
         projects.map(AIProjectSummary.init)
+    }
+
+    /// The editor holds the newest edits of the open project; every other
+    /// project is as the library last loaded or saved it.
+    func project(id: UUID) -> RecordingProject? {
+        if destination == .editor, let active = activeProject, active.id == id { return active }
+        return projects.first { $0.id == id }
     }
 
     var openProjectID: UUID? {
@@ -171,7 +191,7 @@ extension StudioModel: AppControlling {
             throw AIToolError.failed("Stop the current recording before opening a project.")
         }
         guard !isManagingProjects, !isRunningCodexPlan, !isBusy else {
-            throw AIToolError.failed(L10n.tr("Finish the current library operation before starting another."))
+            throw AILocalizedFailure("Finish the current library operation before starting another.")
         }
         if destination == .editor {
             if activeProject?.id == id { return }
@@ -185,5 +205,29 @@ extension StudioModel: AppControlling {
             guard let path = bundledAudioPath(for: asset) else { return nil }
             return AIMusicTrack(asset: asset, path: path)
         }
+    }
+
+    // importVideo(from:title:) and importScreenshotDemo(from:title:) are the
+    // Import video and Animate screenshot actions themselves (StudioModel.swift).
+
+    func renameLibraryProject(id: UUID, to title: String) async throws -> RecordingProject {
+        guard projects.contains(where: { $0.id == id }) else {
+            throw AIToolError.invalidArgument("No project has the id \(id.uuidString).")
+        }
+        try showLibraryForProjectManagement()
+        return try await renameProjectInLibrary(id: id, to: title)
+    }
+
+    func trashLibraryProject(id: UUID) async throws -> RecordingProject {
+        guard let project = project(id: id) else {
+            throw AIToolError.invalidArgument("No project has the id \(id.uuidString).")
+        }
+        try showLibraryForProjectManagement()
+        let outcome = await moveProjectsToTrash(ids: [id])
+        if let refusal = outcome.refusal { throw refusal }
+        guard outcome.deleted.contains(id) else {
+            throw outcome.failures.first ?? AILocalizedFailure("The project could not be moved to Trash. Its files were kept.")
+        }
+        return project
     }
 }

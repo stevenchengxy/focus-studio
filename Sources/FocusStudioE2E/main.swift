@@ -2138,25 +2138,8 @@ private enum SyntheticGridVideoWriter {
             : nil
         let totalSamples = Int(specification.duration * Double(specification.audioSampleRate))
         var sampleOffset = 0
-        func appendAudio(until sampleLimit: Int) async throws {
-            guard let formatDescription else { return }
-            while sampleOffset < sampleLimit {
-                try await waitUntilReady(audioInput, writer: writer)
-                let count = min(1_024, sampleLimit - sampleOffset)
-                let sampleBuffer = try makeToneSampleBuffer(
-                    offset: sampleOffset,
-                    count: count,
-                    sampleRate: specification.audioSampleRate,
-                    formatDescription: formatDescription
-                )
-                guard audioInput.append(sampleBuffer) else {
-                    throw E2EError.writerFailed(writer.error?.localizedDescription ?? "audio append failed")
-                }
-                sampleOffset += count
-            }
-        }
-        for frameIndex in 0..<frameCount {
-            try await waitUntilReady(videoInput, writer: writer)
+        var frameIndex = 0
+        func appendFrame() throws {
             guard let pool = adaptor.pixelBufferPool else {
                 throw E2EError.pixelBufferPoolUnavailable
             }
@@ -2179,17 +2162,58 @@ private enum SyntheticGridVideoWriter {
             guard adaptor.append(pixelBuffer, withPresentationTime: presentationTime) else {
                 throw E2EError.writerFailed(writer.error?.localizedDescription ?? "video append failed")
             }
-            // AVAssetWriter's offline inputs can backpressure each other. Feed
-            // both tracks chronologically instead of waiting to finish every
-            // video frame before submitting the first audio sample.
-            let audioLimit = min(totalSamples, Int(Double(frameIndex + 1) / Double(specification.frameRate) * Double(specification.audioSampleRate)))
-            try await appendAudio(until: audioLimit)
+            frameIndex += 1
         }
-        videoInput.markAsFinished()
-
-        if specification.includesAudio {
-            try await appendAudio(until: totalSamples)
-            audioInput.markAsFinished()
+        func appendAudio(_ formatDescription: CMAudioFormatDescription) throws {
+            let count = min(1_024, totalSamples - sampleOffset)
+            let sampleBuffer = try makeToneSampleBuffer(
+                offset: sampleOffset,
+                count: count,
+                sampleRate: specification.audioSampleRate,
+                formatDescription: formatDescription
+            )
+            guard audioInput.append(sampleBuffer) else {
+                throw E2EError.writerFailed(writer.error?.localizedDescription ?? "audio append failed")
+            }
+            sampleOffset += count
+        }
+        // AVAssetWriter's offline inputs backpressure each other, and the
+        // encoders hold samples back, so waiting on one input while the writer
+        // waits for the other can deadlock. Feed whichever input is ready and
+        // finish each input as soon as all of its samples are in.
+        var videoDone = false
+        var audioDone = formatDescription == nil
+        var lastProgress = ProcessInfo.processInfo.systemUptime
+        while !videoDone || !audioDone {
+            var progressed = false
+            if !videoDone, videoInput.isReadyForMoreMediaData {
+                if frameIndex < frameCount { try appendFrame() }
+                if frameIndex >= frameCount {
+                    videoInput.markAsFinished()
+                    videoDone = true
+                }
+                progressed = true
+            }
+            if !audioDone, let formatDescription, audioInput.isReadyForMoreMediaData {
+                if sampleOffset < totalSamples { try appendAudio(formatDescription) }
+                if sampleOffset >= totalSamples {
+                    audioInput.markAsFinished()
+                    audioDone = true
+                }
+                progressed = true
+            }
+            if progressed {
+                lastProgress = ProcessInfo.processInfo.systemUptime
+                continue
+            }
+            guard writer.status == .writing else {
+                throw E2EError.writerFailed(writer.error?.localizedDescription ?? "writer stopped")
+            }
+            guard ProcessInfo.processInfo.systemUptime < lastProgress + 15 else {
+                writer.cancelWriting()
+                throw E2EError.writerFailed("synthetic writer readiness timed out")
+            }
+            try await Task.sleep(nanoseconds: 1_000_000)
         }
 
         await withCheckedContinuation { continuation in

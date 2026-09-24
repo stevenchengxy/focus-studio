@@ -146,8 +146,6 @@ public final class AIAssistantSession: ObservableObject {
 
     static let maximumStepsPerTurn = 8
     static let transcriptCharacterBudget = 12_000
-    static let maximumListedAssets = 12
-    static let maximumListedZooms = 16
 
     @Published public private(set) var messages: [AIAssistantMessage] = []
     @Published public private(set) var isRunning = false
@@ -412,36 +410,7 @@ public final class AIAssistantSession: ObservableObject {
     }
 
     func projectSummary() -> String {
-        guard let project = context.readProject() else { return "No recording is open. Use list_projects and open_project, or record a new demo." }
-        let settings = project.settings
-        var lines: [String] = []
-        let title = project.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        lines.append("Title: \(title.isEmpty ? "Untitled" : title) | Duration: \(Self.seconds(project.duration)) s | Source: \(project.sourceWidth)×\(project.sourceHeight) | Clicks: \(project.clickEvents.count) | Zooms: \(project.zoomSegments.filter(\.isEnabled).count) | Chapters: \(project.chapters?.count ?? 0)")
-        lines.append("Look: background \(Self.backgroundDescription(settings)) | aspect \(settings.aspectRatio.title) | padding \(Int(settings.padding)) px | corner radius \(Int(settings.cornerRadius)) px | shadow \(Self.seconds(settings.shadow)) | screen animation \(settings.screenAnimation.rawValue) | zoom scale \(Self.seconds(settings.zoomScale))× | caption \(settings.resolvedCaptionStyle.position.rawValue)")
-        if let description = settings.productDescription?.trimmingCharacters(in: .whitespacesAndNewlines), !description.isEmpty {
-            lines.append("Product: \(String(description.prefix(400)))")
-        }
-        let audio = settings.resolvedProductDemoAudio
-        let music = audio.backgroundMusicPath.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent } ?? "none"
-        lines.append("Zoom style: automatic zooms \(settings.autoZoomEnabled ? "on" : "off") | hold \(Self.seconds(settings.zoomHold)) s | ease in \(Self.seconds(settings.zoomEaseIn)) s | ease out \(Self.seconds(settings.zoomEaseOut)) s | chain gap \(Self.seconds(settings.resolvedZoomChainGap)) s")
-        lines.append("Audio: music \(music) (volume \(Self.seconds(audio.backgroundMusicVolume))) | click sound \(audio.clickSoundEnabled ? "on" : "off") | zoom whoosh \(audio.zoomTransitionSoundEnabled ? "on" : "off")")
-        lines.append("Export: \(settings.exportWidth) px wide | \(settings.frameRate) fps")
-        let zooms = AIToolSupport.orderedZooms(project)
-        if !zooms.isEmpty {
-            let listed = zooms.prefix(Self.maximumListedZooms).map { "#\($0.index) \(AIToolSupport.zoomLine($0.segment))" }
-            var text = "Zooms (time order): " + listed.joined(separator: "; ")
-            if zooms.count > Self.maximumListedZooms { text += "; and \(zooms.count - Self.maximumListedZooms) more" }
-            lines.append(text)
-        }
-        if let chapters = project.chapters, !chapters.isEmpty {
-            let listed = chapters.sorted(by: ChapterMath.precedes).prefix(12).enumerated().map { index, chapter in
-                "\(index + 1). \(Self.seconds(chapter.start))–\(Self.seconds(chapter.end)) s \(chapter.title)\(chapter.caption.isEmpty ? "" : " — \(chapter.caption)")"
-            }
-            lines.append("Chapters: " + listed.joined(separator: "; "))
-        }
-        let assets = Self.listedAssets(in: context.assetsDirectory)
-        lines.append(assets.isEmpty ? "Assets: none yet (folder \(context.assetsDirectory.path))" : "Assets in \(context.assetsDirectory.path): \(assets.joined(separator: ", "))")
-        return lines.joined(separator: "\n")
+        AIProjectReport.summary(of: context.readProject(), assetsDirectory: context.assetsDirectory)
     }
 
     /// Newest messages that fit the character budget, oldest first.
@@ -499,37 +468,6 @@ public final class AIAssistantSession: ObservableObject {
         return String(decoding: data, as: UTF8.self)
     }
 
-    private static func backgroundDescription(_ settings: ProjectSettings) -> String {
-        switch settings.backgroundStyle {
-        case .image:
-            let name = settings.backgroundImagePath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "?"
-            return "image (\(name))"
-        case .solid:
-            return "solid \(settings.backgroundColor)"
-        case .gradient:
-            if let preset = BackgroundPreset.allCases.first(where: { $0.matches(primary: settings.backgroundColor, secondary: settings.secondaryBackgroundColor) }) {
-                return "gradient preset \(preset.title)"
-            }
-            return "gradient \(settings.backgroundColor) → \(settings.secondaryBackgroundColor)"
-        }
-    }
-
-    private static func listedAssets(in directory: URL) -> [String] {
-        let contents = (try? FileManager.default.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles]
-        )) ?? []
-        let media = contents
-            .filter { AIToolPaths.kind(of: $0) != nil }
-            .sorted { lhs, rhs in
-                let left = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-                let right = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-                return left > right
-            }
-        var names = media.prefix(maximumListedAssets).map(\.lastPathComponent)
-        if media.count > maximumListedAssets { names.append("and \(media.count - maximumListedAssets) more") }
-        return names
-    }
-
     static func languageName(_ code: String) -> String {
         let normalized = code.lowercased().replacingOccurrences(of: "_", with: "-")
         if normalized.hasPrefix("zh-hant") || normalized.hasPrefix("zh-tw") || normalized.hasPrefix("zh-hk") { return "Traditional Chinese (繁體中文)" }
@@ -537,10 +475,5 @@ public final class AIAssistantSession: ObservableObject {
         if normalized.hasPrefix("en") { return "English" }
         if normalized.hasPrefix("ja") { return "Japanese" }
         return "the language with BCP 47 code \(code)"
-    }
-
-    private static func seconds(_ value: Double) -> String {
-        guard value.isFinite else { return "0" }
-        return value == value.rounded() ? String(Int(value)) : String(format: "%.1f", value)
     }
 }

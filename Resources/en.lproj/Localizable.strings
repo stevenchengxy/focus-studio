@@ -538,6 +538,8 @@
 "The project could not be moved to Trash. Its files were kept." = "The project could not be moved to Trash. Its files were kept.";
 "Finish the current library operation before starting another." = "Finish the current library operation before starting another.";
 "Return to the project library before managing projects." = "Return to the project library before managing projects.";
+"Focus Studio is recording. Try again after the recording is stopped." = "Focus Studio is recording. Try again after the recording is stopped.";
+"Focus Studio is busy. Try again when the current task finishes." = "Focus Studio is busy. Try again when the current task finishes.";
 "Project “%@” could not be renamed: %@" = "Project “%@” could not be renamed: %@";
 "Moved %lld of %lld selected projects to Trash. The remaining projects were kept.\n%@" = "Moved %lld of %lld selected projects to Trash. The remaining projects were kept.\n%@";
 "“%@”: %@" = "“%@”: %@";

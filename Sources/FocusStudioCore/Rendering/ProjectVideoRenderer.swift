@@ -317,10 +317,14 @@ public enum ProjectVideoRenderer {
     ///
     /// Rendering happens into a sibling temporary file. An existing destination is replaced
     /// only after AVFoundation completes successfully, so a failed export never destroys it.
+    /// `progress` receives the completed fraction (0...1, never decreasing) about twice a
+    /// second and 1 once the file is in place. Cancelling the task stops AVFoundation,
+    /// removes the partial file and throws `CancellationError` itself, not a render error.
     @discardableResult
     public static func export(
         project: RecordingProject,
-        to outputURL: URL
+        to outputURL: URL,
+        progress: (@Sendable (Double) -> Void)? = nil
     ) async throws -> VideoExportResult {
         guard outputURL.pathExtension.lowercased() == "mp4" else {
             throw ProjectRenderError.outputMustBeMP4(outputURL)
@@ -342,7 +346,7 @@ public enum ProjectVideoRenderer {
         session.shouldOptimizeForNetworkUse = true
 
         do {
-            try await session.export(to: temporaryURL, as: .mp4)
+            try await runExportSession(session, to: temporaryURL, as: .mp4, progress: progress)
             if FileManager.default.fileExists(atPath: outputURL.path) {
                 _ = try FileManager.default.replaceItemAt(outputURL, withItemAt: temporaryURL)
             } else {
@@ -350,8 +354,12 @@ public enum ProjectVideoRenderer {
             }
         } catch {
             try? FileManager.default.removeItem(at: temporaryURL)
+            // AVFoundation throws CancellationError for a cancelled task; any
+            // other error it reports after a cancel is the cancel as well.
+            if error is CancellationError || Task.isCancelled { throw CancellationError() }
             throw ProjectRenderError.exportFailed(error.localizedDescription)
         }
+        progress?(1)
 
         return VideoExportResult(
             outputURL: outputURL,
@@ -361,6 +369,46 @@ public enum ProjectVideoRenderer {
             frameRate: prepared.frameRate,
             includesAudio: prepared.includesAudio
         )
+    }
+
+    /// Runs `session` with the async export API of macOS 15, reporting the
+    /// completed fraction from `states(updateInterval:)`. That sequence never
+    /// ends on its own, so its observer is cancelled and awaited once the
+    /// export returns: no report arrives after this function does. Cancelling
+    /// the calling task makes AVFoundation stop and throw `CancellationError`,
+    /// which propagates unchanged.
+    public static func runExportSession(
+        _ session: AVAssetExportSession,
+        to url: URL,
+        as fileType: AVFileType,
+        progress: (@Sendable (Double) -> Void)?
+    ) async throws {
+        guard let progress else {
+            try await session.export(to: url, as: fileType)
+            return
+        }
+        let states = session.states(updateInterval: 0.5)
+        let observer = Task {
+            var reported = 0.0
+            for await state in states {
+                guard !Task.isCancelled else { break }
+                guard case let .exporting(exportProgress) = state else { continue }
+                let fraction = min(1, max(0, exportProgress.fractionCompleted))
+                if fraction > reported {
+                    reported = fraction
+                    progress(fraction)
+                }
+            }
+        }
+        do {
+            try await session.export(to: url, as: fileType)
+        } catch {
+            observer.cancel()
+            await observer.value
+            throw error
+        }
+        observer.cancel()
+        await observer.value
     }
 
     private static func insertLoopedAudio(
