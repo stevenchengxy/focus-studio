@@ -100,10 +100,10 @@
 
 ## 安装包
 
-修正后重新构建的候选：`FOCUS_STUDIO_APP_DIR="$PWD/dist/candidates/1.12.0/Focus Studio.app" zsh scripts/build-app.sh`（Universal，2026-09-24 17:00:51–17:02:18）与同一变量下的 `scripts/package-release.sh --skip-build`（17:02:26–17:02:55）通过，都在上面的 `./scripts/test.sh` 通过之后、源码没有再改动的情况下运行。它替换了实机检查用过的 `c493291` 候选（同一路径），`dist/releases/` 里的 1.12.0 安装包也被覆盖；那一份的大小和 SHA-256 记在“实机检查”里。`package-release.sh` 读取 `FOCUS_STUDIO_APP_DIR`，打包的是候选应用；输出写入 `dist/releases/`，临时目录在结束时删除。构建和打包时 Focus Studio 没有在运行（`pgrep -x FocusStudio` 无输出），`dist/Focus Studio.app` 没有被替换；测试、构建和打包都不涉及 `/Applications`、真实的项目库和偏好设置、`~/.claude.json`、`~/.codex`（测试只用临时项目库、隔离的偏好、假的命令行工具和脚本化的麦克风权限）。实机检查时用 Claude Code 接入的 helper 路径就是候选里的 `Contents/MacOS/focus-studio-mcp`，重新构建后这个路径上是修正后的 helper。
+修正后重新构建的候选：`FOCUS_STUDIO_APP_DIR="$PWD/dist/candidates/1.12.0/Focus Studio.app" zsh scripts/build-app.sh`（Universal，2026-09-24 17:43 起）与同一变量下的 `scripts/package-release.sh --skip-build`（17:45 完成）通过。它们在提交 `2be0d78` 的源码上运行，那份源码已通过完整测试；测试中 `CodexConnectionTests` 有一次偶发的计时失败，单独重跑三次都通过。它替换了实机检查用过的 `c493291` 候选（同一路径），`dist/releases/` 里的 1.12.0 安装包也被覆盖；那一份的大小和 SHA-256 记在“实机检查”里。`package-release.sh` 读取 `FOCUS_STUDIO_APP_DIR`，打包的是候选应用；输出写入 `dist/releases/`，临时目录在结束时删除。构建和打包时 Focus Studio 没有在运行（`pgrep -x FocusStudio` 无输出），`dist/Focus Studio.app` 没有被替换；测试、构建和打包都不涉及 `/Applications`、真实的项目库和偏好设置、`~/.claude.json`、`~/.codex`（测试只用临时项目库、隔离的偏好、假的命令行工具和脚本化的麦克风权限）。实机检查时用 Claude Code 接入的 helper 路径就是候选里的 `Contents/MacOS/focus-studio-mcp`，重新构建后这个路径上是修正后的 helper。
 
 - 版本 1.12.0（build 19），arm64 + x86_64 Universal 2，macOS 15.0 最低系统版本；应用与 helper 都只链接 `/System/Library` 与 `/usr/lib` 下的系统库。
-- 应用可执行文件 29,544,512 字节，helper `focus-studio-mcp` 18,595,952 字节（都含两个架构）。helper 签名标识 `com.local.focusstudio.mcp`，指定要求 `identifier "com.local.focusstudio.mcp"`，无 entitlements；应用签名标识 `com.local.focusstudio`；`codesign --verify --deep --strict` 通过。本机没有签名身份，是 ad-hoc 本地签名，未经 Apple 公证（`spctl` 拒绝，符合预期）；Intel 切片只经过交叉编译和 Rosetta 下的 stdio 冒烟测试。
+- 应用可执行文件 29,544,608 字节，helper `focus-studio-mcp` 18,595,952 字节（都含两个架构）。helper 签名标识 `com.local.focusstudio.mcp`，指定要求 `identifier "com.local.focusstudio.mcp"`，无 entitlements；应用签名标识 `com.local.focusstudio`；`codesign --verify --deep --strict` 通过。本机没有签名身份，是 ad-hoc 本地签名，未经 Apple 公证（`spctl` 拒绝，符合预期）；Intel 切片只经过交叉编译和 Rosetta 下的 stdio 冒烟测试。
 - `Contents/Resources/ThirdPartyNotices.txt` 含 swift-sdk 0.12.1、swift-log 1.15.1、swift-system 1.8.1、eventsource 1.5.1 的许可证与声明，DMG / ZIP 里应用旁边的副本与之逐字节一致。
 - 构建时 12 张自带背景图的摘要校验通过；`verify-release.sh` 确认 885 键双语资源、图标、12 个音频素材、12 张背景图，且不含数字人资源。
 - DMG `hdiutil verify` 为 VALID。DMG（只读挂载后卸载）和 ZIP（解压到临时目录）中：应用与候选逐文件一致（`diff -rq`）、`codesign --verify --deep --strict` 通过、版本 1.12.0 / 19；`INSTALL.md` 与仓库的 `docs/INSTALL.md`（含本次的麦克风说明）逐字节一致（`cmp`）；`Applications` 指向 `/Applications`；`Release-Status.plist`：1.12.0、`arm64 x86_64`、最低 15.0、`local`、未公证、不含用户数据。
@@ -113,8 +113,8 @@
 文件：
 
 - `dist/candidates/1.12.0/Focus Studio.app`（约 98 MB）
-- `dist/releases/Focus-Studio-1.12.0-universal-local.dmg`（65,577,099 字节，SHA-256 `591a425257d80cc03debb88bfa41b840f7af30cf47a09cbb4fb2266e75fced9e`）
-- `dist/releases/Focus-Studio-1.12.0-universal-local.zip`（62,790,413 字节，SHA-256 `840c9ec20f99c6fd05ecd6835155703bf1d512ac3469785e79a63b7ba92f2a60`）
+- `dist/releases/Focus-Studio-1.12.0-universal-local.dmg`（65,584,296 字节，SHA-256 `cd8c554186d8cda9ccc242bee17f3488150c8ec92726e8ce7b66a9645ea0da98`）
+- `dist/releases/Focus-Studio-1.12.0-universal-local.zip`（62,791,973 字节，SHA-256 `7eb66e55be79848545a77e8a63d73ed4f13f6f192511ffc093a8133831b0570c`）
 - `dist/releases/Focus-Studio-1.12.0-universal-local.sha256`（`shasum -a 256 -c` 通过）
 
 没有安装到 `/Applications`，也没有做旧版本清理：`dist/releases/` 里合并前的 1.5.0 安装包和 `dist/candidates/` 里的其他候选都还在。
