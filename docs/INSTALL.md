@@ -74,7 +74,7 @@ Chrome 产品演示：选择 **Window → Chrome 窗口**，开启 **Webpage onl
 
 如果编辑器提示没有捕获点击或输入活动，说明该段视频缺少生成自动缩放所需的交互数据。稍后授权无法补回已经录制的视频事件：请完成权限设置后新录一段，或在原视频的 **Zoom** 时间线上双击添加并调整缩放块。
 
-## 让 Claude Code / Codex 使用 Focus Studio（MCP，1.5.0）
+## 让 Claude Code / Codex 使用 Focus Studio（MCP，1.12.0）
 
 Focus Studio.app 内附带 MCP server `Contents/MacOS/focus-studio-mcp`。接入后，Claude Code 和 Codex 可以在 Focus Studio 里录制、编辑和导出：所有操作都在应用里执行，你能看到每一步，也可以随时接手。录屏和剪辑本身不需要接入。
 
@@ -136,7 +136,7 @@ codex mcp add focus-studio -- "/Applications/Focus Studio.app/Contents/MacOS/foc
 - **Codex 超时**：Codex 0.141.0（2026 年 6 月）起，MCP 工具调用默认最多等 300 秒，一般不需要修改配置：等待录制和等待后台任务的工具每次最多等 240 秒，导出或拼接超过约 200 秒会返回 `job_id` 转为后台任务；握手和列工具由 helper 立即回答，不等应用启动。更早的 Codex 默认只等 120 秒（更老的版本为 60 秒），长时间的导出或等待会先在 Codex 端超时：请更新 Codex（`codex --version` 查看版本），或在 `~/.codex/config.toml` 的 `[mcp_servers.focus-studio]` 下加一行 `tool_timeout_sec = 300`，再开始新的 Codex 会话。这约 200 秒从调用到达 Focus Studio 算起，并扣除 helper 在后台启动应用、建立连接已经用掉的时间；等待批准、排队和等你回答声音询问的时间也都算在内，所以新 AI 工具的第一次调用同样会在 300 秒之内得到回答。批准面板 2 分钟内没人处理时，调用返回“没人回答”的错误（极少数情况下先返回 `waiting_for_approval`）；排队等另一个调用时时间用完，返回 `waiting_for_turn`；这两种情况调用都没有执行，AI 工具再调用一次即可。还在等你回答声音询问时，调用返回 `job_id`，AI 工具用 `wait_for_job` 取得录制结果。
 - **“Focus Studio could not be reached”**：helper 连不上应用。先手动打开 Focus Studio，看 **AI tools / AI 工具** 页是否显示 **Ready for AI tools.**；显示 “AI tools cannot connect: … / AI 工具无法连接：…” 时按其中的原因处理（控制通道在 `~/Library/Application Support/FocusStudio/Control/`）。再确认 MCP 配置里没有给 helper 设置 `FOCUS_STUDIO_MCP_NO_LAUNCH=1`（设置后 helper 不会自动打开应用）或 `FOCUS_STUDIO_CONTROL_SOCKET`（只用于测试）。
 - **“Focus Studio is set not to accept AI tools”**：总开关已关闭，打开即可。
-- **“Another copy of Focus Studio … is running but is not accepting AI tools”**：另一份不提供 AI 工具的 Focus Studio（例如 1.4.0 或更早版本）正在运行。两份应用会同时编辑同一个项目库，所以 helper 不会再打开第二份；退出那一份或更新它即可。
+- **“Another copy of Focus Studio … is running but is not accepting AI tools”**：另一份不提供 AI 工具的 Focus Studio（例如 1.11.0 或更早版本）正在运行。两份应用会同时编辑同一个项目库，所以 helper 不会再打开第二份；退出那一份或更新它即可。
 - **查看 helper 日志**：helper 的日志只写到标准错误。Claude Code 连上 MCP server 之后不再保留它的标准错误，Codex 默认也不会把终端里 `export` 的变量传给 helper，所以在 AI 工具的会话里一般看不到这些日志。需要排查时，按源码仓库 `docs/MCP-QA.md` 中“一个可以手动发消息的 MCP 会话”，在终端里带 `FOCUS_STUDIO_MCP_LOG_LEVEL=debug` 直接运行 helper：日志包括连接、启动应用、hello 和每个调用。Codex 也可以先 `codex mcp remove focus-studio`，再 `codex mcp add --env FOCUS_STUDIO_MCP_LOG_LEVEL=debug focus-studio -- "<helper 路径>"` 重新登记，这些行会以 `MCP server stderr` 开头记进 Codex 自己的日志；排查完同样先 remove，再用不带 `--env` 的命令登记回来。
 
 ## AI 助手操控应用、Codex 大脑与语音

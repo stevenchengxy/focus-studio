@@ -4,7 +4,7 @@
 Seedance 视频生成、Seedream 图片生成结合起来，产出企业级科技产品演示视频：**AI 片头 → 录屏功能章节（字幕）→ AI 片尾 CTA**，
 成片可直接发布，也可重新导入 Focus Studio 继续加缩放与音效。
 
-另有一个不涉及付费生成的 skill：`focus-studio-mcp`（Focus Studio 1.5+），教 Claude Code 通过 MCP 工具直接操作 Focus Studio 录制、编辑和导出，见下文。
+另有一个不涉及付费生成的 skill：`focus-studio-mcp`（Focus Studio 1.12+），教 Claude Code 通过 MCP 工具直接操作 Focus Studio 录制、编辑和导出，见下文。
 
 > English summary at the end of this file.
 
@@ -22,7 +22,7 @@ Seedance 视频生成、Seedream 图片生成结合起来，产出企业级科�
 `probe-activation` 模型开通检测。各 skill 的脚本通过相对路径 `../../_shared` 或 `./_shared` 引入它，因此**单独复制某个 skill
 时请连同 `_shared` 目录一起复制**（或设置 `FOCUS_SKILLS_SHARED=/path/to/_shared`）。
 
-## focus-studio-mcp：通过 MCP 使用 Focus Studio（1.5）
+## focus-studio-mcp：通过 MCP 使用 Focus Studio（1.12）
 
 `focus-studio-mcp/SKILL.md` 说明何时、如何调用 Focus Studio 的 24 个 MCP 工具（`mcp__focus-studio__*`）：录制窗口或显示器（`duration` 自动停止，`wait_for_recording` 等待结束）、按 `project_id` 加缩放、章节字幕、背景和配乐、导出到当前工作目录；导入视频或截图 Demo；列出、搜索、重命名和删除项目。也写明约定（坐标 0–1、从左上角算起，时间以秒为单位，`overwrite`）和礼仪（录制前告知录什么、要不要声音，对方可以随时取消；要录的声音录制器里没开时 Focus Studio 会先问对方；不直接改 `project.json`、删除前先问）。它只有 `SKILL.md`，不需要 `_shared`、Python 或密钥，但需要先在 Focus Studio 的 **设置 › AI 工具** 里接入 Claude Code（或手动运行 `claude mcp add`，见仓库根目录 README）。
 
@@ -116,7 +116,7 @@ skills/
 ├── ark-still-image/       SKILL.md  scripts/generate_still.py references/prompting.md
 ├── demo-storyboard/       SKILL.md  scripts/storyboard_from_project.py  references/storyboard-schema.md  examples/*.json
 ├── product-demo-composer/ SKILL.md  scripts/compose_demo.py  scripts/probe_media.py
-└── focus-studio-mcp/      SKILL.md（只有说明，调用 Focus Studio 1.5 的 MCP 工具）
+└── focus-studio-mcp/      SKILL.md（只有说明，调用 Focus Studio 1.12 的 MCP 工具）
 ```
 
 ---
@@ -130,7 +130,7 @@ restyling), **demo-storyboard** (project.json + product description → `storybo
 zoom timeline, captions, prompts, transitions, BGM), and **product-demo-composer** (ffmpeg: normalise to 1080p/4K,
 CJK captions via drawtext, xfade transitions, BGM ducking, render report; `--generate` fills missing AI assets,
 otherwise placeholders). A fifth skill, **focus-studio-mcp**, needs no key or script: it teaches Claude Code to
-drive Focus Studio 1.5+ through its MCP tools (`mcp__focus-studio__*`) - record with a duration and
+drive Focus Studio 1.12+ through its MCP tools (`mcp__focus-studio__*`) - record with a duration and
 `wait_for_recording`, edit by `project_id`, export into the working directory, import screenshots and videos,
 manage projects - once Focus Studio is connected (Settings > AI tools > Connect). Install with `bash skills/install.sh` (symlinks into `~/.claude/skills/`) or run `claude`
 in this repo / `claude --add-dir <repo>`. The API key lives only in `~/.config/focus-studio/ark.env`; scripts never

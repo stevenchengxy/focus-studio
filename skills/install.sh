@@ -14,5 +14,5 @@ for name in _shared ark-video-clip ark-still-image demo-storyboard product-demo-
   echo "$MODE: $dst"
 done
 echo "done. Skills: ark-video-clip, ark-still-image, demo-storyboard, product-demo-composer (shared client in _shared), focus-studio-mcp."
-echo "focus-studio-mcp needs Focus Studio 1.5+ connected to Claude Code: Focus Studio > Settings > AI tools > Connect."
+echo "focus-studio-mcp needs Focus Studio 1.12+ connected to Claude Code: Focus Studio > Settings > AI tools > Connect."
 echo "Key file: ~/.config/focus-studio/ark.env (ARK_API_KEY=..., ARK_BASE_URL=...), chmod 600. Never commit it."

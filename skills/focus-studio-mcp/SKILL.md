@@ -5,7 +5,7 @@ description: Operate the Focus Studio macOS app through its MCP server (tools na
 
 # focus-studio-mcp - record, edit and export with Focus Studio over MCP
 
-Focus Studio 1.5 ships an MCP server, `Focus Studio.app/Contents/MacOS/focus-studio-mcp`. Every tool runs
+Focus Studio 1.12 ships an MCP server, `Focus Studio.app/Contents/MacOS/focus-studio-mcp`. Every tool runs
 inside the Focus Studio app while the person watches: editing opens the project in the editor, and every
 recording shows a countdown and a control bar. Focus Studio is the only writer of its library.
 

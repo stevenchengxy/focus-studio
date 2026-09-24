@@ -854,7 +854,7 @@
 
 /* bundled backgrounds */
 "FOCUS STUDIO BACKGROUNDS" = "FOCUS STUDIO BACKGROUNDS";
-/* 1.5: AI tools over MCP (control channel, approval, Settings › AI tools) */
+/* 1.12: AI tools over MCP (control channel, approval, Settings › AI tools) */
 "Allow AI tools to control Focus Studio" = "Allow AI tools to control Focus Studio";
 "Claude Code, Codex and other MCP clients can record, edit and export in Focus Studio through focus-studio-mcp. The first time an AI tool calls, Focus Studio asks you to approve it. Every recording still shows the countdown and the control bar." = "Claude Code, Codex and other MCP clients can record, edit and export in Focus Studio through focus-studio-mcp. The first time an AI tool calls, Focus Studio asks you to approve it. Every recording still shows the countdown and the control bar.";
 "Ready for AI tools." = "Ready for AI tools.";
@@ -912,11 +912,8 @@
 "AI tools are turned off. Focus Studio refuses their calls." = "AI tools are turned off. Focus Studio refuses their calls.";
 "Stops in %@" = "Stops in %@";
 "Stops automatically in %@" = "Stops automatically in %@";
-"This recording stops by itself when the time runs out. Finish or cancel it any time." = "This recording stops by itself when the time runs out. Finish or cancel it any time.";
-"Starting the recording…" = "Starting the recording…";
 "Cancel this recording before it starts" = "Cancel this recording before it starts";
 "Waiting for the recording to end…" = "Waiting for the recording to end…";
-"Focus Studio is about to record" = "Focus Studio is about to record";
 "%@ asked to record %@" = "%@ asked to record %@";
 "Recording microphone and system audio" = "Recording microphone and system audio";
 "Recording microphone" = "Recording microphone";

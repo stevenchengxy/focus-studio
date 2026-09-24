@@ -56,7 +56,7 @@ Focus Studio 是一个原生 macOS 产品 Demo 录制与编辑器，核心工作
 
 4 首原创 BGM 和 4 种原创音效由 [`scripts/generate-audio-assets.swift`](scripts/generate-audio-assets.swift) 程序化生成；另外收录了作者页面明确标记为 CC0 的 `City Loop`、`Overworld (BGM)`、`Calm Loop` 与 `Loading Screen Loop`。完整作者、来源、许可、SHA-256 与编码信息见 [`Resources/Audio/README.md`](Resources/Audio/README.md)。构建脚本会生成原创资源、验证网络资源哈希并打包完整目录。
 
-## 让 Claude Code / Codex 直接使用 Focus Studio（MCP，1.5）
+## 让 Claude Code / Codex 直接使用 Focus Studio（MCP，1.12）
 
 应用内附带 MCP server `Focus Studio.app/Contents/MacOS/focus-studio-mcp`（stdio，基于官方 MCP Swift SDK 0.12.1）。接入后，在 Claude Code 或 Codex 里一句话即可完成"列出录制源 → 录制 → 加缩放、字幕、配乐 → 导出到当前目录"，例如：
 
@@ -118,7 +118,7 @@ codex mcp add focus-studio -- "/Applications/Focus Studio.app/Contents/MacOS/foc
 
 ## AI 视频与生图 Skills（火山引擎）
 
-`skills/` 目录提供四个 Claude Code Skills：用火山方舟 Seedance 生成片头/转场/片尾镜头、用 Seedream 生成标题卡与主视觉、把 Focus Studio 项目转成分镜 JSON，以及用 ffmpeg 把 AI 片段与录屏导出合成为企业级产品演示视频。AI 片段是可选项，不影响录制与编辑。密钥只从环境变量或 `~/.config/focus-studio/ark.env` 读取，绝不写入仓库。另有 `focus-studio-mcp`（1.5），教 Claude Code 通过 MCP 工具录制、编辑和导出，不涉及付费生成。详见 [`skills/README.md`](skills/README.md)。
+`skills/` 目录提供四个 Claude Code Skills：用火山方舟 Seedance 生成片头/转场/片尾镜头、用 Seedream 生成标题卡与主视觉、把 Focus Studio 项目转成分镜 JSON，以及用 ffmpeg 把 AI 片段与录屏导出合成为企业级产品演示视频。AI 片段是可选项，不影响录制与编辑。密钥只从环境变量或 `~/.config/focus-studio/ark.env` 读取，绝不写入仓库。另有 `focus-studio-mcp`（1.12），教 Claude Code 通过 MCP 工具录制、编辑和导出，不涉及付费生成。详见 [`skills/README.md`](skills/README.md)。
 
 ## 截图转 Demo
 
@@ -176,7 +176,7 @@ Focus Studio 会通过本机 [`codex app-server`](https://developers.openai.com/
 要求：
 
 - macOS 15 或更高版本
-- Xcode Command Line Tools / Swift 6.1 或更新版本（1.5 起 MCP Swift SDK 及其依赖的清单要求 Swift 6；已在 Swift 6.1 上构建验证）
+- Xcode Command Line Tools / Swift 6.1 或更新版本（1.12 起 MCP Swift SDK 及其依赖的清单要求 Swift 6；已在 Swift 6.1 上构建验证）
 - Codex Director 为可选功能；使用时需要本机 Codex CLI 或 ChatGPT macOS 应用内置 Codex
 
 ```bash
@@ -185,7 +185,7 @@ chmod +x scripts/build-app.sh scripts/test.sh
 open "dist/Focus Studio.app"
 ```
 
-`build-app.sh` 默认构建 arm64 + x86_64 通用应用、打包音频并验证动态依赖、最低系统版本与签名；输出 `dist/Focus Studio.app`。1.5 起同时按架构构建 MCP helper `focus-studio-mcp`，放进 `Contents/MacOS/`：它静态链接官方 MCP Swift SDK（`Package.swift` 精确锁定 0.12.1，版本记录在 `Package.resolved`，首次构建需要联网拉取），仍然只链接系统库；脚本先用独立标识 `com.local.focusstudio.mcp` 给 helper 签名，再签整个应用，并把 SDK 及其依赖的许可证写入 `Contents/Resources/ThirdPartyNotices.txt`。本机快速构建可设置 `FOCUS_STUDIO_ARCHS=native`。如果机器上没有签名证书，脚本使用绑定 `com.local.focusstudio` 的 ad-hoc 签名；重新构建后 macOS 可能再次要求授权。正式发布需要 `FOCUS_STUDIO_SIGNING_IDENTITY`，使用 Developer ID 签名。
+`build-app.sh` 默认构建 arm64 + x86_64 通用应用、打包音频并验证动态依赖、最低系统版本与签名；输出 `dist/Focus Studio.app`。1.12 起同时按架构构建 MCP helper `focus-studio-mcp`，放进 `Contents/MacOS/`：它静态链接官方 MCP Swift SDK（`Package.swift` 精确锁定 0.12.1，版本记录在 `Package.resolved`，首次构建需要联网拉取），仍然只链接系统库；脚本先用独立标识 `com.local.focusstudio.mcp` 给 helper 签名，再签整个应用，并把 SDK 及其依赖的许可证写入 `Contents/Resources/ThirdPartyNotices.txt`。本机快速构建可设置 `FOCUS_STUDIO_ARCHS=native`。如果机器上没有签名证书，脚本使用绑定 `com.local.focusstudio` 的 ad-hoc 签名；重新构建后 macOS 可能再次要求授权。正式发布需要 `FOCUS_STUDIO_SIGNING_IDENTITY`，使用 Developer ID 签名。
 
 ```bash
 ./scripts/package-release.sh

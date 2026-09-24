@@ -2,7 +2,9 @@
 
 ## Release status
 
-The source is version **1.7.1 (build 14)**. Digital humans and their selection/rendering/model resources have been removed at the user's request. AI Assistant and Demo Director remain fully conversational, with optional voice replies. Packaging rejects leftover avatar resources. Verification for this version is in [VALIDATION-1.7.1.md](VALIDATION-1.7.1.md). Automated or package checks do not by themselves prove live recording. Do not overwrite or stop the currently installed app while preparing a candidate.
+The source is version **1.12.0 (build 19)**: 1.11.0 (build 18) plus the MCP helper `focus-studio-mcp`, through which Claude Code, Codex and other MCP clients record, edit and export in Focus Studio once the person approves them (GitHub issue #1). A recording an AI tool starts shows its countdown, the tool's name, the sound it records and the time left in the recording control bar, even with no main window; its `duration` counts recorded time, so paused time is excluded. The universal candidate is `dist/candidates/1.12.0/Focus Studio.app`, packaged as `dist/releases/Focus-Studio-1.12.0-universal-local.dmg` and `.zip`. Verification for this version is in [VALIDATION-1.12.0.md](VALIDATION-1.12.0.md); the live MCP checks from [MCP-QA.md](MCP-QA.md) are still pending there. Automated or package checks do not by themselves prove live recording. Do not overwrite or stop the currently installed app while preparing a candidate.
+
+Versions 1.8.0 (build 15) to 1.11.0 (build 18) are recorded in [VALIDATION-cursor-motion-2026-09-22.md](VALIDATION-cursor-motion-2026-09-22.md) (1.8.0, 1.9.0), [VALIDATION-cursor-styles-toolbar-2026-09-23.md](VALIDATION-cursor-styles-toolbar-2026-09-23.md) (1.10.0) and [VALIDATION-toolbar-backgrounds-2026-09-23.md](VALIDATION-toolbar-backgrounds-2026-09-23.md) (1.11.0). The prior **1.7.1 (build 14)** removed digital humans and their selection/rendering/model resources at the user's request; packaging still rejects leftover avatar resources. Its verification is in [VALIDATION-1.7.1.md](VALIDATION-1.7.1.md).
 
 Version 1.5.0 (build 9) was installed through the native installer into `/Applications/Focus Studio.app` and then launched from that canonical path. Its actual test evidence and limitations remain in [VALIDATION-1.5.0.md](VALIDATION-1.5.0.md); the version bump does not imply that those results also validate 1.6.0.
 
@@ -10,20 +12,20 @@ The prior **1.6.0 (build 11)** native recording validation remains in [VALIDATIO
 
 ## Build
 
-Run `./scripts/build-app.sh` on macOS with current Command Line Tools (Swift 6.1 or later since 1.5: the MCP Swift SDK and its dependencies need Swift 6 manifests). It builds separate `arm64-apple-macosx15.0` and `x86_64-apple-macosx15.0` release slices of the app and of the MCP helper `focus-studio-mcp`, combines them with `lipo`, bundles the verified static audio assets, multi-resolution icon and English / Simplified Chinese catalogs, signs and verifies the app, then replaces `dist/Focus Studio.app`. No end-user project or credentials are copied. The previous app remains intact if building or verification fails. A source-and-resource digest rejects builds if production code or bundled assets change while the two architecture slices compile.
+Run `./scripts/build-app.sh` on macOS with current Command Line Tools (Swift 6.1 or later since 1.12: the MCP Swift SDK and its dependencies need Swift 6 manifests). It builds separate `arm64-apple-macosx15.0` and `x86_64-apple-macosx15.0` release slices of the app and of the MCP helper `focus-studio-mcp`, combines them with `lipo`, bundles the verified static audio assets, multi-resolution icon and English / Simplified Chinese catalogs, signs and verifies the app, then replaces `dist/Focus Studio.app`. No end-user project or credentials are copied. The previous app remains intact if building or verification fails. A source-and-resource digest rejects builds if production code or bundled assets change while the two architecture slices compile.
 
 The default is Universal 2. For local iteration only, `FOCUS_STUDIO_ARCHS=native ./scripts/build-app.sh` builds the host architecture. `arm64` and `x86_64` are also supported. The packaging script requires both slices.
 
 To leave a running app untouched, build and package a separate candidate:
 
 ```sh
-FOCUS_STUDIO_APP_DIR="$PWD/dist/candidates/1.7.1-b14/Focus Studio.app" ./scripts/build-app.sh
-FOCUS_STUDIO_APP_DIR="$PWD/dist/candidates/1.7.1-b14/Focus Studio.app" ./scripts/package-release.sh --skip-build
+FOCUS_STUDIO_APP_DIR="$PWD/dist/candidates/1.12.0/Focus Studio.app" ./scripts/build-app.sh
+FOCUS_STUDIO_APP_DIR="$PWD/dist/candidates/1.12.0/Focus Studio.app" ./scripts/package-release.sh --skip-build
 ```
 
 The override must be an absolute, non-symlink path inside this checkout's `dist` directory and end in `Focus Studio.app`. Its parent is created when needed; staging and replacement are restricted to that selected parent. The default remains `dist/Focus Studio.app`. Building a candidate does not launch it or replace the default running bundle. `package-release.sh` reads the same variable, so the second command packages the candidate; its outputs still go to `dist/releases/`, where a previous package with the same name is replaced.
 
-## The MCP helper (1.5)
+## The MCP helper (1.12)
 
 `Contents/MacOS/focus-studio-mcp` is the stdio MCP server that Claude Code, Codex and other MCP clients start. It is built from `Sources/FocusStudioMCP` with the official MCP Swift SDK, pinned exactly to 0.12.1 in `Package.swift`; `Package.resolved` is kept in the repository and the release build passes `--force-resolved-versions`, so an SDK upgrade is always an explicit change. The SDK is linked statically: the helper, like the app, links only libraries that ship with macOS. The first build needs network access to fetch the pinned packages.
 
@@ -40,9 +42,9 @@ The native installation panel and CLI share `AppInstallation.swift`. They instal
 
 ```sh
 # Read-only inspection; no installation, process termination or app launch:
-zsh scripts/install-app.sh "$PWD/dist/candidates/1.7.1-b14/Focus Studio.app" --check
+zsh scripts/install-app.sh "$PWD/dist/candidates/1.12.0/Focus Studio.app" --check
 # Explicitly authorized installation, after finishing work in the installed app:
-zsh scripts/install-app.sh "$PWD/dist/candidates/1.7.1-b14/Focus Studio.app" --yes
+zsh scripts/install-app.sh "$PWD/dist/candidates/1.12.0/Focus Studio.app" --yes
 # Optional one-command build + explicit installation:
 ./scripts/build-app.sh --install
 ```

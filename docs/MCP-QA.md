@@ -94,7 +94,7 @@ send '{"jsonrpc":"2.0","method":"notifications/initialized"}'
 ## 6. 多个副本
 
 - 同时装有别的副本时（例如 `/Applications/Focus Studio.app`，bundle id 相同）：退出所有副本，再用 `dist/` 里的 helper 发起调用。期望启动的是 `dist/` 里的副本：`ps -o command= -p "$(pgrep -x FocusStudio)"` 显示的路径在 `dist/` 下。helper 按 bundle URL 启动，并且只在没有别的副本运行时才启动自己的副本。
-- 另一个副本正在运行，但它没有控制通道（1.4.0 及更早的版本）时：helper **不会** 再启动自己的副本（两个副本会同时编辑同一个项目库）。它等待最多 30 秒，看那个副本是否开始提供 AI 工具，然后返回 `isError` “Another copy of Focus Studio (<路径>, version <版本>) is running but is not accepting AI tools … Ask the person to quit that copy of Focus Studio (or to update it)”。Dock 里始终只有一个 Focus Studio。
+- 另一个副本正在运行，但它没有控制通道（1.11.0 及更早的版本）时：helper **不会** 再启动自己的副本（两个副本会同时编辑同一个项目库）。它等待最多 30 秒，看那个副本是否开始提供 AI 工具，然后返回 `isError` “Another copy of Focus Studio (<路径>, version <版本>) is running but is not accepting AI tools … Ask the person to quit that copy of Focus Studio (or to update it)”。Dock 里始终只有一个 Focus Studio。
 - 另一个副本正在运行，并且已经在提供 AI 工具时：helper 直接连接它（协议相同即可），不会再启动新的副本。协议不同时，调用返回 `isError`，说明正在运行的是哪个副本（路径和版本）。
 
 ## 7. Gatekeeper：从 DMG 首次安装
