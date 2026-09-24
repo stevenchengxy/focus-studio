@@ -118,7 +118,9 @@ extension AIAssistantTests {
         for phrase in ["returns as soon as the recording is live", "countdown", "control bar", "cancel", "wait_for_recording", "stop_recording", "duration", "this recording only", "DevTools", "Clicks and typing", "add_zoom", "your own tools",
                        "bottom centre", "discards the recording", "never with the bar's buttons", "asks the person before the countdown", "never remembered",
                        "pause", "does not count", "names you",
-                       "record without sound", "no sound at all", "audio_consent", "60 seconds", "isError", "add no sound start without asking"] {
+                       "record without sound", "no sound at all", "audio_consent", "60 seconds", "isError", "add no sound start without asking",
+                       "macOS must also allow Focus Studio", "asks the person before the countdown (no answer to it within 60 seconds", "System Settings › Privacy & Security › Microphone",
+                       "\"microphone_unavailable\"", "call again with microphone false"] {
             check(start.description.contains(phrase), "start_recording's description mentions \(phrase)")
         }
         for property in ["microphone", "system_audio"] {
@@ -132,7 +134,10 @@ extension AIAssistantTests {
         for phrase in ["\"finished\"", "\"cancelled\"", "\"idle\"", "\"countdown\"", "\"recording\"", "\"stopping\"", "last_recording", "timeout_seconds", "get_status"] {
             check(wait.description.contains(phrase), "wait_for_recording's description mentions \(phrase)")
         }
-        check(catalog.tool(named: "wait_for_job")!.description.contains("sound prompt"), "wait_for_job names start_recording's prompt as a reason for a job")
+        let microphoneText = start.inputSchema["properties"]?["microphone"]?["description"]?.stringValue ?? ""
+        check(microphoneText.contains("macOS must also allow Focus Studio to use the microphone"), "start_recording.microphone mentions macOS's own permission: \(microphoneText)")
+        check(catalog.tool(named: "wait_for_job")!.description.contains("sound prompt") && catalog.tool(named: "wait_for_job")!.description.contains("macOS's microphone prompt"),
+              "wait_for_job names start_recording's prompts as a reason for a job")
         check(catalog.tool(named: "stop_recording")!.description.contains("joined"), "stop_recording says a stop under way is joined")
         check(catalog.tool(named: "get_project")!.inputSchema["required"] == ["project_id"], "get_project's own optional project_id becomes required")
         check(catalog.tool(named: "rename_project")!.inputSchema["required"] == ["project_id", "title"], "rename_project requires the id and the title")
@@ -191,6 +196,10 @@ extension AIAssistantTests {
         let failed = MCPToolCallResult.failure(AIToolError.invalidArgument("\"x\" must be a number."))
         check(failed.isError && failed.text == "\"x\" must be a number." && failed.structuredContent == nil, "a tool error is an error result with its text")
         check(MCPToolCallResult.failure(AIToolError.noProject).text.contains("No recording is open"), "AIToolError texts are kept")
+        let withData = MCPToolCallResult.failure(AIToolFailure("No microphone.", data: ["status": "microphone_unavailable"]))
+        check(withData.isError && withData.text == "No microphone." && withData.structuredContent == ["status": "microphone_unavailable"]
+              && withData.json == ["content": [["type": "text", "text": "No microphone."]], "structuredContent": ["status": "microphone_unavailable"], "isError": true],
+              "a failure with data is an error result with structured content: \(withData.json)")
         check(MCPToolCallResult.failure(NSError(domain: "Test", code: 1, userInfo: [NSLocalizedDescriptionKey: "Disk full"])).text == "Disk full", "other errors by their description")
 
         // capture_frame's PNG becomes an inline JPEG, at most 1568 pixels and 1 MiB of base64.

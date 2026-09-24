@@ -61,8 +61,13 @@ Not available over MCP: `generate_image`, `generate_video` (paid), clicks, key p
    want it); or **Cancel recording**, which returns an error saying the person did not allow sound (no answer
    within 60 seconds does too) and records nothing. A sound the person turns off in the recorder before the
    recording starts stays off, whatever you asked; `options` in the result is what is recorded. A recording
-   that adds no sound starts without a prompt. If the person has not answered about 200 seconds after the
-   call, it returns `{status: "running", job_id}`: call `wait_for_job` for the recording's result.
+   that adds no sound starts without a prompt. Recording the microphone (allowed at the prompt, or on in the
+   recorder) also needs macOS's permission: the first time, macOS asks the person before the countdown (no
+   answer within 60 seconds returns an error and records nothing). If Focus Studio's microphone access is off
+   (System Settings › Privacy & Security › Microphone), nothing records and the call returns an error with
+   `status: "microphone_unavailable"`: tell the person, and call again with `microphone: false` to record
+   without it. If the person has not answered about 200 seconds after the call, it returns
+   `{status: "running", job_id}`: call `wait_for_job` for the recording's result.
 4. Let the person perform the demo, or operate the recorded app with your own tools. Then
    `wait_for_recording` (`timeout_seconds` up to 240, default 120). `state: "finished"` carries the new
    `project_id`; `"cancelled"` means the person cancelled and nothing was saved. `"idle"` means the recording

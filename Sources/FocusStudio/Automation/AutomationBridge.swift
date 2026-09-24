@@ -32,7 +32,8 @@ import Foundation
 ///   job_id when the call outlasts ``AutomationJobs/detachAfter`` counted
 ///   from its arrival (`arrivedAt`: when it reached the app, less what the
 ///   helper had already spent on it), the approval prompt, its wait for a
-///   turn and start_recording's sound prompt included. A tool that bounds
+///   turn and start_recording's sound prompt and macOS microphone dialog
+///   included. A tool that bounds
 ///   its own wait (wait_for_recording, which also never takes a turn, so
 ///   status reads and stop_recording go on while it waits) and wait_for_job
 ///   are never detached; their wait is shortened instead so that it ends
@@ -41,6 +42,11 @@ import Foundation
 ///   sound their recorder settings leave off (``audioConsent``, naming the
 ///   client and the program that started it), and checks again after the
 ///   answer that the call may still run;
+/// - has macOS settle Focus Studio's microphone access before such a call's
+///   countdown when it will record the microphone
+///   (``StudioModel/microphoneAccess``), waiting at most that controller's
+///   timeout for macOS's dialog (the tool refuses a microphone macOS does
+///   not allow), and checks again after the person allowed it;
 /// - returns MCP's result shape: text, an inline JPEG for capture_frame,
 ///   the structured data, and `isError` with the error's text on failure.
 @MainActor
@@ -127,10 +133,12 @@ final class AutomationBridge {
         }
         let includesImage = spec.returnsImage
         let consent = audioConsentHandler(clientName: clientName, programName: programName, stillAllowed: stillAllowed)
+        let microphone = microphoneAccessHandler(stillAllowed: stillAllowed)
         return await jobs.run(tool: spec.name, clientName: clientName, arrivedAt: arrived, detaches: spec.detaches, progress: progress) { report in
             var context = prepared.context
             context.numericProgress = report
             context.recordingAudioConsent = consent
+            context.microphoneAccess = microphone
             do {
                 let result = try await tool.run(arguments: prepared.arguments.values, context: context, progress: { _ in })
                 return MCPToolCallResult(result, includesImage: includesImage)
@@ -161,6 +169,23 @@ final class AutomationBridge {
             case .declined, .timedOut, .refused:
                 return answer
             }
+        }
+    }
+
+    /// macOS's answer about the microphone for an external start_recording
+    /// that will record it: asked, when the person has never answered, with
+    /// a wait of at most the controller's timeout (the call's time keeps
+    /// running meanwhile, so a long wait detaches it as a job). A person who
+    /// just allowed it lets the recording go ahead only if the call may
+    /// still run, as after the sound prompt.
+    private func microphoneAccessHandler(stillAllowed: (@MainActor () -> String?)?) -> AIMicrophoneAccessHandler {
+        let access = model.microphoneAccess
+        let model = self.model
+        return { @MainActor progress in
+            let answer = await access.ensure(progress: progress, timeout: access.timeout)
+            guard case .authorized(askedNow: true) = answer else { return answer }
+            if let refusal = stillAllowed?() ?? model.automationNavigationRefusal { return .refused(refusal) }
+            return answer
         }
     }
 

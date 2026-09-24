@@ -55,8 +55,12 @@ public struct MCPToolCallResult: Equatable, Sendable {
         self.init(content: content, structuredContent: result.data)
     }
 
-    /// A failed call: the error's text, written for the model to act on.
+    /// A failed call: the error's text, written for the model to act on, and
+    /// the structured data of an ``AIToolFailure``.
     public static func failure(_ error: Error) -> MCPToolCallResult {
+        if let failure = error as? AIToolFailure {
+            return MCPToolCallResult(content: [.text(failure.message)], structuredContent: failure.data, isError: true)
+        }
         let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         return failure(message)
     }

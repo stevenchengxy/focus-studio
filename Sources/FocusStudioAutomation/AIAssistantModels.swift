@@ -132,6 +132,12 @@ public struct AIAssistantContext: Sendable {
     /// tests pass their own). Only external calls ask; with none set, such a
     /// call is refused rather than recording sound unasked.
     public var recordingAudioConsent: AIRecordingAudioConsentHandler?
+    /// Makes sure macOS has decided about Focus Studio's microphone access
+    /// before start_recording counts down to a recording that captures the
+    /// microphone (the app asks macOS then, not while the recording runs).
+    /// An external call is refused when the access is off; the in-app
+    /// assistant goes on as the person asked. Nil: not checked (unit tests).
+    public var microphoneAccess: AIMicrophoneAccessHandler?
 
     private var assetsDirectoryProvider: @Sendable () -> URL
     private var uiLanguageProvider: @Sendable () -> String
@@ -274,4 +280,20 @@ public enum AIToolError: LocalizedError, Equatable {
         case let .timedOut(message): return message
         }
     }
+}
+
+/// A tool failure that also hands programs structured data: an MCP client
+/// gets `data` as the `structuredContent` of its `isError` result (such as
+/// start_recording's `microphone_unavailable`); the in-app assistant reads
+/// only the message.
+public struct AIToolFailure: LocalizedError, Equatable, Sendable {
+    public var message: String
+    public var data: AIJSONValue
+
+    public init(_ message: String, data: AIJSONValue) {
+        self.message = message
+        self.data = data
+    }
+
+    public var errorDescription: String? { message }
 }

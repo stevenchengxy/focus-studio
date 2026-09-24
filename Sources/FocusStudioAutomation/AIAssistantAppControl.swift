@@ -236,6 +236,35 @@ public enum AIRecordingAudioConsent: Equatable, Sendable {
 /// the client keeps waiting. Never remembered: each recording asks again.
 public typealias AIRecordingAudioConsentHandler = @Sendable (AIRecordingAudioConsentRequest, AIToolProgressHandler?) async -> AIRecordingAudioConsent
 
+/// Whether macOS lets Focus Studio use the microphone, as start_recording
+/// learns it before the countdown of a recording that captures it.
+public enum AIMicrophoneAccess: Equatable, Sendable {
+    /// Focus Studio may use the microphone: it already could, or macOS asked
+    /// the person during this call (`askedNow`) and they allowed it.
+    case authorized(askedNow: Bool)
+    /// Focus Studio's microphone access is off (System Settings › Privacy &
+    /// Security › Microphone): the person turned it off before, or chose
+    /// Don't Allow when macOS asked during this call (`askedNow`).
+    case denied(askedNow: Bool)
+    /// Microphone access is restricted on this Mac (Screen Time, a device
+    /// management profile), so the person cannot allow it.
+    case restricted
+    /// macOS asked the person and nobody answered its dialog within this many
+    /// seconds; the dialog may still be on screen.
+    case timedOut(TimeInterval)
+    /// The call may no longer run (AI tools turned off, the client revoked
+    /// while macOS's dialog was up): the text for the model.
+    case refused(String)
+}
+
+/// Makes sure macOS has decided whether Focus Studio may use the microphone
+/// before a recording that captures it counts down, so that macOS's own
+/// dialog never comes up while the recording runs: when the person has
+/// never answered, it asks macOS (its dialog) and waits for the answer,
+/// reporting heartbeat progress meanwhile (when given a handler). Cancelling
+/// the caller ends the wait; the caller checks for cancellation itself.
+public typealias AIMicrophoneAccessHandler = @Sendable (AIToolProgressHandler?) async -> AIMicrophoneAccess
+
 /// How a recording attempt ended.
 public enum AIRecordingOutcome: Equatable, Sendable {
     /// Saved as this project, which the editor then showed.
@@ -786,6 +815,36 @@ struct StartRecordingTool: AIAssistantTool {
         let requestedOptions = options
         let allowedAudio = consent == .allowed ? asked : AIRecordingAudio()
         let isExternal = context.isExternal
+        // macOS's own permission for the microphone, settled before the
+        // countdown: otherwise macOS asks the first time the capture starts,
+        // while the recording already runs (a duration running out
+        // meanwhile, the start of the sound possibly missing, its dialog
+        // possibly in the video).
+        var askedForMicrophone = false
+        if let ensureMicrophone = context.microphoneAccess {
+            let recorder = await app.recorderAudio
+            let planned = isExternal ? Self.withoutUnallowedSound(requestedOptions, allowed: allowedAudio, recorder: recorder).0 : requestedOptions
+            if planned.microphone ?? recorder.microphone {
+                let access = await ensureMicrophone(context.numericProgress)
+                try Task.checkCancellation()
+                // The in-app assistant records as the person asked, whatever
+                // macOS answered, as their own recordings do.
+                if isExternal {
+                    switch access {
+                    case let .authorized(askedNow):
+                        askedForMicrophone = askedNow
+                    case let .denied(askedNow):
+                        throw Self.microphoneDenied(askedNow: askedNow)
+                    case .restricted:
+                        throw Self.microphoneRestricted()
+                    case let .timedOut(seconds):
+                        throw Self.microphoneUnanswered(seconds: seconds)
+                    case let .refused(message):
+                        throw AIToolError.failed(message)
+                    }
+                }
+            }
+        }
         let (sessionID, startedOptions, leftOff) = try await AIToolSupport.appAction(context) {
             try await MainActor.run { () throws -> (UUID, AIRecordingOptions, AIRecordingAudio) in
                 // Read in the same main-actor turn as the start: sound the
@@ -839,6 +898,9 @@ struct StartRecordingTool: AIAssistantTool {
             text += " Focus Studio asked the person about \(asked.phrase), and they chose to record without sound: this recording records no sound at all (microphone and system audio off), although you asked for \(asked.microphone && asked.systemAudio ? "them" : "it"). Do not turn sound on again unless the person asks for it."
         default:
             break
+        }
+        if askedForMicrophone {
+            text += " Before the countdown, macOS asked the person whether Focus Studio may use the microphone, and they allowed it."
         }
         if !leftOff.isEmpty {
             let phrase = leftOff.phrase
@@ -912,6 +974,58 @@ struct StartRecordingTool: AIAssistantTool {
 
     static func soundDeclinedMessage(_ audio: AIRecordingAudio) -> String {
         "The person did not allow sound: Focus Studio asked whether you may record \(audio.phrase) with this recording, and they chose Cancel recording, so nothing was recorded and nothing is recording. Do not retry with microphone or system_audio on unless the person asks for sound; to record the screen only, call start_recording again with microphone and system_audio false."
+    }
+
+    /// Where the person turns Focus Studio's microphone access on or off.
+    static let microphoneSettings = "System Settings › Privacy & Security › Microphone"
+
+    // The refusals of an external start_recording that would record the
+    // microphone macOS does not let Focus Studio use, or has not been
+    // answered about in time: nothing starts, and the model may record
+    // without the microphone instead.
+
+    /// Focus Studio's microphone access is off: turned off before, or the
+    /// person chose Don't Allow when macOS asked during this call (`askedNow`).
+    static func microphoneDenied(askedNow: Bool) -> AIToolFailure {
+        let text = askedNow
+            ? "Focus Studio may not use the microphone: before the countdown, macOS asked the person whether Focus Studio may use it, and they chose Don't Allow, which turns Focus Studio's microphone access off (\(microphoneSettings)). \(nothingRecorded) \(recordWithoutMicrophone); do not ask for the microphone again unless the person turns that access on."
+            : "Focus Studio may not use the microphone: the person has turned off Focus Studio's microphone access in \(microphoneSettings). \(nothingRecorded) \(recordWithoutMicrophone). To record the microphone, ask the person to turn that access on first, then call start_recording again."
+        return microphoneUnavailable(text, access: "denied", askedNow: askedNow)
+    }
+
+    /// Microphone access is restricted on this Mac.
+    static func microphoneRestricted() -> AIToolFailure {
+        microphoneUnavailable(
+            "Focus Studio may not use the microphone: microphone access is restricted on this Mac (Screen Time or a device management profile), so the person cannot turn it on in \(microphoneSettings). \(nothingRecorded) \(recordWithoutMicrophone).",
+            access: "restricted", askedNow: false
+        )
+    }
+
+    /// macOS asked the person and nobody answered its dialog in `seconds`.
+    static func microphoneUnanswered(seconds: TimeInterval) -> AIToolFailure {
+        let wait = seconds >= 1 ? "\(Int(seconds.rounded()))" : String(format: "%.1f", locale: Locale(identifier: "en_US_POSIX"), seconds)
+        return microphoneUnavailable(
+            "Focus Studio did not start the recording: before the countdown, macOS asked the person whether Focus Studio may use the microphone, and nobody answered its dialog within \(wait) seconds. \(nothingRecorded) macOS's dialog may still be on screen: ask the person to answer it, then call start_recording again. \(recordWithoutMicrophone).",
+            access: "not_determined", askedNow: true, waited: seconds
+        )
+    }
+
+    private static let nothingRecorded = "Nothing was recorded and nothing is recording."
+    private static let recordWithoutMicrophone = "To record without the microphone, call start_recording again with microphone false"
+
+    /// The text, and for programs: why (`microphone_access`: denied,
+    /// restricted or not_determined), whether macOS asked during this call,
+    /// where the setting is and the arguments that record without it.
+    private static func microphoneUnavailable(_ text: String, access: String, askedNow: Bool, waited: TimeInterval? = nil) -> AIToolFailure {
+        var data: [String: AIJSONValue] = [
+            "status": "microphone_unavailable",
+            "microphone_access": AIJSONValue(access),
+            "asked_now": AIJSONValue(askedNow),
+            "settings": AIJSONValue(microphoneSettings),
+            "retry_with": ["microphone": false],
+        ]
+        if let waited { data["waited"] = .rounded(waited, places: 1) }
+        return AIToolFailure(text, data: .object(data))
     }
 
     static func soundUnansweredMessage(_ audio: AIRecordingAudio, seconds: TimeInterval) -> String {

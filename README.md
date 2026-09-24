@@ -66,8 +66,9 @@ Focus Studio 是一个原生 macOS 产品 Demo 录制与编辑器，核心工作
 - **首次连接批准**：新的 AI 工具第一次调用时，应用弹窗显示它自报的名称和实际启动 helper 的程序路径，允许后记住。**设置 › AI 工具** 里有总开关"允许 AI 工具控制 Focus Studio"和已批准列表，可以随时撤销。helper 与应用只通过本机 Unix socket 通信（目录 0700、socket 0600、校验同一用户），不监听网络端口。
 - **录制**：`start_recording` 后，每块屏幕底部居中的录制控制条先显示 3 秒倒计时（写明哪个 AI 工具请求录制、录什么、是否录声音，可以取消；没有打开主窗口时也会出现），然后收起为录制条，你随时可以暂停/继续、结束或丢弃；控制条不会录进视频，结束的录制都保存到项目库（丢弃的移到废纸篓），没有静默录制。调用在录制真正开始后就返回，AI 可以用自己的工具操作被录的内容。`duration`（1–600 秒）按实际录下的时间计时：从第一帧算起，暂停的时间不算，录满后自动停止，控制条显示剩余录制时间；`wait_for_recording` 等待录制结束（每次最多 240 秒，没结束就再调用），`stop_recording` 立即停止（暂停中也可以），两者都返回新项目的 `project_id`；`wait_for_recording` 和 `get_status` 会报告录制是否处于暂停（`paused`）；录制已经结束时 `wait_for_recording` 返回 `idle`，`last_recording` 里是上一次录制怎样结束，保存了的话还有 `project_id`。录制沿用 Focus Studio 自己的录屏权限，不需要给终端授权。
 - **声音先问你**：AI 要为某次录制打开麦克风或系统音频（`microphone` / `system_audio`），而你在录制器里没有打开它们时，倒计时之前 Focus Studio 会弹窗写明哪个 AI 工具（以及实际启动它的程序）要录哪种声音、录什么，让你选 **仅本次允许**（Allow for this recording）、**无声录制**（Record without sound，只录画面、不录任何声音，录制器里本来打开的声音这次也不录；AI 会在结果里看到）或 **取消录制**（Cancel recording，Esc 同样取消，没有默认按钮）；60 秒没有回答就不录制。询问期间你在录制器里关掉的声音，这次录制也不会录。每次录制都重新询问，不会记住，也不改你的录制设置。不额外加声音的录制直接开始，不会被打断；应用内的 AI 助手由你自己操作，不会询问。
+- **麦克风权限先确认**：要录麦克风时（你在上面的询问里允许了，或录制器里本来就开着麦克风），Focus Studio 在倒计时之前先确认 macOS 是否允许它使用麦克风：从没问过时，macOS 的麦克风授权对话框在倒计时之前出现，等你回答后才开始倒计时，不会在录制中弹出；AI 工具的调用最多等 60 秒，没有回答就不录制（对话框可能还开着，之后的回答只由 macOS 记住，不会再开始录制）。如果你在 **系统设置 › 隐私与安全性 › 麦克风** 里关掉了 Focus Studio（或在对话框里选了不允许），AI 工具的这次录制不会开始，调用返回错误（`status` 为 `microphone_unavailable`），AI 可以改用 `microphone: false` 只录画面。你自己点录制和应用内的 AI 助手也在倒计时之前等 macOS 的回答，之后照旧开始录制。
 - **路径与保护**：相对路径按 AI 工具当前的工作目录解析。导出默认不覆盖已有文件（`overwrite: true` 才覆盖），也不会写项目自己的 `raw.mp4` 和素材；项目库只由应用写入，外部工具不能直接改 `project.json`。
-- **长操作**：导出和拼接发送进度通知。一个调用从到达 Focus Studio 算起约 200 秒后仍在进行时返回 `job_id`，用 `wait_for_job` 继续等；这 200 秒还扣除了 helper 启动应用、建立连接已经用掉的时间，等待批准、排队和等你回答声音询问的时间也都算在内，所以新 AI 工具的第一次调用同样会在 Codex 的 300 秒超时之内得到回答。批准面板 2 分钟内没人处理时，这次调用不执行，返回错误提示 AI 请你点允许后再调用一次（面板保持打开，再调用会等同一个面板）；极少数情况下（helper 启动和连接应用用了很久）调用的时间会先用完，这时返回 `waiting_for_approval`，处理方式相同。排队时时间用完（例如另一个 AI 工具的调用一直占着），调用同样不执行，返回 `waiting_for_turn`，AI 再调用一次即可；还在等你回答声音询问时，调用返回 `job_id`，AI 用 `wait_for_job` 取得录制结果。Codex 0.141.0 起默认 300 秒的工具超时足够，一般不需要改配置；更早的 Codex 默认只等 120 秒，请更新，或在 `~/.codex/config.toml` 的 `[mcp_servers.focus-studio]` 下设置 `tool_timeout_sec = 300`，详见 [安装与首次使用](docs/INSTALL.md) 的常见问题。
+- **长操作**：导出和拼接发送进度通知。一个调用从到达 Focus Studio 算起约 200 秒后仍在进行时返回 `job_id`，用 `wait_for_job` 继续等；这 200 秒还扣除了 helper 启动应用、建立连接已经用掉的时间，等待批准、排队和等你回答声音询问、macOS 麦克风授权的时间也都算在内，所以新 AI 工具的第一次调用同样会在 Codex 的 300 秒超时之内得到回答。批准面板 2 分钟内没人处理时，这次调用不执行，返回错误提示 AI 请你点允许后再调用一次（面板保持打开，再调用会等同一个面板）；极少数情况下（helper 启动和连接应用用了很久）调用的时间会先用完，这时返回 `waiting_for_approval`，处理方式相同。排队时时间用完（例如另一个 AI 工具的调用一直占着），调用同样不执行，返回 `waiting_for_turn`，AI 再调用一次即可；还在等你回答声音询问或 macOS 的麦克风授权时，调用返回 `job_id`，AI 用 `wait_for_job` 取得录制结果。Codex 0.141.0 起默认 300 秒的工具超时足够，一般不需要改配置；更早的 Codex 默认只等 120 秒，请更新，或在 `~/.codex/config.toml` 的 `[mcp_servers.focus-studio]` 下设置 `tool_timeout_sec = 300`，详见 [安装与首次使用](docs/INSTALL.md) 的常见问题。
 - **不开放**：付费生成（`generate_image` / `generate_video`）、点击和键盘输入、Shell 命令。需要 AI 片头片尾时，Claude Code 可以用 `skills/` 里的 Seedream / Seedance skill。
 
 24 个工具：
@@ -200,10 +201,10 @@ open "dist/Focus Studio.app"
 | Screen Recording | 录制画面、枚举屏幕与窗口 | 无法开始录制或选择目标 |
 | System Audio | 仅在手动开启 System audio 时；默认关闭 | 视频仍可录制，但不包含应用声音 |
 | Input Monitoring | 采集其他应用中的鼠标轨迹与点击 | 视频仍可录制，但自动 Zoom 的点击元数据可能缺失 |
-| Microphone | 仅在启用麦克风录音时 | 不会录入旁白 |
+| Microphone | 仅在启用麦克风录音时；第一次录麦克风时 macOS 在倒计时之前询问 | 不会录入旁白；AI 工具要录麦克风时不开始录制并返回错误 |
 | Accessibility | 输入时保持缩放、识别输入光标，以及 Codex Director 点击/滚动计划 | 视频仍能录制；外部输入活动、I-beam 检测和自动操作不可用 |
 
-进入录制页和点击 Start 不会主动请求可选权限。System audio 默认关闭；只有用户手动开启它时，macOS 才可能显示系统音频提示。Input Monitoring 未授权时只显示非阻断警告，不会自动打开系统设置。
+进入录制页和点击 Start 不会主动请求可选权限；唯一的例外是开着麦克风开始录制而 macOS 还没问过麦克风权限时，macOS 的授权对话框在倒计时之前出现（否则它会在录制开始后弹出），回答后照常倒计时。System audio 默认关闭；只有用户手动开启它时，macOS 才可能显示系统音频提示。Input Monitoring 未授权时只显示非阻断警告，不会自动打开系统设置。
 
 首次授权 Screen Recording、Input Monitoring 或 Accessibility 后，macOS 可能要求重启应用。请完全退出 Focus Studio，再重新打开 `dist/Focus Studio.app`。如果 Screen Recording 已显示开启但应用仍提示无权限，可将对应开关关闭再打开一次，然后重启应用。
 

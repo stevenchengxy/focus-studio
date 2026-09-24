@@ -75,6 +75,11 @@ final class StudioModel: ObservableObject {
     /// countdown and the control bar name it (set by the app's services;
     /// nil in tests and for the person's own recordings).
     var automationRequester: (@MainActor () -> String?)?
+    /// Settles macOS's microphone permission before a recording that
+    /// captures the microphone counts down: the person's Record, the in-app
+    /// assistant's start_recording and an AI tool's (through the automation
+    /// bridge) share it, so they share one macOS dialog.
+    let microphoneAccess: MicrophoneAccessController
 
     let captureEngine = CaptureEngine()
     let codexDirector = CodexDirectorService()
@@ -128,6 +133,9 @@ final class StudioModel: ObservableObject {
     private var captureFailureObserver: AnyCancellable?
     private var screenshotNoticeTask: Task<Void, Never>?
     private var recordingCountdownTask: Task<Void, Never>?
+    /// The person's Record is waiting for macOS's microphone dialog, before
+    /// its countdown (``startRecordingCountdown(allowUnavailableTracking:)``).
+    private var microphoneAccessTask: Task<Void, Never>?
     /// Identifies the task stored in `recordingCountdownTask`. This is kept
     /// separate from `recordingAttemptID`, which is intentionally cleared as
     /// soon as capture starts. Without a task token, a cancelled countdown's
@@ -156,9 +164,12 @@ final class StudioModel: ObservableObject {
         pauseCapture: CapturePauseControl = .engine,
         recordingClock: RecordingClock = .system,
         assistantCompletion: (any TextCompletionProviding)? = nil,
-        assistantHistoryURL: URL? = nil
+        assistantHistoryURL: URL? = nil,
+        microphoneAccess: MicrophoneAccessController? = nil
     ) {
         self.store = store
+        // macOS's own status and dialog unless a test scripts them.
+        self.microphoneAccess = microphoneAccess ?? MicrophoneAccessController()
         self.startCapture = startCapture
         self.cancelCapture = cancelCapture
         self.discardCapture = discardCapture
@@ -343,7 +354,7 @@ final class StudioModel: ObservableObject {
     ) -> AIAssistantContext {
         let arkBase = URL(string: aiGateway.configuration(for: .volcengineArk).effectiveBaseURL)
             ?? URL(string: "https://ark.cn-beijing.volces.com/api/v3")!
-        return AIAssistantContext(
+        var context = AIAssistantContext(
             assetsDirectoryProvider: assetsDirectory,
             uiLanguageProvider: language,
             readProject: { [weak self] in self?.activeProject },
@@ -357,6 +368,16 @@ final class StudioModel: ObservableObject {
             projectsDirectory: store.projectsDirectory,
             app: self
         )
+        // macOS asks about the microphone before the countdown; the in-app
+        // assistant then records as the person asked, whatever the answer,
+        // like their own Record. An AI tool's call replaces this
+        // (AutomationBridge) with one that waits a bounded time and refuses
+        // a microphone macOS does not allow.
+        let microphone = microphoneAccess
+        context.microphoneAccess = { @MainActor progress in
+            await microphone.ensure(progress: progress, timeout: nil)
+        }
+        return context
     }
 
     /// The shared AI Assets folder, next to the library: where generated
@@ -704,6 +725,10 @@ final class StudioModel: ObservableObject {
     }
 
     func startRecordingCountdown(allowUnavailableTracking: Bool = false) {
+        startRecordingCountdown(allowUnavailableTracking: allowUnavailableTracking, microphoneSettled: false)
+    }
+
+    private func startRecordingCountdown(allowUnavailableTracking: Bool, microphoneSettled: Bool) {
         guard let target = selectedTarget else {
             showMessage("Choose a display, window, or area to record.")
             return
@@ -713,13 +738,49 @@ final class StudioModel: ObservableObject {
             showMessage("Choose a display, then draw the recording area")
             return
         }
+        // The first recording with the microphone: macOS asks whether Focus
+        // Studio may use it now, before the countdown, rather than when the
+        // capture starts, while the recording already runs (its dialog could
+        // be recorded and the start of the sound lost). Whatever the person
+        // answers, the countdown then starts as before, if they are still on
+        // the recorder with the same source and nothing else has started
+        // meanwhile. While macOS asks, automation leaves the recorder alone
+        // (``isWaitingForMicrophoneAccess``).
+        if recordMicrophone, !microphoneSettled, microphoneAccess.authorization == .notDetermined {
+            // The alert about interaction tracking first, while the click
+            // that asked is still being handled: the control bar's Start,
+            // clicked in another app, brings Focus Studio forward for that
+            // alert only when it is up once this call returns.
+            guard confirmInteractionTrackingBeforeRecording(allowUnavailable: allowUnavailableTracking) else { return }
+            let access = microphoneAccess
+            let chosenID = target.id
+            microphoneAccessTask = Task { @MainActor [weak self] in
+                _ = await access.ensure(progress: nil, timeout: nil)
+                guard let self else { return }
+                self.microphoneAccessTask = nil
+                // Never a source the person did not click Record for.
+                guard self.destination == .recorder, self.selectedTargetID == chosenID else { return }
+                self.startRecordingCountdown(allowUnavailableTracking: allowUnavailableTracking, microphoneSettled: true)
+                // An alert raised only now (tracking turned off meanwhile)
+                // needs Focus Studio in front to be seen.
+                if self.isShowingInteractionSetup { self.bringToFront() }
+            }
+            return
+        }
         beginRecordingCountdown(target: target, settings: recorderSettings, duration: nil, allowUnavailableTracking: allowUnavailableTracking)
     }
 
+    /// Whether the person's Record waits for macOS's microphone dialog. Its
+    /// countdown starts when they answer, so meanwhile automation refuses to
+    /// change the recorder's source or leave the recorder
+    /// (``automationNavigationRefusal``, ``waitingForMicrophoneRefusal``).
+    var isWaitingForMicrophoneAccess: Bool { microphoneAccessTask != nil }
+
     /// No countdown, capture, stop, area selection, library operation or
-    /// other busy work is under way, so a new countdown may start.
+    /// other busy work is under way (nor a Record waiting for macOS's
+    /// microphone dialog), so a new countdown may start.
     private var canBeginRecordingCountdown: Bool {
-        recordingCountdownTask == nil && !captureEngine.isRecording && currentRecording?.isLive != true
+        recordingCountdownTask == nil && microphoneAccessTask == nil && !captureEngine.isRecording && currentRecording?.isLive != true
             && !isFinishingRecording && !isSelectingArea && !isBusy && !isManagingProjects
     }
 

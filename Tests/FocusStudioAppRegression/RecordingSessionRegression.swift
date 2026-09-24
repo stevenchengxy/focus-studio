@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import CoreGraphics
 import FocusStudioAutomation
 import FocusStudioCapture
@@ -56,7 +57,21 @@ import UniformTypeIdentifiers
 ///   the program that started it; waits 60 s by default; keeps the client
 ///   alive with heartbeats above the approval prompt's and the wait for a
 ///   turn's; and the prompt's wait counts toward the detach threshold from
-///   the call's arrival. The recorder's own choices never change.
+///   the call's arrival. The recorder's own choices never change;
+/// - macOS's microphone permission (scripted: its status and its dialog) is
+///   settled before the countdown of a recording that will record the
+///   microphone, never while it runs: the controller asks macOS only when
+///   the person has never answered, once for everyone waiting, with
+///   heartbeats above the sound prompt's, and stops waiting at its timeout
+///   or when the caller is cancelled (a late answer is only remembered); an
+///   AI tool's start_recording (after the sound prompt, or for the
+///   recorder's own microphone) counts down only once macOS allows it and
+///   otherwise answers isError with structured data (Don't Allow, turned off
+///   before, restricted, no answer in time, AI tools turned off meanwhile),
+///   with nothing recorded; a cancelled call records nothing; the wait
+///   counts toward the detach threshold; the person's Record and the in-app
+///   assistant wait for macOS's answer before their countdown and then
+///   record as before, whatever it is.
 @MainActor
 enum RecordingSessionRegression {
     static func run() async throws {
@@ -77,7 +92,13 @@ enum RecordingSessionRegression {
         try codexPlanSaveIsStopping()
         try await soundConsent()
         try await soundPromptWithinTheCallsTime()
-        print("RecordingSessionRegression: PASS (countdown and automatic stop on a manual clock, the duration measured from the first frame, Finish/Cancel cancel the automatic stop and Cancel stops the capture, the automatic stop joined by stop_recording and wait_for_recording with one project, get_status and the call queue free while wait_for_recording waits and no job for it, a late wait_for_recording shortened to its maximum from the call's arrival, Cancel ignored and starts refused while saving, per-recording options (browser_content_only's crop, audio shown) with the recorder's choices unchanged, discarding a countdown, a capture start or a live recording (moved to the Trash like Cancel), pause and resume (paused time left out of the duration, elapsed and remaining; reported by get_status and wait_for_recording, also while the pause flushes; stop and cancel while paused), the countdown naming the AI tool and the control bar's pages (only the countdown and the recording stay when the app is hidden), no main window over a recording, the editor brought forward after a stop asked for in the app (Finish, the in-app assistant, its recording's duration, a Finish joining an external stop) but never after an external AI tool's stop or its recording's duration, automation refused while an area is drawn with the recorder's source unchanged, a Codex plan's save is stopping, the sound prompt before the countdown for sound the recorder leaves off (60 s by default as the catalog says, naming the client and the program that started it; allow, record without sound with no sound at all even when the recorder records some, cancel, no answer closes it, turned off meanwhile, a recorder sound turned off while it is up stays off, cancelled call, heartbeats above the approval's and the turn's; none for no sound, the recorder's own sound or the in-app assistant; the recorder's choices unchanged; its wait detaching as a job from the call's arrival))")
+        try await microphoneAccessController()
+        try await microphoneBeforeTheCountdown()
+        try await microphoneWaitWithinTheCallsTime()
+        try await microphoneForThePersonsRecord()
+        try await automationWaitsForThePersonsRecord()
+        try await trackingAlertBeforeTheMicrophone()
+        print("RecordingSessionRegression: PASS (countdown and automatic stop on a manual clock, the duration measured from the first frame, Finish/Cancel cancel the automatic stop and Cancel stops the capture, the automatic stop joined by stop_recording and wait_for_recording with one project, get_status and the call queue free while wait_for_recording waits and no job for it, a late wait_for_recording shortened to its maximum from the call's arrival, Cancel ignored and starts refused while saving, per-recording options (browser_content_only's crop, audio shown) with the recorder's choices unchanged, discarding a countdown, a capture start or a live recording (moved to the Trash like Cancel), pause and resume (paused time left out of the duration, elapsed and remaining; reported by get_status and wait_for_recording, also while the pause flushes; stop and cancel while paused), the countdown naming the AI tool and the control bar's pages (only the countdown and the recording stay when the app is hidden), no main window over a recording, the editor brought forward after a stop asked for in the app (Finish, the in-app assistant, its recording's duration, a Finish joining an external stop) but never after an external AI tool's stop or its recording's duration, automation refused while an area is drawn with the recorder's source unchanged, a Codex plan's save is stopping, the sound prompt before the countdown for sound the recorder leaves off (60 s by default as the catalog says, naming the client and the program that started it; allow, record without sound with no sound at all even when the recorder records some, cancel, no answer closes it, turned off meanwhile, a recorder sound turned off while it is up stays off, cancelled call, heartbeats above the approval's and the turn's; none for no sound, the recorder's own sound or the in-app assistant; the recorder's choices unchanged; its wait detaching as a job from the call's arrival), macOS's microphone permission settled before the countdown (the controller: one dialog for every caller, heartbeats above the sound prompt's, its timeout, a cancelled wait, a late answer only remembered; an AI tool's start_recording: never asked then allowed, Don't Allow, turned off before, restricted, no answer in time with the late answer starting nothing, a cancelled call, AI tools turned off meanwhile, the recorder's own microphone, none for record without sound or without the microphone, the wait detaching as a job; the person's Record and the in-app assistant wait for the answer, then record as before; while the person's Record waits, an AI tool's start_recording (with no sound of its own, or after its sound prompt), the in-app start, delete_project and an edit that opens a project are refused with the recorder's source unchanged, and the person's Record then records the source they chose, never a source changed meanwhile; the interaction-tracking alert comes up before macOS's dialog, while the Record click is handled))")
     }
 
     // MARK: - Duration
@@ -903,7 +924,7 @@ enum RecordingSessionRegression {
 
         // The in-app assistant: the person drives it, so it never asks.
         let inApp = model.assistantSession.context
-        try expect(!inApp.isExternal && inApp.recordingAudioConsent == nil, "The in-app assistant's context is not external")
+        try expect(!inApp.isExternal && inApp.recordingAudioConsent == nil && inApp.microphoneAccess != nil, "The in-app assistant's context is not external, and checks macOS's microphone access")
         let inAppTool = try unwrap(AIAssistantToolCatalog.standard.first { $0.name == "start_recording" }, "The in-app assistant has start_recording")
         let inAppDone = TestBox(false)
         let inAppCall = Task { @MainActor in
@@ -953,6 +974,483 @@ enum RecordingSessionRegression {
         try expect(!collected.isError && collected.structuredContent?["state"] == "recording" && collected.structuredContent?["audio_consent"] == ["asked": ["microphone"], "answer": "allowed"],
                    "wait_for_job returns the recording: \(collected.json)")
         try expect(capture.starts.last?.options.microphone == true && model.recorderSettings == choices, "Recorded with the microphone; the recorder unchanged")
+        await model.stopRecording()
+    }
+
+    // MARK: - Microphone permission
+
+    /// The controller asks macOS only when the person has never answered,
+    /// once for everyone waiting, with heartbeats above the sound prompt's;
+    /// a wait ends at its timeout or when its caller is cancelled, while
+    /// macOS's dialog stays up and its late answer is only remembered.
+    private static func microphoneAccessController() async throws {
+        try expect(MicrophoneAuthorization(.notDetermined) == .notDetermined && MicrophoneAuthorization(.authorized) == .authorized
+                   && MicrophoneAuthorization(.denied) == .denied && MicrophoneAuthorization(.restricted) == .restricted, "macOS's statuses map one to one")
+        // One call's heartbeats rise from the sound prompt's (which comes
+        // first) to macOS's microphone dialog's.
+        let soundMost = AutomationAudioConsentController.heartbeatBase
+            + ((AutomationAudioConsentController.defaultTimeout / AutomationAudioConsentController.defaultHeartbeatInterval).rounded(.up) + 2) * AutomationAudioConsentController.heartbeatStep
+        try expect(soundMost < MicrophoneAccessController.heartbeatBase, "The sound prompt's heartbeats (up to \(soundMost)) stay below the microphone dialog's (from \(MicrophoneAccessController.heartbeatBase))")
+        // An AI tool's call waits 60 s for macOS's answer (AppServices uses
+        // the defaults), as start_recording's description says.
+        try expect(MicrophoneAccessController.defaultTimeout == 60 && MicrophoneAccessController().timeout == 60, "The call waits 60 s for macOS's dialog by default")
+        let startText = try unwrap(MCPToolCatalog.v1.tool(named: "start_recording"), "start_recording").description
+        try expect(startText.contains("no answer to it within \(Int(MicrophoneAccessController.defaultTimeout)) seconds cancels too"), "start_recording promises that wait: \(startText)")
+
+        let microphone = ScriptedMicrophone()
+        let access = microphone.controller(timeout: 5, heartbeatInterval: 0.05)
+        // Decided already: macOS is not asked, nothing is reported.
+        for (status, expected) in [(MicrophoneAuthorization.authorized, AIMicrophoneAccess.authorized(askedNow: false)), (.denied, .denied(askedNow: false)), (.restricted, .restricted)] {
+            microphone.status = status
+            let reports = ProgressReports()
+            let answer = await access.ensure(progress: reports.handler, timeout: 5)
+            try expect(answer == expected && microphone.requests == 0 && reports.values.isEmpty, "\(status): \(answer), no dialog, no progress")
+        }
+
+        // Never asked: one dialog for both callers, heartbeats while it is up.
+        microphone.status = .notDetermined
+        let reports = ProgressReports()
+        let first = Task { @MainActor in await access.ensure(progress: reports.handler, timeout: 5) }
+        let second = Task { @MainActor in await access.ensure(progress: nil, timeout: nil) }
+        try await waitUntil("macOS's dialog") { microphone.heldCount == 1 && access.waitingCount == 2 }
+        try await Task.sleep(for: .milliseconds(200))
+        try expect(microphone.requests == 1 && access.isAsking, "One dialog for both callers: \(microphone.requests)")
+        microphone.answer(true)
+        let (firstAnswer, secondAnswer) = (await first.value, await second.value)
+        try expect(firstAnswer == .authorized(askedNow: true) && secondAnswer == .authorized(askedNow: true) && !access.isAsking && access.waitingCount == 0,
+                   "Both get the person's Allow: \(firstAnswer), \(secondAnswer)")
+        let values = reports.values
+        try expect(values.count >= 4 && zip(values, values.dropFirst()).allSatisfy { $0.progress < $1.progress } && values.allSatisfy { $0.progress > MicrophoneAccessController.heartbeatBase && $0.total == nil }
+                   && values.dropLast().allSatisfy { $0.message == MicrophoneAccessController.waitingMessage } && values.last?.message == nil,
+                   "Heartbeats while macOS asks, then one without a message: \(values.map { "\($0.progress) \($0.message ?? "-")" })")
+        let allowedNow = await access.ensure(progress: nil, timeout: 5)
+        try expect(allowedNow == .authorized(askedNow: false) && microphone.requests == 1, "Allowed from then on, without asking again")
+
+        // Don't Allow; and Don't Allow where access turns out restricted.
+        for (status, expected) in [(MicrophoneAuthorization.denied, AIMicrophoneAccess.denied(askedNow: true)), (.restricted, .restricted)] {
+            microphone.status = .notDetermined
+            let asking = Task { @MainActor in await access.ensure(progress: nil, timeout: 5) }
+            try await waitUntil("macOS's dialog") { microphone.heldCount == 1 }
+            microphone.answer(false, status: status)
+            let answer = await asking.value
+            try expect(answer == expected, "Don't Allow with macOS then reporting \(status): \(answer)")
+        }
+
+        // No answer in time: the wait ends, the dialog stays up; a later
+        // caller waits for that same dialog, and a cancelled one stops at once.
+        microphone.status = .notDetermined
+        let impatient = microphone.controller(timeout: 0.2, heartbeatInterval: 0.05)
+        let requestsBefore = microphone.requests
+        let unanswered = await impatient.ensure(progress: nil, timeout: impatient.timeout)
+        try expect(unanswered == .timedOut(0.2) && microphone.heldCount == 1 && impatient.isAsking && microphone.requests == requestsBefore + 1,
+                   "No answer within the timeout: \(unanswered), the dialog still up")
+        let again = Task { @MainActor in await impatient.ensure(progress: nil, timeout: 5) }
+        let cancelled = Task { @MainActor in await impatient.ensure(progress: nil, timeout: nil) }
+        try await waitUntil("both callers waiting") { impatient.waitingCount == 2 }
+        cancelled.cancel()
+        let cancelledAnswer = await cancelled.value
+        try expect(cancelledAnswer == .timedOut(0) && impatient.waitingCount == 1 && microphone.requests == requestsBefore + 1,
+                   "A cancelled caller stops waiting at once; nobody asked macOS again: \(cancelledAnswer)")
+        microphone.answer(true)
+        let late = await again.value
+        try expect(late == .authorized(askedNow: true) && !impatient.isAsking, "The caller still waiting gets the late answer: \(late)")
+    }
+
+    /// An AI tool's start_recording that will record the microphone has macOS
+    /// settle Focus Studio's access after the sound prompt and before the
+    /// countdown, and records only when macOS allows it.
+    private static func microphoneBeforeTheCountdown() async throws {
+        let fixture = try await SessionFixture()
+        defer { fixture.cleanup() }
+        let (model, capture, microphone) = (fixture.model, fixture.capture, fixture.microphone)
+        try model.captureEngine.registerAreaTarget(soundArea)
+        let prompter = ScriptedSoundPrompter()
+        prompter.mode = .answer(.allow)
+        let bridge = AutomationBridge(model: model)
+        bridge.audioConsent = AutomationAudioConsentController(timeout: 5, heartbeatInterval: 0.05) { await prompter.prompt($0) }
+        let choices = model.recorderSettings
+        let settingsPath = "System Settings › Privacy & Security › Microphone"
+
+        // Never asked, then allowed: macOS's dialog comes after the sound
+        // prompt and before the countdown, and the call's progress keeps rising.
+        microphone.status = .notDetermined
+        let beats = ProgressReports()
+        let granting = Task { @MainActor in try await record(["microphone": true], fixture: fixture, bridge: bridge, progress: beats.handler) }
+        try await waitUntil("macOS's microphone dialog") { microphone.heldCount == 1 }
+        try await Task.sleep(for: .milliseconds(250))
+        try expect(prompter.requests.count == 1 && model.recordingPhase == .idle && model.destination != .countdown && capture.starts.isEmpty,
+                   "No countdown while macOS asks, after the sound prompt")
+        microphone.answer(true)
+        let allowed = try result(try await granting.value, "allowed in macOS's dialog")
+        try expect(!allowed.isError && allowed.text.contains("macOS asked the person whether Focus Studio may use the microphone, and they allowed it")
+                   && capture.starts.last?.options.microphone == true && microphone.requests == 1, "Recorded with the microphone once macOS allowed it: \(allowed.json)")
+        let values = beats.values
+        let lastSound = values.lastIndex { ($0.message ?? "").contains("sound prompt") }
+        let firstMicrophone = values.firstIndex { $0.message == MicrophoneAccessController.waitingMessage }
+        try expect(zip(values, values.dropFirst()).allSatisfy { $0.progress < $1.progress } && lastSound != nil && firstMicrophone != nil && lastSound! < firstMicrophone!
+                   && values.filter { $0.message == MicrophoneAccessController.waitingMessage }.count >= 3 && values.last?.message == nil,
+                   "The sound prompt's heartbeats, then macOS's dialog's, always increasing: \(values.map { "\($0.progress) \($0.message ?? "-")" })")
+        await model.stopRecording()
+
+        // Allowed before: no dialog, and the text says nothing about one.
+        let allowedBefore = try result(try await record(["microphone": true], fixture: fixture, bridge: bridge), "allowed before")
+        try expect(!allowedBefore.isError && !allowedBefore.text.contains("macOS asked") && microphone.requests == 1 && capture.starts.last?.options.microphone == true,
+                   "Allowed before: recorded without asking: \(allowedBefore.text)")
+        await model.stopRecording()
+
+        // Never asked, then Don't Allow: nothing counts down; the model reads why and what to do.
+        microphone.status = .notDetermined
+        let denying = Task { @MainActor in try await record(["microphone": true], fixture: fixture, bridge: bridge) }
+        try await waitUntil("macOS's microphone dialog") { microphone.heldCount == 1 }
+        let startsBefore = capture.starts.count
+        microphone.answer(false)
+        let denied = try result(try await denying.value, "Don't Allow")
+        try expect(denied.isError && denied.text.contains("chose Don't Allow") && denied.text.contains(settingsPath) && denied.text.contains("call start_recording again with microphone false")
+                   && denied.structuredContent?["status"] == "microphone_unavailable" && denied.structuredContent?["microphone_access"] == "denied"
+                   && denied.structuredContent?["asked_now"] == true && denied.structuredContent?["retry_with"] == ["microphone": false], "Don't Allow: \(denied.json)")
+        try expect(capture.starts.count == startsBefore && model.recordingPhase == .idle && model.destination != .countdown && model.recorderSettings == choices, "Nothing counted down or recorded")
+
+        // Turned off before, or restricted: refused at once, without a dialog.
+        for (status, state) in [(MicrophoneAuthorization.denied, "denied"), (.restricted, "restricted")] {
+            microphone.status = status
+            let requestsBefore = microphone.requests
+            let refused = try result(try await record(["microphone": true], fixture: fixture, bridge: bridge), "\(status)")
+            try expect(refused.isError && refused.structuredContent?["microphone_access"] == AIJSONValue(state) && refused.structuredContent?["asked_now"] == false
+                       && microphone.requests == requestsBefore && capture.starts.count == startsBefore && model.recordingPhase == .idle, "\(status): refused without a dialog: \(refused.json)")
+            if status == .denied {
+                try expect(refused.text.contains("the person has turned off Focus Studio's microphone access in \(settingsPath)"), "Turned off before: \(refused.text)")
+            }
+        }
+        // Without the microphone the same call records the screen.
+        let screenOnly = try result(try await record(["microphone": false], fixture: fixture, bridge: bridge), "without the microphone")
+        try expect(!screenOnly.isError && capture.starts.last?.options.microphone == false, "Recorded without the microphone: \(screenOnly.json)")
+        await model.stopRecording()
+
+        // Record without sound, or a call without the microphone, never asks macOS.
+        microphone.status = .notDetermined
+        prompter.mode = .answer(.withoutSound)
+        let requestsBefore = microphone.requests
+        let silent = try result(try await record(["microphone": true], fixture: fixture, bridge: bridge), "record without sound")
+        try expect(!silent.isError && capture.starts.last?.options.microphone == false && microphone.requests == requestsBefore, "Record without sound: no dialog")
+        await model.stopRecording()
+        prompter.mode = .answer(.allow)
+        let quiet = try result(try await record(["system_audio": true], fixture: fixture, bridge: bridge), "system audio only")
+        try expect(!quiet.isError && microphone.requests == requestsBefore, "No microphone, no dialog")
+        await model.stopRecording()
+
+        // The recorder's own microphone: no sound prompt, but macOS still
+        // settles its access before the countdown.
+        model.recordMicrophone = true
+        let promptsBefore = prompter.requests.count
+        let own = Task { @MainActor in try await record([:], fixture: fixture, bridge: bridge) }
+        try await waitUntil("macOS's dialog for the recorder's microphone") { microphone.heldCount == 1 }
+        try expect(model.recordingPhase == .idle && prompter.requests.count == promptsBefore, "No sound prompt and no countdown while macOS asks")
+        microphone.answer(true)
+        let ownResult = try result(try await own.value, "the recorder's own microphone")
+        try expect(!ownResult.isError && capture.starts.last?.options.microphone == true, "Recorded with the recorder's microphone: \(ownResult.json)")
+        await model.stopRecording()
+        microphone.status = .denied
+        let ownStarts = capture.starts.count
+        let ownRefused = try result(try await record([:], fixture: fixture, bridge: bridge), "the recorder's microphone, turned off in macOS")
+        try expect(ownRefused.isError && ownRefused.structuredContent?["status"] == "microphone_unavailable" && capture.starts.count == ownStarts,
+                   "The recorder's microphone turned off in macOS: refused: \(ownRefused.text)")
+        model.recordMicrophone = false
+
+        // A call cancelled while macOS asks records nothing; the dialog stays.
+        microphone.status = .notDetermined
+        let cancelledCall = Task { @MainActor in
+            await bridge.call(toolName: "start_recording", arguments: ["source": soundArea.id, "microphone": true], workingDirectory: nil, clientName: "Claude Code", progress: nil)
+        }
+        try await waitUntil("macOS's microphone dialog") { microphone.heldCount == 1 && model.microphoneAccess.waitingCount == 1 }
+        cancelledCall.cancel()
+        let cancelledOutcome = await cancelledCall.value
+        try expect(cancelledOutcome == .cancelled && model.recordingPhase == .idle && capture.starts.count == ownStarts && microphone.heldCount == 1,
+                   "A cancelled call records nothing: \(cancelledOutcome)")
+
+        // AI tools turned off (or the client revoked) while macOS asked:
+        // refused even after the person allowed the microphone. The call
+        // waits for the dialog already up.
+        let turnedOff = TestBox(false)
+        let offCall = Task { @MainActor in
+            try await record(["microphone": true], fixture: fixture, bridge: bridge, stillAllowed: { turnedOff.value ? AutomationSwitch.disabledMessage(tool: "start_recording") : nil })
+        }
+        try await waitUntil("the call waiting for macOS's dialog") { model.microphoneAccess.waitingCount == 1 }
+        let requestsNow = microphone.requests
+        turnedOff.value = true
+        microphone.answer(true)
+        let off = try result(try await offCall.value, "turned off while macOS asked")
+        try expect(off.isError && off.text == AutomationSwitch.disabledMessage(tool: "start_recording") && capture.starts.count == ownStarts && model.recordingPhase == .idle
+                   && microphone.requests == requestsNow, "Refused after macOS's answer, one dialog for both calls: \(off.text)")
+        try expect(model.recorderSettings == choices, "The recorder's own choices never changed")
+
+        // No answer in time: nothing records, and the late answer starts nothing.
+        let impatient = try await SessionFixture(microphoneTimeout: 0.3)
+        defer { impatient.cleanup() }
+        try impatient.model.captureEngine.registerAreaTarget(soundArea)
+        let timing = AutomationBridge(model: impatient.model)
+        timing.audioConsent = AutomationAudioConsentController(timeout: 5, heartbeatInterval: 0.05) { await prompter.prompt($0) }
+        impatient.microphone.status = .notDetermined
+        let unanswered = try result(try await record(["microphone": true], fixture: impatient, bridge: timing), "no answer")
+        try expect(unanswered.isError && unanswered.text.contains("nobody answered its dialog within 0.3 seconds") && unanswered.text.contains("may still be on screen")
+                   && unanswered.structuredContent?["microphone_access"] == "not_determined" && unanswered.structuredContent?["waited"] == 0.3,
+                   "No answer: \(unanswered.json)")
+        try expect(impatient.capture.starts.isEmpty && impatient.model.recordingPhase == .idle && impatient.microphone.heldCount == 1, "Nothing recorded; macOS's dialog is still up")
+        impatient.microphone.answer(true)
+        try await Task.sleep(for: .milliseconds(200))
+        try expect(impatient.capture.starts.isEmpty && impatient.model.recordingPhase == .idle && impatient.model.destination != .countdown, "The late answer starts nothing")
+    }
+
+    /// macOS's dialog counts toward the call's time like the other prompts:
+    /// still unanswered when the time is up, the call answers with a job
+    /// that says what it waits for; wait_for_job collects the recording.
+    private static func microphoneWaitWithinTheCallsTime() async throws {
+        let fixture = try await SessionFixture()
+        defer { fixture.cleanup() }
+        let (model, capture, microphone) = (fixture.model, fixture.capture, fixture.microphone)
+        try model.captureEngine.registerAreaTarget(soundArea)
+        let prompter = ScriptedSoundPrompter()
+        prompter.mode = .answer(.allow)
+        let bridge = AutomationBridge(model: model, jobs: AutomationJobs(detachAfter: 1))
+        bridge.audioConsent = AutomationAudioConsentController(timeout: 5, heartbeatInterval: 0.05) { await prompter.prompt($0) }
+        microphone.status = .notDetermined
+
+        let asked = Date()
+        let running = try result(try await record(["microphone": true], fixture: fixture, bridge: bridge, arrivedAt: Date().addingTimeInterval(-0.8)), "detached")
+        let took = Date().timeIntervalSince(asked)
+        let jobID = try unwrap(running.structuredContent?["job_id"]?.stringValue, "A job id: \(running.json)")
+        try expect(!running.isError && running.structuredContent?["status"] == "running" && took < 0.7, "Detached from the call's arrival, after \(took) s: \(running.json)")
+        try expect(running.structuredContent?["activity"] == "waiting for the person to answer macOS's microphone access prompt for Focus Studio",
+                   "The running status says it waits for macOS's dialog: \(running.json)")
+        try expect(microphone.heldCount == 1 && model.recordingPhase == .idle && capture.starts.isEmpty, "The dialog is still up and nothing counts down")
+
+        microphone.answer(true)
+        try await waitUntil("The allowed job did not count down") { model.recordingPhase == .countdown }
+        try await fixture.runCountdown()
+        let collected = try result(await bridge.call(toolName: "wait_for_job", arguments: ["job_id": jobID, "timeout_seconds": 10], workingDirectory: nil, clientName: "Claude Code", progress: nil), "wait_for_job")
+        try expect(!collected.isError && collected.structuredContent?["state"] == "recording" && collected.text.contains("macOS asked the person"),
+                   "wait_for_job returns the recording: \(collected.json)")
+        try expect(capture.starts.last?.options.microphone == true, "Recorded with the microphone")
+        await model.stopRecording()
+    }
+
+    /// The person's Record and the in-app assistant: macOS asks before the
+    /// countdown, not while the recording runs; then they record as before,
+    /// whatever the answer.
+    private static func microphoneForThePersonsRecord() async throws {
+        let fixture = try await SessionFixture()
+        defer { fixture.cleanup() }
+        let (model, capture, microphone) = (fixture.model, fixture.capture, fixture.microphone)
+        try model.captureEngine.registerAreaTarget(soundArea)
+        model.destination = .recorder
+        model.selectToolbarTarget(soundArea)
+        model.recordMicrophone = true
+
+        for granted in [true, false] {
+            microphone.status = .notDetermined
+            let startsBefore = capture.starts.count
+            let requestsBefore = microphone.requests
+            model.startRecordingCountdown()
+            try await waitUntil("macOS's dialog for the person's Record") { microphone.heldCount == 1 }
+            try expect(model.isWaitingForMicrophoneAccess && model.destination == .recorder && model.recordingPhase == .idle && capture.starts.count == startsBefore,
+                       "No countdown while macOS asks")
+            model.startRecordingCountdown()
+            try expect(microphone.requests == requestsBefore + 1, "Record again while macOS asks does nothing more")
+            microphone.answer(granted)
+            try await waitUntil("The countdown after macOS's answer") { model.recordingPhase == .countdown }
+            try await fixture.runCountdown()
+            try await waitUntil("The capture after the countdown") { capture.starts.count == startsBefore + 1 }
+            try expect(capture.starts.last?.options.microphone == true && !model.isWaitingForMicrophoneAccess,
+                       "The person's recording records as they chose, as before (macOS answered \(granted ? "Allow" : "Don't Allow"))")
+            await model.stopRecording()
+            model.destination = .recorder
+            model.selectToolbarTarget(soundArea)
+        }
+        // Decided already: the countdown starts at once.
+        let requestsBefore = microphone.requests
+        model.startRecordingCountdown()
+        try expect(model.destination == .countdown && microphone.requests == requestsBefore, "Denied before: the countdown starts at once, as before")
+        model.cancelRecordingCountdown()
+        // Leaving the recorder while macOS asks: its answer starts nothing.
+        microphone.status = .notDetermined
+        model.startRecordingCountdown()
+        try await waitUntil("macOS's dialog") { microphone.heldCount == 1 }
+        model.destination = .library
+        microphone.answer(true)
+        try await waitUntil("The Record to stop waiting") { !model.isWaitingForMicrophoneAccess }
+        try await settle()
+        try expect(model.destination == .library && model.recordingPhase == .idle, "Nothing counts down once the person has left the recorder")
+        model.recordMicrophone = false
+
+        // The in-app assistant: macOS asks before its countdown too, then it
+        // records as the person asked, whatever the answer.
+        microphone.status = .notDetermined
+        let inApp = model.assistantSession.context
+        let inAppTool = try unwrap(AIAssistantToolCatalog.standard.first { $0.name == "start_recording" }, "The in-app assistant has start_recording")
+        let startsBefore = capture.starts.count
+        let done = TestBox(false)
+        let call = Task { @MainActor in
+            defer { done.value = true }
+            return try await inAppTool.run(arguments: ["source": soundArea.id, "microphone": true], context: inApp, progress: { _ in })
+        }
+        try await waitUntil("macOS's dialog for the in-app assistant") { microphone.heldCount == 1 }
+        try await Task.sleep(for: .milliseconds(200))
+        try expect(model.recordingPhase == .idle && capture.starts.count == startsBefore && !done.value, "No countdown while macOS asks")
+        microphone.answer(false)
+        try await waitUntil("The in-app countdown") { done.value || model.recordingPhase == .countdown }
+        try await fixture.runCountdown()
+        _ = try await call.value
+        try expect(capture.starts.last?.options.microphone == true, "The in-app assistant records as asked")
+        await model.stopRecording()
+    }
+
+    /// While the person's Record waits for macOS's microphone dialog, the
+    /// recorder's source is theirs: an AI tool's start_recording (even one
+    /// that records no sound, so it asks nothing itself), the in-app start
+    /// and every call that would leave the recorder are refused before
+    /// anything changes, also when the call passed its first check before
+    /// the person clicked Record. Once the person answers, their Record
+    /// records the source they chose; a Record whose source changed while
+    /// macOS asked records nothing.
+    private static func automationWaitsForThePersonsRecord() async throws {
+        let fixture = try await SessionFixture()
+        defer { fixture.cleanup() }
+        let (model, capture, microphone) = (fixture.model, fixture.capture, fixture.microphone)
+        // The AI tool's source: the one the engine lists.
+        try model.captureEngine.registerAreaTarget(soundArea)
+        let project = RecordingProject(title: "Edited later", sourceVideoPath: "raw.mp4", duration: 3, sourceWidth: 64, sourceHeight: 64)
+        try await fixture.store.save(project)
+        model.projects = [project]
+        let prompter = ScriptedSoundPrompter()
+        let bridge = AutomationBridge(model: model)
+        bridge.audioConsent = AutomationAudioConsentController(timeout: 5, heartbeatInterval: 0.05) { await prompter.prompt($0) }
+        let windowRequests = TestBox(0)
+        bridge.presentWindow = { windowRequests.value += 1 }
+
+        // The person's source: an area they drew.
+        let personArea = CaptureTargetInfo(id: "area-1-person", kind: .area, nativeID: CGMainDisplayID(), title: "Person's area", frame: CaptureRect(x: 0, y: 0, width: 48, height: 48))
+        model.drawRecordingArea = { _, _ in personArea }
+        model.destination = .recorder
+        await model.beginAreaSelection(on: fixture.target)
+        try expect(model.selectedTargetID == personArea.id && model.recordingSourceKind == .area, "The person's area is selected")
+        model.recordMicrophone = true
+        microphone.status = .notDetermined
+        model.startRecordingCountdown()
+        try await waitUntil("macOS's dialog for the person's Record") { microphone.heldCount == 1 }
+        try expect(model.isWaitingForMicrophoneAccess && model.recordingPhase == .idle, "The person's Record waits for macOS")
+        let refusal = StudioModel.waitingForMicrophoneRefusal
+        func unchanged(_ what: String) throws {
+            try expect(model.selectedTargetID == personArea.id && model.recordingSourceKind == .area && model.destination == .recorder
+                       && model.recordingSession == nil && capture.starts.isEmpty && model.isWaitingForMicrophoneAccess
+                       && microphone.requests == 1 && windowRequests.value == 0 && model.projects.map(\.id) == [project.id] && model.activeProject == nil,
+                       "\(what) changed nothing: \(String(describing: model.selectedTargetID)), \(model.recordingSourceKind), \(model.destination)")
+        }
+
+        // start_recording without sound: no prompt of its own, refused at once.
+        let refusedStart = try await fixture.fail(bridge, "start_recording", ["source": soundArea.id, "microphone": false])
+        try expect(refusedStart == refusal && prompter.requests.isEmpty, "start_recording is refused while the person's Record waits: \(refusedStart)")
+        try unchanged("start_recording")
+        // Calls that would leave the recorder.
+        let refusedDelete = try await fixture.fail(bridge, "delete_project", ["project_id": project.id.uuidString])
+        try expect(refusedDelete == refusal, "delete_project is refused: \(refusedDelete)")
+        let zoom: [String: Any] = ["project_id": project.id.uuidString, "start": 0.1, "end": 0.8, "x": 0.5, "y": 0.5]
+        let refusedEdit = try await fixture.fail(bridge, "add_zoom", zoom)
+        try expect(refusedEdit == refusal, "An edit does not open the editor: \(refusedEdit)")
+        try unchanged("delete_project and add_zoom")
+        // The same checks past the bridge's first one (a call that arrived
+        // before the person clicked Record), and the in-app start.
+        for (what, attempt) in [
+            ("The library for a delete", { try model.showLibraryForProjectManagement() }),
+            ("Opening the project", { try model.openProjectForAutomation(id: project.id) }),
+            ("The in-app start", { _ = try model.startRecording(target: soundArea, options: AIRecordingOptions()) }),
+        ] as [(String, () throws -> Void)] {
+            do {
+                try attempt()
+                throw SessionFailure("\(what) must be refused while the person's Record waits")
+            } catch let error as AIToolError {
+                try expect(error.localizedDescription == refusal, "\(what) says why: \(error.localizedDescription)")
+            }
+            try unchanged(what)
+        }
+
+        microphone.answer(true)
+        try await waitUntil("The person's countdown after macOS's answer") { model.recordingPhase == .countdown }
+        try await fixture.runCountdown()
+        try await waitUntil("The person's capture") { capture.starts.count == 1 }
+        try expect(capture.starts.last?.target.id == personArea.id && capture.starts.last?.options.microphone == true,
+                   "The person's Record records the area they chose: \(String(describing: capture.starts.last?.target.id))")
+        await model.stopRecording()
+
+        // A call already at its sound prompt when the person clicks Record:
+        // the person's answer to the prompt no longer lets it start.
+        model.destination = .recorder
+        await model.beginAreaSelection(on: fixture.target)
+        prompter.mode = .hold
+        microphone.status = .notDetermined
+        let prompted = Task { @MainActor in
+            await bridge.call(toolName: "start_recording", arguments: ["source": soundArea.id, "system_audio": true, "microphone": false],
+                              workingDirectory: nil, clientName: "Claude Code", progress: nil)
+        }
+        try await waitUntil("The sound prompt") { prompter.heldCount == 1 }
+        model.startRecordingCountdown()
+        try await waitUntil("macOS's dialog for the person's Record") { microphone.heldCount == 1 }
+        prompter.release(.allow)
+        let afterPrompt = try result(await prompted.value, "allowed at the prompt while the person's Record waits")
+        try expect(afterPrompt.isError && afterPrompt.text == refusal && model.selectedTargetID == personArea.id && model.isWaitingForMicrophoneAccess && capture.starts.count == 1,
+                   "Refused after the prompt, nothing changed: \(afterPrompt.json)")
+        microphone.answer(false)
+        try await waitUntil("The person's countdown") { model.recordingPhase == .countdown }
+        try await fixture.runCountdown()
+        try await waitUntil("The person's capture") { capture.starts.count == 2 }
+        try expect(capture.starts.last?.target.id == personArea.id && capture.starts.last?.options.systemAudio == false, "The person's own Record, as they chose it")
+        await model.stopRecording()
+
+        // Whatever changed the source while macOS asked, the Record never
+        // records a source the person did not click Record for.
+        model.destination = .recorder
+        await model.beginAreaSelection(on: fixture.target)
+        microphone.status = .notDetermined
+        model.startRecordingCountdown()
+        try await waitUntil("macOS's dialog") { microphone.heldCount == 1 }
+        model.selectedTargetID = soundArea.id
+        microphone.answer(true)
+        try await waitUntil("The Record to stop waiting") { !model.isWaitingForMicrophoneAccess }
+        try await settle()
+        try expect(model.recordingPhase == .idle && model.destination == .recorder && capture.starts.count == 2, "No countdown for a source the person did not click Record for")
+        model.recordMicrophone = false
+    }
+
+    /// The control bar's Start, clicked in another app, brings Focus Studio
+    /// forward only when the interaction-tracking alert is up once
+    /// startRecordingCountdown returns. With macOS never asked about the
+    /// microphone, that alert still comes first, before macOS's dialog; its
+    /// Record with limited tracking then has macOS ask, then counts down.
+    private static func trackingAlertBeforeTheMicrophone() async throws {
+        let fixture = try await SessionFixture(interactionTracking: false)
+        defer { fixture.cleanup() }
+        let (model, capture, microphone) = (fixture.model, fixture.capture, fixture.microphone)
+        try model.captureEngine.registerAreaTarget(soundArea)
+        model.destination = .recorder
+        model.selectToolbarTarget(soundArea)
+        model.recordMicrophone = true
+        try expect(model.automaticZooms, "Automatic zooms are on (the default)")
+        microphone.status = .notDetermined
+
+        model.startRecordingCountdown()
+        try expect(model.isShowingInteractionSetup && !model.isWaitingForMicrophoneAccess, "The tracking alert is up when Record returns (the control bar then brings Focus Studio forward)")
+        try await settle()
+        try expect(microphone.requests == 0 && model.recordingPhase == .idle && model.destination == .recorder, "macOS is not asked before the person answers the tracking alert")
+
+        // Record with limited tracking (the alert's button).
+        model.isShowingInteractionSetup = false
+        model.startRecordingCountdown(allowUnavailableTracking: true)
+        try await waitUntil("macOS's dialog after the tracking alert") { microphone.heldCount == 1 }
+        try expect(!model.isShowingInteractionSetup && model.recordingPhase == .idle, "No alert and no countdown while macOS asks")
+        microphone.answer(true)
+        try await waitUntil("The countdown after macOS's answer") { model.recordingPhase == .countdown }
+        try expect(!model.isShowingInteractionSetup, "No second tracking alert")
+        try await fixture.runCountdown()
+        try await waitUntil("The capture") { capture.starts.count == 1 }
+        try expect(capture.starts.last?.options.microphone == true, "Recorded with the microphone and limited tracking")
         await model.stopRecording()
     }
 
@@ -1026,6 +1524,38 @@ final class ScriptedSoundPrompter {
         guard let continuation = held.removeValue(forKey: id) else { return }
         closedUnanswered += 1
         continuation.resume(returning: nil)
+    }
+}
+
+/// Stands in for macOS's microphone permission: its status, and its dialog,
+/// held until the test answers it (the answer becomes the status, as in
+/// macOS). Nothing here reaches the real permission or shows a dialog.
+@MainActor
+final class ScriptedMicrophone {
+    var status: MicrophoneAuthorization = .authorized
+    /// Times macOS was asked (its dialog shown).
+    private(set) var requests = 0
+    private var held: [CheckedContinuation<Bool, Never>] = []
+
+    /// Dialogs up now.
+    var heldCount: Int { held.count }
+
+    func request() async -> Bool {
+        requests += 1
+        return await withCheckedContinuation { held.append($0) }
+    }
+
+    /// Answers the dialog: allowed or Don't Allow, and the status macOS then
+    /// reports (by default authorized or denied).
+    func answer(_ granted: Bool, status: MicrophoneAuthorization? = nil) {
+        self.status = status ?? (granted ? .authorized : .denied)
+        let waiting = held
+        held = []
+        waiting.forEach { $0.resume(returning: granted) }
+    }
+
+    func controller(timeout: TimeInterval = 5, heartbeatInterval: TimeInterval = 0.05) -> MicrophoneAccessController {
+        MicrophoneAccessController(timeout: timeout, heartbeatInterval: heartbeatInterval, status: { self.status }, request: { await self.request() })
     }
 }
 
@@ -1182,19 +1712,26 @@ private final class SessionFixture {
     let store: ProjectStore
     let clock = ManualRecordingClock()
     let capture: ScriptedCapture
+    /// macOS's microphone permission, allowed unless a test says otherwise.
+    let microphone: ScriptedMicrophone
     let model: StudioModel
     let target = CaptureTargetInfo(id: "display-1", kind: .display, nativeID: 1, title: "Test display", frame: CaptureRect(x: 0, y: 0, width: 64, height: 64))
 
-    init() async throws {
+    /// `microphoneTimeout`: how long an AI tool's call waits for macOS's
+    /// microphone dialog. `interactionTracking`: whether Accessibility is
+    /// allowed (Input Monitoring always is).
+    init(microphoneTimeout: TimeInterval = 5, interactionTracking: Bool = true) async throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("FocusStudio-Session-Test-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         store = ProjectStore(projectsDirectory: root.appendingPathComponent("Projects", isDirectory: true))
         let clip = try await Self.makeClip(in: root)
         let capture = ScriptedCapture(clock: clock, clip: clip)
         self.capture = capture
+        let microphone = ScriptedMicrophone()
+        self.microphone = microphone
         model = StudioModel(
             store: store,
-            interactionTrackingAccess: { true },
+            interactionTrackingAccess: { interactionTracking },
             inputMonitoringAccess: { true },
             screenCaptureAccess: { true },
             finishCapture: { _ in try await capture.finish() },
@@ -1205,7 +1742,8 @@ private final class SessionFixture {
                 return .trashed
             },
             pauseCapture: capture.pauseControl,
-            recordingClock: clock.clock
+            recordingClock: clock.clock,
+            microphoneAccess: microphone.controller(timeout: microphoneTimeout)
         )
     }
 

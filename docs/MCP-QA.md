@@ -111,7 +111,7 @@ send '{"jsonrpc":"2.0","method":"notifications/initialized"}'
 
 ## 9. 通过 MCP 录制
 
-`zsh scripts/test.sh` 用脚本化的采集和手动时钟覆盖了录制流程（`Tests/FocusStudioAppRegression/RecordingSessionRegression.swift`）：倒计时、从第一帧算起的 `duration`、暂停（暂停的时间不计入 `duration`，`get_status` / `wait_for_recording` 报告 `paused`，暂停中也能停止和丢弃）、自动停止与“结束”/`stop_recording`/`wait_for_recording` 共用一次停止、选项只对本次录制有效、等待期间 `get_status` 照常返回、取消，以及用脚本化的声音询问走完仅本次允许、无声录制（录制器本来打开的声音也不录）、取消录制、60 秒无回答、期间关闭 AI 工具或应用内助手开始工作、询问期间在录制器里关掉声音、调用被取消、不需要询问的情况和询问超过调用时间时转为后台任务。真实的 ScreenCaptureKit 时序（包括暂停和继续的分段）、声音询问面板和录制控制条的外观只能手动验证。这一节会真的录屏，并在项目库里新建项目，验证完后可以删掉；需要已授予屏幕录制权限。
+`zsh scripts/test.sh` 用脚本化的采集和手动时钟覆盖了录制流程（`Tests/FocusStudioAppRegression/RecordingSessionRegression.swift`）：倒计时、从第一帧算起的 `duration`、暂停（暂停的时间不计入 `duration`，`get_status` / `wait_for_recording` 报告 `paused`，暂停中也能停止和丢弃）、自动停止与“结束”/`stop_recording`/`wait_for_recording` 共用一次停止、选项只对本次录制有效、等待期间 `get_status` 照常返回、取消，以及用脚本化的声音询问走完仅本次允许、无声录制（录制器本来打开的声音也不录）、取消录制、60 秒无回答、期间关闭 AI 工具或应用内助手开始工作、询问期间在录制器里关掉声音、调用被取消、不需要询问的情况和询问超过调用时间时转为后台任务；也用脚本化的 macOS 麦克风权限（状态和授权对话框都是假的）覆盖了倒计时之前的麦克风权限确认：从没问过时允许 / 不允许、之前已关闭、受限、60 秒无回答（之后的回答不再开始录制）、调用被取消、等待期间关闭 AI 工具、录制器本来开着的麦克风、等待超过调用时间时转为后台任务，以及你自己点录制和应用内助手在倒计时之前等 macOS 的回答。真实的 ScreenCaptureKit 时序（包括暂停和继续的分段）、声音询问面板、macOS 真正的麦克风授权对话框和录制控制条的外观只能手动验证（麦克风授权见第 9 步）。这一节会真的录屏，并在项目库里新建项目，验证完后可以删掉；需要已授予屏幕录制权限。
 
 1. 让终端保持前台（Focus Studio 在后台，或被其他窗口挡住）。确认录制器里“系统音频”和“麦克风”都是关闭的（默认如此）。
 2. `send '{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"start_recording","arguments":{"source":"display","duration":8,"system_audio":true},"_meta":{"progressToken":"rec"}}}'`
@@ -130,7 +130,7 @@ send '{"jsonrpc":"2.0","method":"notifications/initialized"}'
 5. 再 `start_recording`，倒计时期间点控制条上的“取消”。期望：调用返回 `isError`，说明倒计时被取消；没有开始录制。
 6. 再 `start_recording`，倒计时结束前 `send '{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":<这次调用的 id>}}'`。期望：倒计时消失，没有开始录制，录制器显示出来。
 7. 关闭 Focus Studio 的主窗口（应用继续运行），再 `start_recording` 一次：控制条照样在每个显示器底部显示倒计时和录制条。然后 `stop_recording`，返回 `state: "finished"`；主窗口不会在停止前被提到前面，停止后应用也不会被激活（键盘焦点仍在终端）。在控制条上自己点“结束”时，Focus Studio 才会被带到前面并显示编辑器；应用内 AI 助手的 `stop_recording`（确认之后）和它开始的录制到时自动停止，也会这样把编辑器带到前面。
-8. 声音询问的其他回答（每次都用 `"microphone":true`，第一次会出现 macOS 的麦克风授权，按需允许）：
+8. 声音询问的其他回答（每次都用 `"microphone":true`；Focus Studio 还没问过麦克风权限时，macOS 的授权对话框会在声音询问之后、倒计时之前出现，按需允许，详见第 9 步）：
    - 点 **无声录制**：照常倒计时并录制，控制条上没有麦克风图标；结果里 `options.microphone` 为 `false`，`audio_consent.answer` 为 `"without_sound"`，文字说明对方选择了无声录制。录下的视频没有音轨（或只有静音）。之后 `stop_recording`。
    - 按 **Esc**（或点 **取消录制**、关闭面板）：没有倒计时，调用返回 `isError`，文字以 “The person did not allow sound” 开头，写明对方选了 Cancel recording。
    - 不理会面板 60 秒：面板自动关闭，调用返回 `isError`，说明 60 秒内没人回答；之后再点任何地方都不会开始录制。
@@ -139,6 +139,12 @@ send '{"jsonrpc":"2.0","method":"notifications/initialized"}'
    - 在录制器里打开“麦克风”，用 `"microphone":true,"system_audio":true` 调用：询问只提到系统音频；面板开着时在录制器里关掉“麦克风”，再点 **仅本次允许**：录下的视频有系统音频、没有麦克风，结果里 `options.microphone` 为 `false`，文字说明对方在录制前关掉了麦克风。
    - 在录制器里打开“麦克风”，再用 `"microphone":true` 调用：不弹询问，直接倒计时；录完后关掉“麦克风”。不带 `microphone`/`system_audio` 的调用也不弹询问。
    - 录制器里的“系统音频”“麦克风”开关始终是你自己设的样子，没有被任何回答改动。
+9. macOS 的麦克风权限（1.12.0 实机检查发现：第一次录麦克风时 macOS 的授权对话框出现在倒计时之后、录制已经开始时，现在改为倒计时之前）。这一步要重置 Focus Studio 的麦克风授权，建议在单独的测试用户下做；做完后到 **系统设置 › 隐私与安全性 › 麦克风** 把 Focus Studio 恢复成原来的设置。重置：退出 Focus Studio，运行 `tccutil reset Microphone com.local.focusstudio`（只重置 Focus Studio 这一项）。
+   - 重置后，录制器里的“麦克风”保持关闭，`send` 一个 `start_recording`（`"arguments":{"source":"display","duration":5,"microphone":true}`，带 `_meta.progressToken`）。期望：先出现声音询问，点 **仅本次允许**；随后 macOS 的麦克风授权对话框出现，这时控制条还没有倒计时；等待期间 `$QA/out` 里每 5 秒左右有一条递增的 `notifications/progress`（数值 0.02 以上，消息 “Waiting for the person to answer macOS's microphone access prompt for Focus Studio…”）。在 macOS 对话框里点允许之后才开始 3 秒倒计时；调用在录制开始后返回，文字里有 “Before the countdown, macOS asked the person whether Focus Studio may use the microphone, and they allowed it.”。录下的视频里没有 macOS 的对话框，麦克风的声音从头开始，时长约 5 秒。
+   - 在 **系统设置 › 隐私与安全性 › 麦克风** 里关掉 Focus Studio，再用同样的参数调用一次并点 **仅本次允许**：不出现 macOS 对话框，也没有倒计时；调用立即返回 `isError`，文字说明 Focus Studio 的麦克风权限已在 System Settings › Privacy & Security › Microphone 里关闭、可以用 `microphone` 为 `false` 重试，`structuredContent` 为 `status: "microphone_unavailable"`、`microphone_access: "denied"`、`asked_now: false`、`retry_with: {microphone: false}`。改用 `"microphone":false` 再调用：不询问，正常录制（没有麦克风声音）。录制器里打开“麦克风”、不带 `microphone` 调用：同样返回 `microphone_unavailable`。
+   - 重置后调用，在 macOS 对话框里点不允许：没有倒计时，返回 `isError`，文字说明对方选了 Don't Allow，`asked_now` 为 `true`。
+   - 重置后调用，不理会 macOS 对话框 60 秒：调用返回 `isError`（“nobody answered its dialog within 60 seconds”，`microphone_access` 为 `"not_determined"`）；这时再在对话框里点允许，不会开始倒计时或录制。
+   - 重置后在录制器里打开“麦克风”，自己点录制：macOS 对话框在倒计时之前出现，回答（允许或不允许）之后才开始倒计时，之后和以前一样录制。
 
 ## 开发构建的 helper
 
@@ -156,4 +162,4 @@ send '{"jsonrpc":"2.0","method":"notifications/initialized"}'
 | 6 多副本 | | |
 | 7 Gatekeeper | | |
 | 8 Claude Code / Codex | | |
-| 9 MCP 录制：声音询问（写明启动它的程序；仅本次允许/无声录制（不录任何声音）/取消录制/Esc/60 秒无回答/无默认按钮/不需要时不问，询问期间关掉的声音不录，录制器设置不变，回答后焦点回到原应用）、控制条倒计时不抢焦点、说明谁请求录制和录哪些声音、没有主窗口时也出现、录制中主窗口不被提前、录制开始即返回、剩余时间、暂停不计入 duration、duration 自动停止、wait_for_recording、各种取消、不进视频 | | |
+| 9 MCP 录制：声音询问（写明启动它的程序；仅本次允许/无声录制（不录任何声音）/取消录制/Esc/60 秒无回答/无默认按钮/不需要时不问，询问期间关掉的声音不录，录制器设置不变，回答后焦点回到原应用）、macOS 麦克风授权在倒计时之前（允许后才倒计时、已关闭时返回 microphone_unavailable、不允许、60 秒无回答、自己点录制）、控制条倒计时不抢焦点、说明谁请求录制和录哪些声音、没有主窗口时也出现、录制中主窗口不被提前、录制开始即返回、剩余时间、暂停不计入 duration、duration 自动停止、wait_for_recording、各种取消、不进视频 | | |

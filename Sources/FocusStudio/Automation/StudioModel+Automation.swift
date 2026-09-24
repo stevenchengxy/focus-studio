@@ -70,11 +70,13 @@ extension StudioModel {
     /// of what ``automationBlocker`` covers for its own paths: the in-app
     /// assistant is partway through a request (its tools edit whichever
     /// project is open), the editor's Export is rendering, a save or open
-    /// panel is up, or the person is drawing a recording area (its overlay
-    /// covers the screen, and the recorder's source is theirs to choose).
-    /// Checked for every call that navigates, the recording tools included.
-    /// Kept out of automationBlocker, which the app's own Import video and
-    /// Animate screenshot also check.
+    /// panel is up, the person is drawing a recording area (its overlay
+    /// covers the screen, and the recorder's source is theirs to choose), or
+    /// the person clicked Record and macOS is asking them about the
+    /// microphone (their countdown starts when they answer, with the source
+    /// they chose, on the recorder). Checked for every call that navigates,
+    /// the recording tools included. Kept out of automationBlocker, which the
+    /// app's own Import video and Animate screenshot also check.
     var automationNavigationRefusal: String? {
         if isAssistantRunning {
             return "Focus Studio's own assistant is working on a request in the app. Try again when it finishes."
@@ -84,21 +86,29 @@ extension StudioModel {
             return "Focus Studio is showing a dialog, such as a save or open panel. Try again when the person has closed it."
         }
         if isSelectingArea { return Self.drawingAreaRefusal }
+        if isWaitingForMicrophoneAccess { return Self.waitingForMicrophoneRefusal }
         return nil
     }
 
     /// For a call that arrives while the person draws a recording area.
     static let drawingAreaRefusal = "The person is drawing a recording area in Focus Studio. Try again when they have finished or cancelled it."
 
+    /// For a call that arrives while the person's Record waits for macOS's
+    /// microphone dialog (``isWaitingForMicrophoneAccess``).
+    static let waitingForMicrophoneRefusal = "The person clicked Record in Focus Studio, and macOS is asking them whether Focus Studio may use the microphone; their own recording starts when they answer. Nothing was changed. Try again when that recording is over (get_status shows its state)."
+
     /// Shows `id` in the editor for a call that edits or renders it: saves
     /// and closes any other open project first (as Back does), then opens
     /// this one. Changes nothing and throws while the app is recording or
-    /// busy, or for an unknown id.
+    /// busy, while the person's Record waits for macOS's microphone dialog,
+    /// or for an unknown id.
     func openProjectForAutomation(id: UUID) throws {
         guard let project = projects.first(where: { $0.id == id }) else {
             throw AIToolError.invalidArgument("No project has the id \(id.uuidString). Call list_projects for the current ids.")
         }
         if let blocker = automationBlocker { throw AIToolError.failed(blocker.clientMessage) }
+        // The person's Record would be dropped once they answer macOS.
+        if isWaitingForMicrophoneAccess { throw AIToolError.failed(Self.waitingForMicrophoneRefusal) }
         if destination == .editor {
             if activeProject?.id == id { return }
             closeEditor()
@@ -108,9 +118,12 @@ extension StudioModel {
 
     /// Shows the library for a rename or delete, the only place those run:
     /// saves and closes the editor (as Back does) or leaves the recorder or
-    /// Director. Throws, changing nothing, while the app is recording or busy.
+    /// Director. Throws, changing nothing, while the app is recording or busy
+    /// or the person's Record waits for macOS's microphone dialog.
     func showLibraryForProjectManagement() throws {
         if let blocker = automationBlocker { throw blocker.failure }
+        // The person's Record would be dropped once they answer macOS.
+        if isWaitingForMicrophoneAccess { throw AIToolError.failed(Self.waitingForMicrophoneRefusal) }
         switch destination {
         case .library:
             break

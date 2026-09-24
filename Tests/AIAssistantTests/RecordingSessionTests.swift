@@ -19,7 +19,13 @@ import Foundation
 /// anyway, for no sound, or for the in-app assistant; a sound the call asks
 /// for that the person was not asked about records only while the recorder
 /// still records it at the start (turned off during the prompt, it stays
-/// off); the recorder's own choices never change. Durations
+/// off); the recorder's own choices never change. A start that will record
+/// the microphone (allowed at the prompt, or the recorder's own) has macOS's
+/// microphone access settled first, after the sound prompt and before the
+/// countdown: an external start records only when macOS allows it (denied,
+/// restricted, no answer in time and a refusal meanwhile are errors with
+/// structured data, and nothing starts), the in-app assistant records as
+/// asked whatever macOS answered, and nothing else checks. Durations
 /// are the shortest the tools accept (1 s) with generous deadlines.
 extension AIAssistantTests {
     @MainActor
@@ -34,6 +40,7 @@ extension AIAssistantTests {
         try await cancelAsItGoesLiveDiscards(root: root)
         try await untrackedRecordingWaitsThroughItsSave(root: root)
         try await soundConsent(root: root)
+        try await microphoneAccess(root: root)
     }
 
     static func date(_ value: AIJSONValue?) -> Date? {
@@ -276,6 +283,172 @@ extension AIAssistantTests {
         check(app.attemptSettings.last?.microphone == true && app.attemptSettings.last?.systemAudio == true, "the in-app assistant records as asked")
         await app.stopRecording()
         check(never.requests.isEmpty, "none of these asked the person: \(never.requests)")
+        check(app.recorderPreferences == preferences, "the recorder's own choices never changed: \(app.recorderPreferences)")
+    }
+
+    // MARK: - Microphone access
+
+    /// Stands in for the app's check of macOS's microphone access: answers
+    /// `access`, counting its calls and those with a progress handler; with
+    /// `hold` it waits until the calling task is cancelled, like a call that
+    /// gives up while macOS's dialog is up.
+    final class MicrophoneProbe: @unchecked Sendable {
+        private let lock = NSLock()
+        private var calls = 0
+        private var progressHandlers = 0
+        let access: AIMicrophoneAccess
+        let hold: Bool
+
+        init(_ access: AIMicrophoneAccess, hold: Bool = false) {
+            self.access = access
+            self.hold = hold
+        }
+
+        var count: Int { lock.withLock { calls } }
+        var withProgress: Int { lock.withLock { progressHandlers } }
+
+        var handler: AIMicrophoneAccessHandler {
+            { [self] progress in
+                lock.withLock {
+                    calls += 1
+                    if progress != nil { progressHandlers += 1 }
+                }
+                if hold {
+                    while !Task.isCancelled { try? await Task.sleep(nanoseconds: 5_000_000) }
+                    return .timedOut(0)
+                }
+                return access
+            }
+        }
+    }
+
+    /// The error of a start that must fail with structured data for programs.
+    @MainActor
+    static func expectToolFailure(_ message: String, _ body: () async throws -> Void) async -> AIToolFailure {
+        do {
+            try await body()
+        } catch let failure as AIToolFailure {
+            return failure
+        } catch {
+            fatalError("FAIL: \(message): expected AIToolFailure, got \(error)")
+        }
+        fatalError("FAIL: expected an error: \(message)")
+    }
+
+    /// A start that will record the microphone has macOS's microphone access
+    /// settled after the sound prompt and before the countdown: an external
+    /// one records only when macOS allows it; the in-app assistant records as
+    /// asked; starts without the microphone never check.
+    @MainActor
+    private static func microphoneAccess(root: URL) async throws {
+        let (context, app, _) = makeFakeApp(root: root)
+        var external = context
+        external.isExternal = true
+        let preferences = app.recorderPreferences
+        func start(_ arguments: [String: Any], consent: AIRecordingAudioConsent = .allowed, _ microphone: MicrophoneProbe?, in base: AIAssistantContext? = nil,
+                   meanwhile: (@MainActor @Sendable () -> Void)? = nil) async throws -> (AIToolResult, ConsentProbe) {
+            var call = base ?? external
+            let prompt = ConsentProbe(answer: consent, meanwhile: meanwhile)
+            call.recordingAudioConsent = prompt.handler
+            call.microphoneAccess = microphone?.handler
+            return (try await StartRecordingTool(startTimeout: 5).run(arguments: arguments, context: call, progress: { _ in }), prompt)
+        }
+
+        // Allowed by macOS: recorded, after the sound prompt, with the call's progress.
+        let allowed = MicrophoneProbe(.authorized(askedNow: false))
+        let measured = ProgressLog()
+        var withProgress = external
+        withProgress.numericProgress = { measured.record($0, $1, $2) }
+        let (plain, asked) = try await start(["source": "display", "microphone": true], allowed, in: withProgress)
+        check(asked.requests.count == 1 && allowed.count == 1 && allowed.withProgress == 1, "the sound prompt, then macOS's access with the call's progress: \(allowed.count)")
+        check(!plain.text.contains("macOS asked") && app.attemptSettings.last?.microphone == true, "recorded with the microphone; macOS did not ask now: \(plain.text)")
+        await app.stopRecording()
+        // Just allowed in macOS's dialog: the text says so.
+        let asking = MicrophoneProbe(.authorized(askedNow: true))
+        let (askedNow, _) = try await start(["source": "display", "microphone": true], asking)
+        check(askedNow.text.contains("Before the countdown, macOS asked the person whether Focus Studio may use the microphone, and they allowed it."), "the text: \(askedNow.text)")
+        check(app.attemptSettings.last?.microphone == true, "recorded with the microphone")
+        await app.stopRecording()
+
+        // Not allowed: nothing starts, an error for the model and data for programs.
+        let startedBefore = app.startedSourceIDs.count
+        let settingsPath = "System Settings › Privacy & Security › Microphone"
+        let refusals: [(AIMicrophoneAccess, String, String, Bool, [String])] = [
+            (.denied(askedNow: false), "denied", "Focus Studio may not use the microphone", false, ["the person has turned off Focus Studio's microphone access in \(settingsPath)", "ask the person to turn that access on first"]),
+            (.denied(askedNow: true), "denied", "Focus Studio may not use the microphone", true, ["they chose Don't Allow", settingsPath, "do not ask for the microphone again"]),
+            (.restricted, "restricted", "Focus Studio may not use the microphone", false, ["restricted on this Mac", settingsPath]),
+            (.timedOut(60), "not_determined", "Focus Studio did not start the recording", true, ["nobody answered its dialog within 60 seconds", "may still be on screen"]),
+        ]
+        for (access, state, opening, askedNow, phrases) in refusals {
+            let probe = MicrophoneProbe(access)
+            let failure = await expectToolFailure("\(access)") { _ = try await start(["source": "display", "microphone": true], probe) }
+            check(failure.message.hasPrefix(opening) && failure.message.contains("Nothing was recorded and nothing is recording.")
+                  && failure.message.contains("call start_recording again with microphone false") && phrases.allSatisfy { failure.message.contains($0) },
+                  "\(access): the text: \(failure.message)")
+            var expected: [String: AIJSONValue] = ["status": "microphone_unavailable", "microphone_access": AIJSONValue(state), "asked_now": AIJSONValue(askedNow),
+                                                   "settings": AIJSONValue(settingsPath), "retry_with": ["microphone": false]]
+            if case .timedOut = access { expected["waited"] = 60 }
+            check(failure.data == .object(expected), "\(access): the data: \(failure.data)")
+            let result = MCPToolCallResult.failure(failure)
+            check(result.isError && result.text == failure.message && result.structuredContent == failure.data, "\(access): an isError result with structuredContent: \(result.json)")
+            check(probe.count == 1 && app.startedSourceIDs.count == startedBefore && app.recordingPhase == .idle, "\(access): nothing started")
+        }
+        // Turned off or revoked while macOS's dialog was up.
+        await expectToolError("refused meanwhile", { _ = try await start(["source": "display", "microphone": true], MicrophoneProbe(.refused("The person revoked Codex's access to Focus Studio."))) }) {
+            if case let .failed(message) = $0 { return message == "The person revoked Codex's access to Focus Studio." } else { return false }
+        }
+        check(app.startedSourceIDs.count == startedBefore, "nothing started after a refusal")
+
+        // A call cancelled while macOS's dialog is up records nothing.
+        let holding = MicrophoneProbe(.authorized(askedNow: true), hold: true)
+        let pending = Task { @MainActor in try await start(["source": "display", "microphone": true], holding) }
+        try await waitUntil("the held microphone check") { holding.count == 1 }
+        check(app.recordingPhase == .idle && app.startedSourceIDs.count == startedBefore, "no countdown before macOS's answer")
+        pending.cancel()
+        do {
+            _ = try await pending.value
+            fatalError("FAIL: a start cancelled while macOS asks must not record")
+        } catch is CancellationError {
+        } catch {
+            fatalError("FAIL: a start cancelled while macOS asks throws CancellationError, got \(error)")
+        }
+        check(app.startedSourceIDs.count == startedBefore && app.recordingPhase == .idle, "nothing started after the cancelled check")
+
+        // Only a recording that will record the microphone checks.
+        let never = MicrophoneProbe(.denied(askedNow: false))
+        for arguments in [["source": "display"], ["source": "display", "microphone": false], ["source": "display", "system_audio": true]] as [[String: Any]] {
+            _ = try await start(arguments, never)
+            await app.stopRecording()
+        }
+        let (withoutSound, silentPrompt) = try await start(["source": "display", "microphone": true], consent: .withoutSound, never)
+        check(silentPrompt.requests.count == 1 && app.attemptSettings.last?.microphone == false && !withoutSound.text.contains("macOS"), "Record without sound records no microphone")
+        await app.stopRecording()
+        // A microphone the person turns off in the recorder during the sound
+        // prompt (it only asked about system audio) is not checked either.
+        app.recorderPreferences.microphone = true
+        _ = try await start(["source": "display", "microphone": true, "system_audio": true], never, meanwhile: { app.recorderPreferences.microphone = false })
+        check(app.attemptSettings.last?.microphone == false, "the microphone turned off during the prompt")
+        await app.stopRecording()
+        check(never.count == 0, "none of these checked the microphone: \(never.count)")
+
+        // The recorder's own microphone is checked too, without a sound prompt.
+        app.recorderPreferences.microphone = true
+        let own = MicrophoneProbe(.denied(askedNow: false))
+        let ownFailure = await expectToolFailure("the recorder's own microphone") { _ = try await start(["source": "display"], own) }
+        check(own.count == 1 && ownFailure.data["microphone_access"] == "denied" && app.startedSourceIDs.count == startedBefore + 5, "the recorder's microphone is checked: \(ownFailure.message)")
+        let ownAllowed = MicrophoneProbe(.authorized(askedNow: false))
+        let (ownResult, ownPrompt) = try await start(["source": "display", "microphone": true], ownAllowed)
+        check(ownPrompt.requests.isEmpty && ownAllowed.count == 1 && app.attemptSettings.last?.microphone == true, "no sound prompt, macOS's access checked: \(ownResult.text)")
+        await app.stopRecording()
+        app.recorderPreferences.microphone = false
+
+        // The in-app assistant records as asked, whatever macOS answered.
+        for access in [AIMicrophoneAccess.denied(askedNow: true), .restricted, .authorized(askedNow: true)] {
+            let inApp = MicrophoneProbe(access)
+            let (result, prompt) = try await start(["source": "display", "microphone": true], inApp, in: context)
+            check(inApp.count == 1 && prompt.requests.isEmpty && app.attemptSettings.last?.microphone == true && !result.text.contains("macOS"), "in-app, \(access): recorded as asked")
+            await app.stopRecording()
+        }
         check(app.recorderPreferences == preferences, "the recorder's own choices never changed: \(app.recorderPreferences)")
     }
 

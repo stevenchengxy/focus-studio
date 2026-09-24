@@ -177,6 +177,9 @@ extension StudioModel: AppControlling {
         // choice stay as they are (the in-app assistant comes here without
         // the bridge's navigation check).
         guard !isSelectingArea else { throw AIToolError.failed(Self.drawingAreaRefusal) }
+        // The person's Record waits for macOS's microphone dialog: its
+        // countdown starts when they answer, with the source they chose.
+        guard !isWaitingForMicrophoneAccess else { throw AIToolError.failed(Self.waitingForMicrophoneRefusal) }
         if destination == .editor { closeEditor() }
         selectedTargetID = target.id
         recordingSourceKind = target.kind
