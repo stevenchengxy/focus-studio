@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum AppSettingsSection: Hashable {
-    case aiModels, codex, installation
+    case aiModels, codex, aiTools, installation
 }
 
 @MainActor
@@ -14,6 +14,7 @@ struct StudioSettingsView: View {
     @ObservedObject var model: StudioModel
     @ObservedObject private var navigation = AppSettingsNavigation.shared
     @ObservedObject private var installation = AppInstallationCoordinator.shared
+    private let services = AppServices.shared
 
     var body: some View {
         TabView(selection: $navigation.selection) {
@@ -25,7 +26,12 @@ struct StudioSettingsView: View {
                 .disabled(installation.isWorking)
                 .tabItem { Label("Codex", systemImage: "terminal") }
                 .tag(AppSettingsSection.codex)
-            InstallationSettingsView(isBusy: model.isInstallationBusy)
+            // Claude Code, Codex and other MCP clients (focus-studio-mcp).
+            AutomationSettingsView(access: services.accessStore, connector: services.connector, server: services.controlServer)
+                .disabled(installation.isWorking)
+                .tabItem { Label("AI tools", systemImage: "point.3.connected.trianglepath.dotted") }
+                .tag(AppSettingsSection.aiTools)
+            InstallationSettingsView(isBusy: model.isInstallationBusy, isBusyNow: { model.isInstallationBusy })
                 .tabItem { Label("Installation", systemImage: "shippingbox") }
                 .tag(AppSettingsSection.installation)
         }

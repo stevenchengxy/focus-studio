@@ -307,6 +307,11 @@ public final class CaptureEngine: ObservableObject {
     @Published public private(set) var isPaused = false
     @Published public private(set) var isChangingPauseState = false
 
+    /// The active recording's intervals on the uptime clock: what has been
+    /// recorded so far (paused time left out) and when the current interval
+    /// started, nil while paused. A recording's duration limit is measured on it.
+    public var recordingIntervals: RecordingPauseClock { pauseClock }
+
     /// Actual video time zero in the `ProcessInfo.systemUptime` clock. This is
     /// derived from the first complete screen sample's presentation timestamp.
     @Published public private(set) var recordingStartUptime: TimeInterval?

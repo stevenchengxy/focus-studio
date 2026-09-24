@@ -140,38 +140,44 @@ enum AIAssistantProtocol {
 /// One conversation with the assistant: the transcript, the agent loop that
 /// turns model replies into tool calls, and the confirmation gate for paid calls.
 @MainActor
-final class AIAssistantSession: ObservableObject {
-    struct PendingToolCall: Identifiable {
-        let id = UUID()
+public final class AIAssistantSession: ObservableObject {
+    public struct PendingToolCall: Identifiable {
+        public let id = UUID()
         let tool: any AIAssistantTool
         let arguments: [String: Any]
-        let estimate: AIToolCostEstimate
-        let isPaid: Bool
+        public let estimate: AIToolCostEstimate
+        /// The call is paid (an estimate in 元); otherwise it is a recording
+        /// start or stop that still needs the person's go-ahead.
+        public let isPaid: Bool
 
         var toolName: String { tool.name }
     }
 
     static let maximumStepsPerTurn = 8
     static let transcriptCharacterBudget = 12_000
-    static let maximumListedAssets = 12
-    static let maximumListedZooms = 16
+    /// Tools the replay guard lets run again with the same arguments within
+    /// one request. wait_for_recording changes nothing and answers "still
+    /// recording, call it again" after its bounded wait, so an earlier
+    /// receipt must not stop the next wait.
+    static let repeatableTools: Set<String> = ["wait_for_recording"]
 
-    @Published private(set) var messages: [AIAssistantMessage] = []
-    @Published private(set) var isRunning = false
-    @Published private(set) var pendingConfirmation: PendingToolCall?
+    @Published public private(set) var messages: [AIAssistantMessage] = []
+    @Published public private(set) var isRunning = false
+    @Published public private(set) var pendingConfirmation: PendingToolCall?
     /// Follow-ups offered by the last reply.
-    @Published private(set) var suggestions: [String] = []
+    @Published public private(set) var suggestions: [String] = []
     /// Whether a text model (or Codex) can answer right now. Re-evaluated with
     /// ``refreshModelAvailability()`` whenever the app's AI settings change.
-    @Published private(set) var hasModel: Bool
-    @Published private(set) var recordingPlan: CodexRecordingPlan?
-    @Published private(set) var canRetry = false
-    @Published private(set) var historyWarning: String?
-    @Published private(set) var conversationID = UUID()
-    @Published private(set) var planWasRun = false
-    @Published private(set) var hasPlanRunner = false
+    @Published public private(set) var hasModel: Bool
+    /// The latest recording-plan draft; it runs only from the Run button.
+    @Published public private(set) var recordingPlan: CodexRecordingPlan?
+    @Published public private(set) var canRetry = false
+    @Published public private(set) var historyWarning: String?
+    @Published public private(set) var conversationID = UUID()
+    @Published public private(set) var planWasRun = false
+    @Published public private(set) var hasPlanRunner = false
 
-    let context: AIAssistantContext
+    public let context: AIAssistantContext
     let tools: [any AIAssistantTool]
 
     private let completionResolver: @MainActor () -> (any TextCompletionProviding)?
@@ -212,7 +218,7 @@ final class AIAssistantSession: ObservableObject {
 
     /// `completionResolver` is consulted on every send, so switching the model
     /// or the assistant brain in Settings applies to the next message.
-    init(
+    public init(
         context: AIAssistantContext,
         completionResolver: @escaping @MainActor () -> (any TextCompletionProviding)?,
         tools: [any AIAssistantTool] = AIAssistantToolCatalog.standard,
@@ -232,14 +238,14 @@ final class AIAssistantSession: ObservableObject {
     /// The provider that would answer the next message.
     var completion: (any TextCompletionProviding)? { completionResolver() }
 
-    func refreshModelAvailability() {
+    public func refreshModelAvailability() {
         let available = completionResolver() != nil
         if available != hasModel { hasModel = available }
     }
 
     // MARK: - Public actions
 
-    func send(_ text: String, attachments: [URL] = []) {
+    public func send(_ text: String, attachments: [URL] = []) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !isRunning, !trimmed.isEmpty || !attachments.isEmpty else { return }
         refreshModelAvailability()
@@ -257,7 +263,7 @@ final class AIAssistantSession: ObservableObject {
     }
 
     /// Continues from factual tool receipts; never appends the request twice.
-    func retryLastTurn() {
+    public func retryLastTurn() {
         guard !isRunning, canRetry, let completion = completionResolver() else { return }
         canRetry = false
         beginTurn(completion: completion)
@@ -293,18 +299,18 @@ final class AIAssistantSession: ObservableObject {
         }
     }
 
-    func confirmPending() { resolveConfirmation(true) }
+    public func confirmPending() { resolveConfirmation(true) }
 
-    func cancelPending() { resolveConfirmation(false) }
+    public func cancelPending() { resolveConfirmation(false) }
 
     /// Cancels the running step (and any Ark task being polled).
-    func stop() {
+    public func stop() {
         guard isRunning else { return }
         runningTask?.cancel()
         resolveConfirmation(false)
     }
 
-    func clearTranscript() {
+    public func clearTranscript() {
         guard !isRunning else { return }
         messages = []
         suggestions = []
@@ -319,13 +325,13 @@ final class AIAssistantSession: ObservableObject {
         persistHistory()
     }
 
-    func configureRecordingPlanRunner(_ runner: @escaping (CodexRecordingPlan) -> Void) {
+    public func configureRecordingPlanRunner(_ runner: @escaping (CodexRecordingPlan) -> Void) {
         planRunner = runner
         hasPlanRunner = true
     }
 
     /// Only a user's Run button can reach this; model replies merely set a draft.
-    func runRecordingPlan(expectedPlan: CodexRecordingPlan? = nil) {
+    public func runRecordingPlan(expectedPlan: CodexRecordingPlan? = nil) {
         guard !isRunning, !planWasRun, let plan = recordingPlan,
               plan.validationIssues.isEmpty, expectedPlan == nil || expectedPlan == plan,
               let planRunner else { return }
@@ -343,7 +349,7 @@ final class AIAssistantSession: ObservableObject {
     }
 
     /// Two visible shells share one speech receipt to avoid duplicate playback.
-    func claimSpeech(for messageID: UUID) -> Bool { spokenMessages.insert(messageID).inserted }
+    public func claimSpeech(for messageID: UUID) -> Bool { spokenMessages.insert(messageID).inserted }
 
     // MARK: - Agent loop
 
@@ -405,7 +411,7 @@ final class AIAssistantSession: ObservableObject {
                     continue
                 }
                 let fingerprint = Self.fingerprint(tool: toolName, arguments: arguments)
-                if let previous = toolAttempts[fingerprint] {
+                if !Self.repeatableTools.contains(toolName), let previous = toolAttempts[fingerprint] {
                     messages.append(AIAssistantMessage(role: .tool, text: L10n.tr("This action was already attempted for this request. It was not run again. Review its earlier result; send a new message to explicitly try the action again.") + " (\(previous))", toolName: toolName))
                     continue
                 }
@@ -509,7 +515,7 @@ final class AIAssistantSession: ObservableObject {
     func systemPrompt() -> String {
         """
         You are the AI assistant inside Focus Studio, a macOS app that records the screen and turns the recording into a polished product-demo video: automatic zooms on clicks and typing, a styled background with padding and shadow, chapter captions drawn on the video, background music and sound effects, and MP4 export.
-        You operate the app through tools. The end-to-end workflow is: list_recording_sources → start_recording (the app counts down 3 seconds, then records until stop_recording) → stop_recording (saves a project and opens it in the editor) → edit: add_zoom / remove_zoom / set_zoom_style, set_chapters, update_settings or set_background_image for the look, set_background_music and set_sound_effects → export_project → optionally generate_image / generate_video (Volcengine Ark: Seedream images, Seedance clips) for an intro or outro and assemble_video to join intro + export + outro. list_projects / open_project / close_editor move between the library and the editor; editing and export tools need a project open in the editor.
+        You operate the app through tools. The end-to-end workflow is: list_recording_sources → start_recording (the app counts down 3 seconds and the call returns once it records; it records until the user's Finish, stop_recording or its optional duration) → wait_for_recording, or stop_recording to stop now (either saves a project and opens it in the editor) → edit: add_zoom / remove_zoom / set_zoom_style, set_chapters, update_settings or set_background_image for the look, set_background_music and set_sound_effects → export_project → optionally generate_image / generate_video (Volcengine Ark: Seedream images, Seedance clips) for an intro or outro and assemble_video to join intro + export + outro. list_projects / open_project / close_editor move between the library and the editor; editing and export tools need a project open in the editor.
 
         Tools (name, summary, JSON schema of the arguments):
         \(toolCatalogJSON)
@@ -519,7 +525,7 @@ final class AIAssistantSession: ObservableObject {
         - For a request to automate a demo, return a recordingPlan draft using the schema below. A draft never runs. The user must inspect it and click Run recording plan; revise the draft when asked. Do not use start_recording instead of a requested automation plan. This text-only conversation has no fresh observed desktop geometry: live URL/window plans MUST NOT contain clicks, even if the user supplied coordinates. Offer manual recording for interaction, or use wait/scroll/navigation. Screenshot plans may use non-interactive click cues as zooms, not desktop actions.
         - start_recording and stop_recording always require a separate confirmation in the app. A suggestion or discussion is not authorization. Tool receipts are authoritative: never repeat an already attempted action in the same request, including after Retry. If an outcome is unknown, explain it and ask the user to check it before sending a new explicit request.
         - Think briefly in "thought", then either call exactly one tool or reply to the user.
-        - Multi-step requests ("record Safari and export it") are executed step by step: call the next tool after each result, and keep the user informed with brief replies when a step takes time or needs their action (for example, the demo itself happens while recording — reply after start_recording, then call stop_recording when the user says they are done, unless they asked for a fixed duration).
+        - Multi-step requests ("record Safari and export it") are executed step by step: call the next tool after each result, and keep the user informed with brief replies when a step takes time or needs their action (for example, the demo itself happens while recording — reply after start_recording, then call stop_recording when the user says they are done; for a fixed length pass duration to start_recording and call wait_for_recording).
         - A recording captures what the user does on screen; do not stop it until the user says the demo is finished, and never start a second recording while one is in progress.
         - When the intent is ambiguous (which window, what the image should show, clip length, mood, which clips to join), ask one short clarifying question instead of guessing.
         - Prefer cheap choices while iterating: \(ArkMediaClient.defaultVideoModel), 4–6 seconds, 720p; \(ArkMediaClient.defaultImageModel). Say what things cost in 元.
@@ -555,7 +561,13 @@ final class AIAssistantSession: ObservableObject {
     /// Recording state, library size and bundled music, when the app is controllable.
     func appSummary() -> String? {
         guard let app = context.app else { return nil }
-        var lines = ["Recording: \(app.recordingPhase.label) | Projects in library: \(app.projectSummaries.count) | Editor: \(app.openProjectID == nil ? "closed (library showing)" : "open")"]
+        var recording = app.recordingPhase.label
+        if app.recordingPhase == .recording, app.isRecordingPaused {
+            recording += " (paused by the user; paused time is not recorded and does not count toward a duration)"
+        } else if let remaining = app.recordingRemaining {
+            recording += " (stops by itself in \(AIToolSupport.seconds(remaining)) s)"
+        }
+        var lines = ["Recording: \(recording) | Projects in library: \(app.projectSummaries.count) | Editor: \(app.openProjectID == nil ? "closed (library showing)" : "open")"]
         let sources = app.recordingSources
         if !sources.isEmpty {
             let displays = sources.filter { $0.kind == .display }.count
@@ -570,35 +582,7 @@ final class AIAssistantSession: ObservableObject {
     }
 
     func projectSummary() -> String {
-        guard let project = context.readProject() else { return "No recording is open. Use list_projects and open_project, or record a new demo." }
-        let settings = project.settings
-        var lines: [String] = []
-        let title = project.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        lines.append("Title: \(title.isEmpty ? "Untitled" : title) | Duration: \(Self.seconds(project.duration)) s | Source: \(project.sourceWidth)×\(project.sourceHeight) | Clicks: \(project.clickEvents.count) | Zooms: \(project.zoomSegments.filter(\.isEnabled).count) | Chapters: \(project.chapters?.count ?? 0)")
-        lines.append("Look: background \(Self.backgroundDescription(settings)) | aspect \(settings.aspectRatio.title) | padding \(Int(settings.padding)) px | corner radius \(Int(settings.cornerRadius)) px | shadow \(Self.seconds(settings.shadow)) | screen animation \(settings.screenAnimation.rawValue) | zoom scale \(Self.seconds(settings.zoomScale))× | caption \(settings.resolvedCaptionStyle.position.rawValue)")
-        if let description = settings.productDescription?.trimmingCharacters(in: .whitespacesAndNewlines), !description.isEmpty {
-            lines.append("Product: \(String(description.prefix(400)))")
-        }
-        let audio = settings.resolvedProductDemoAudio
-        let music = audio.backgroundMusicPath.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent } ?? "none"
-        lines.append("Zoom style: automatic zooms \(settings.autoZoomEnabled ? "on" : "off") | hold \(Self.seconds(settings.zoomHold)) s | ease in \(Self.seconds(settings.zoomEaseIn)) s | ease out \(Self.seconds(settings.zoomEaseOut)) s | chain gap \(Self.seconds(settings.resolvedZoomChainGap)) s")
-        lines.append("Audio: music \(music) (volume \(Self.seconds(audio.backgroundMusicVolume))) | click sound \(audio.clickSoundEnabled ? "on" : "off") | zoom whoosh \(audio.zoomTransitionSoundEnabled ? "on" : "off")")
-        let zooms = AIToolSupport.orderedZooms(project)
-        if !zooms.isEmpty {
-            let listed = zooms.prefix(Self.maximumListedZooms).map { "#\($0.index) \(AIToolSupport.zoomLine($0.segment))" }
-            var text = "Zooms (time order): " + listed.joined(separator: "; ")
-            if zooms.count > Self.maximumListedZooms { text += "; and \(zooms.count - Self.maximumListedZooms) more" }
-            lines.append(text)
-        }
-        if let chapters = project.chapters, !chapters.isEmpty {
-            let listed = chapters.sorted(by: ChapterMath.precedes).prefix(12).enumerated().map { index, chapter in
-                "\(index + 1). \(Self.seconds(chapter.start))–\(Self.seconds(chapter.end)) s \(chapter.title)\(chapter.caption.isEmpty ? "" : " — \(chapter.caption)")"
-            }
-            lines.append("Chapters: " + listed.joined(separator: "; "))
-        }
-        let assets = Self.listedAssets(in: context.assetsDirectory)
-        lines.append(assets.isEmpty ? "Assets: none yet (folder \(context.assetsDirectory.path))" : "Assets in \(context.assetsDirectory.path): \(assets.joined(separator: ", "))")
-        return lines.joined(separator: "\n")
+        AIProjectReport.summary(of: context.readProject(), assetsDirectory: context.assetsDirectory)
     }
 
     /// Newest messages that fit the character budget, oldest first.
@@ -713,37 +697,6 @@ final class AIAssistantSession: ObservableObject {
         return String(decoding: data, as: UTF8.self)
     }
 
-    private static func backgroundDescription(_ settings: ProjectSettings) -> String {
-        switch settings.backgroundStyle {
-        case .image:
-            let name = settings.backgroundImagePath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "?"
-            return "image (\(name))"
-        case .solid:
-            return "solid \(settings.backgroundColor)"
-        case .gradient:
-            if let preset = BackgroundPreset.allCases.first(where: { $0.matches(primary: settings.backgroundColor, secondary: settings.secondaryBackgroundColor) }) {
-                return "gradient preset \(preset.title)"
-            }
-            return "gradient \(settings.backgroundColor) → \(settings.secondaryBackgroundColor)"
-        }
-    }
-
-    private static func listedAssets(in directory: URL) -> [String] {
-        let contents = (try? FileManager.default.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles]
-        )) ?? []
-        let media = contents
-            .filter { AIToolPaths.kind(of: $0) != nil }
-            .sorted { lhs, rhs in
-                let left = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-                let right = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-                return left > right
-            }
-        var names = media.prefix(maximumListedAssets).map(\.lastPathComponent)
-        if media.count > maximumListedAssets { names.append("and \(media.count - maximumListedAssets) more") }
-        return names
-    }
-
     static func languageName(_ code: String) -> String {
         let normalized = code.lowercased().replacingOccurrences(of: "_", with: "-")
         if normalized.hasPrefix("zh-hant") || normalized.hasPrefix("zh-tw") || normalized.hasPrefix("zh-hk") { return "Traditional Chinese (繁體中文)" }
@@ -751,10 +704,5 @@ final class AIAssistantSession: ObservableObject {
         if normalized.hasPrefix("en") { return "English" }
         if normalized.hasPrefix("ja") { return "Japanese" }
         return "the language with BCP 47 code \(code)"
-    }
-
-    private static func seconds(_ value: Double) -> String {
-        guard value.isFinite else { return "0" }
-        return value == value.rounded() ? String(Int(value)) : String(format: "%.1f", value)
     }
 }

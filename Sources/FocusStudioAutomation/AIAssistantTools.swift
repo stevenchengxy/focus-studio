@@ -5,8 +5,8 @@ import Foundation
 import UniformTypeIdentifiers
 
 /// The tools the assistant may call, in the order they are described to the model.
-enum AIAssistantToolCatalog {
-    static var standard: [any AIAssistantTool] {
+public enum AIAssistantToolCatalog {
+    public static var standard: [any AIAssistantTool] {
         [
             // Pacing for multi-step flows ("record for 8 seconds").
             WaitTool(),
@@ -14,6 +14,7 @@ enum AIAssistantToolCatalog {
             ListRecordingSourcesTool(),
             StartRecordingTool(),
             StopRecordingTool(),
+            WaitForRecordingTool(),
             ListProjectsTool(),
             OpenProjectTool(),
             CloseEditorTool(),
@@ -70,7 +71,7 @@ struct AIToolArguments {
         if let number = raw[key] as? NSNumber { return number.doubleValue.isFinite ? number.doubleValue : nil }
         if let text = string(key) {
             var cleaned = text.lowercased()
-            for suffix in ["px", "s", "sec", "×", "x"] where cleaned.hasSuffix(suffix) { cleaned.removeLast(suffix.count) }
+            for suffix in ["fps", "px", "s", "sec", "×", "x"] where cleaned.hasSuffix(suffix) { cleaned.removeLast(suffix.count) }
             if let value = Double(cleaned.trimmingCharacters(in: .whitespaces)), value.isFinite { return value }
         }
         return nil
@@ -78,7 +79,8 @@ struct AIToolArguments {
 
     func int(_ key: String) -> Int? {
         guard let value = double(key) else { return nil }
-        return Int(value.rounded())
+        // Out-of-range numbers (1e19) would trap in Int(_:); treat them as unparsable.
+        return Int(exactly: value.rounded())
     }
 
     func bool(_ key: String) -> Bool? {
@@ -114,30 +116,54 @@ struct AIToolArguments {
         throw AIToolError.invalidArgument("\"\(key)\" must be one of \(options.joined(separator: ", ")) (got \"\(value)\").")
     }
 
+    /// One of `allowed` whole numbers (numbers or numeric text like "60 fps");
+    /// nil when absent. Matched as numbers: converting a huge value to Int
+    /// first would trap.
+    func option(_ key: String, in allowed: [Int]) throws -> Int? {
+        guard has(key) else { return nil }
+        guard let value = double(key), let match = allowed.first(where: { Double($0) == value }) else {
+            let given = string(key) ?? raw[key].map { String(describing: $0) } ?? ""
+            throw AIToolError.invalidArgument("\"\(key)\" must be one of \(allowed.map(String.init).joined(separator: ", ")) (got \"\(given)\").")
+        }
+        return match
+    }
+
     func has(_ key: String) -> Bool { raw[key] != nil && !(raw[key] is NSNull) }
 }
 
 // MARK: - Paths
 
-enum AIToolPaths {
+public enum AIToolPaths {
     enum Reference: Equatable {
         case remote(String)
         case local(URL)
     }
 
-    enum MediaKind {
+    public enum MediaKind: String, Sendable {
         case image
         case video
         case audio
+    }
+
+    /// Whether a path names a file to read or one to write; relative paths
+    /// resolve differently (see ``reference(_:context:for:)``).
+    public enum Purpose: Sendable {
+        case input
+        case output
     }
 
     static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "webp", "heic", "tiff", "tif", "gif", "bmp"]
     static let videoExtensions: Set<String> = ["mp4", "mov", "m4v"]
     static let audioExtensions: Set<String> = ["mp3", "wav", "m4a", "aac", "aiff", "aif", "caf", "flac"]
 
-    /// http(s)/data URLs stay remote; everything else is a local path
-    /// (absolute, `~`, `file://`, or a name inside the assets directory).
-    static func reference(_ raw: String, context: AIAssistantContext) -> Reference {
+    /// http(s)/data URLs stay remote; everything else is a local path.
+    /// Absolute, `~` and `file://` paths are used as given. A relative input
+    /// is looked up in the working directory first and otherwise names a file
+    /// in the assets folder. A relative output is written into the working
+    /// directory; without one it goes to the assets folder, except for an
+    /// external caller, who cannot see that folder and is asked for an
+    /// absolute path instead.
+    static func reference(_ raw: String, context: AIAssistantContext, for purpose: Purpose = .input) throws -> Reference {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let lowercased = trimmed.lowercased()
         if lowercased.hasPrefix("http://") || lowercased.hasPrefix("https://") || lowercased.hasPrefix("data:") {
@@ -148,11 +174,72 @@ enum AIToolPaths {
         }
         let expanded = NSString(string: trimmed).expandingTildeInPath
         if expanded.hasPrefix("/") { return .local(URL(fileURLWithPath: expanded).standardizedFileURL) }
-        return .local(context.assetsDirectory.appendingPathComponent(trimmed).standardizedFileURL)
+        let inAssets = context.assetsDirectory.appendingPathComponent(trimmed).standardizedFileURL
+        switch purpose {
+        case .input:
+            if let directory = context.usableWorkingDirectory {
+                let candidate = directory.appendingPathComponent(trimmed).standardizedFileURL
+                if FileManager.default.fileExists(atPath: candidate.path) { return .local(candidate) }
+            }
+            return .local(inAssets)
+        case .output:
+            if let directory = context.usableWorkingDirectory {
+                return .local(directory.appendingPathComponent(trimmed).standardizedFileURL)
+            }
+            guard !context.isExternal else {
+                throw AIToolError.invalidArgument("\"\(trimmed)\" is a relative path, but this call has no working directory to resolve it against. Pass an absolute path.")
+            }
+            return .local(inAssets)
+        }
+    }
+
+    /// Where a tool writes a file the caller may name. Nil or empty means a
+    /// fresh `<prefix>-<timestamp>.<ext>` in the assets folder. A folder (an
+    /// existing directory or a trailing slash) gets that default name inside
+    /// it; a file name gets the extension when it lacks one, and any other
+    /// extension is replaced. Relative paths resolve as outputs. The
+    /// destination must pass `outputGuard`, checked before any folder is created.
+    static func outputFile(
+        path: String?,
+        context: AIAssistantContext,
+        prefix: String,
+        fileExtension: String,
+        date: Date = Date(),
+        outputGuard: ExportProjectTool.OutputGuard?,
+        overwrite: Bool
+    ) throws -> URL {
+        guard let raw = path?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            let url = try context.newAssetURL(prefix: prefix, fileExtension: fileExtension, date: date)
+            try outputGuard?.check(url, overwrite: overwrite)
+            return url
+        }
+        guard case let .local(url) = try reference(raw, context: context, for: .output) else {
+            throw AIToolError.invalidArgument("\"path\" must be a local file or folder path.")
+        }
+        var isDirectory: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+        if raw.hasSuffix("/") || (exists && isDirectory.boolValue) {
+            try outputGuard?.checkFolder(url)
+            var folderContext = context
+            folderContext.assetsDirectory = url
+            let file = try folderContext.newAssetURL(prefix: prefix, fileExtension: fileExtension, date: date)
+            try outputGuard?.check(file, overwrite: overwrite)
+            return file
+        }
+        let file: URL
+        if url.pathExtension.lowercased() == fileExtension {
+            file = url
+        } else if url.pathExtension.isEmpty {
+            file = url.appendingPathExtension(fileExtension)
+        } else {
+            file = url.deletingPathExtension().appendingPathExtension(fileExtension)
+        }
+        try outputGuard?.check(file, overwrite: overwrite)
+        return file
     }
 
     static func existingLocalFile(_ raw: String, context: AIAssistantContext) throws -> URL {
-        guard case let .local(url) = reference(raw, context: context) else {
+        guard case let .local(url) = try reference(raw, context: context) else {
             throw AIToolError.invalidArgument("\"\(raw)\" must be a local file path.")
         }
         var isDirectory: ObjCBool = false
@@ -164,7 +251,7 @@ enum AIToolPaths {
 
     /// Something Ark accepts inside `content`: an http(s) URL or an inline data URL.
     static func mediaURL(_ raw: String, kind: MediaKind, context: AIAssistantContext) throws -> String {
-        switch reference(raw, context: context) {
+        switch try reference(raw, context: context) {
         case let .remote(url):
             return url
         case let .local(url):
@@ -180,11 +267,45 @@ enum AIToolPaths {
         }
     }
 
+    /// The absolute path with symlinks resolved as far as it exists (`/var` →
+    /// `/private/var`) and the Data volume's firmlinks folded back
+    /// (`/System/Volumes/Data/Users` → `/Users`), so two spellings of one
+    /// location compare equal.
+    static func canonicalPath(_ url: URL) -> String {
+        var existing = url.standardizedFileURL
+        var missing: [String] = []
+        while !FileManager.default.fileExists(atPath: existing.path), existing.pathComponents.count > 1 {
+            missing.insert(existing.lastPathComponent, at: 0)
+            existing = existing.deletingLastPathComponent()
+        }
+        var resolved = existing
+        if let real = realpath(existing.path, nil) {
+            let path = String(cString: real)
+            free(real)
+            // realpath keeps the firmlinked spelling; the canonical path key
+            // folds it but leaves a final symlink (`/tmp`) alone, so both run.
+            let folded = try? URL(fileURLWithPath: path).resourceValues(forKeys: [.canonicalPathKey]).canonicalPath
+            resolved = URL(fileURLWithPath: folded ?? path)
+        }
+        for component in missing { resolved.appendPathComponent(component) }
+        // Not standardized again: that drops `/private` only where the path
+        // exists, so an existing folder and a new file inside it would disagree.
+        return resolved.path
+    }
+
+    /// Whether `path` is `folder` or lies inside it. Both are canonical paths;
+    /// the comparison ignores case like the default APFS volume does.
+    static func path(_ path: String, isInside folder: String) -> Bool {
+        let path = path.lowercased()
+        let folder = folder.lowercased()
+        return path == folder || path.hasPrefix(folder.hasSuffix("/") ? folder : folder + "/")
+    }
+
     static func mimeType(for url: URL) -> String? {
         UTType(filenameExtension: url.pathExtension.lowercased())?.preferredMIMEType
     }
 
-    static func kind(of url: URL) -> MediaKind? {
+    public static func kind(of url: URL) -> MediaKind? {
         let ext = url.pathExtension.lowercased()
         if imageExtensions.contains(ext) { return .image }
         if videoExtensions.contains(ext) { return .video }
@@ -195,18 +316,53 @@ enum AIToolPaths {
 
 // MARK: - Shared helpers
 
-enum AIToolSupport {
+public enum AIToolSupport {
     static func requireArkClient(_ context: AIAssistantContext) async throws -> ArkMediaClient {
         let stored = await MainActor.run { context.arkAPIKey() }
         guard let key = stored?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty else {
-            throw AIToolError.failed(L10n.tr("Add a Volcengine Ark API key in Settings to generate media."))
+            throw AIToolError.failed(context.tr("Add a Volcengine Ark API key in Settings to generate media."))
         }
         return ArkMediaClient(apiKey: key, baseURL: context.arkBaseURL)
     }
 
+    /// The open project. A call pinned to a project (``AIAssistantContext/projectID``)
+    /// fails instead of working on whatever else is open.
     static func requireProject(_ context: AIAssistantContext) async throws -> RecordingProject {
         guard let project = await MainActor.run(body: { context.readProject() }) else { throw AIToolError.noProject }
+        if let pinned = context.projectID, project.id != pinned {
+            throw AIToolError.failed("Project \(pinned.uuidString) is no longer the one open in the editor (\(project.id.uuidString) is); nothing was read or changed. Try the call again.")
+        }
         return project
+    }
+
+    /// Applies `change` to the open project in one main-actor step and returns
+    /// what it computed from the project as written. The change works on the
+    /// project as it is now, not on the snapshot the tool read, so parallel
+    /// calls and the user's own edits to other keys survive. Throws, changing
+    /// nothing, when the app drops the write, when `change` throws, or when a
+    /// different project was opened since the tool read `projectID`. The
+    /// app's own reasons are worded in the call's language.
+    public static func edit<Value: Sendable>(
+        _ context: AIAssistantContext,
+        projectID: UUID,
+        _ change: @escaping @Sendable (inout RecordingProject) throws -> Value
+    ) async throws -> Value {
+        try await MainActor.run {
+            var result: Value?
+            do {
+                try context.updateProject { project in
+                    guard project.id == projectID else {
+                        throw AIToolError.failed("Another project was opened before the change was applied; nothing was changed. Check which project is open and try again.")
+                    }
+                    result = try change(&project)
+                }
+            } catch let failure as AILocalizedFailure {
+                throw AIToolError.failed(failure.message(in: context.resultLanguage))
+            }
+            // The app must either apply the change or throw; never report an edit it skipped.
+            guard let result else { throw AIToolError.failed("The app did not apply the change; nothing was changed.") }
+            return result
+        }
     }
 
     static func seconds(_ value: Double) -> String {
@@ -218,8 +374,78 @@ enum AIToolSupport {
     }
 
     static func bytes(_ url: URL) -> String {
-        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
-        return ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
+        ByteCountFormatter.string(fromByteCount: fileSize(url), countStyle: .file)
+    }
+
+    static func fileSize(_ url: URL) -> Int64 {
+        (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
+    }
+
+    /// The images, videos and audio files directly in `directory`, newest first.
+    static func mediaFiles(in directory: URL) -> [URL] {
+        let contents = (try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey], options: [.skipsHiddenFiles]
+        )) ?? []
+        return contents
+            .filter { AIToolPaths.kind(of: $0) != nil }
+            .sorted { lhs, rhs in modificationDate(lhs) > modificationDate(rhs) }
+    }
+
+    static func modificationDate(_ url: URL) -> Date {
+        (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+    }
+
+    /// Structured details of a video a tool wrote.
+    static func videoData(_ url: URL, duration: Double, width: Int, height: Int) -> AIJSONValue {
+        [
+            "path": AIJSONValue(url),
+            "duration": .rounded(duration),
+            "width": AIJSONValue(width),
+            "height": AIJSONValue(height),
+            "size_bytes": AIJSONValue(Int(clamping: fileSize(url))),
+        ]
+    }
+
+    /// Progress for a render: reports `label` now, then each higher whole
+    /// percentage as "<label> 42%" text and as measured progress (fraction of 1).
+    static func renderProgress(
+        _ label: String,
+        context: AIAssistantContext,
+        progress: @escaping @Sendable (String) -> Void
+    ) -> @Sendable (Double) -> Void {
+        progress(label)
+        context.reportProgress(0, total: 1, message: label)
+        let lastPercent = PercentMemo()
+        return { fraction in
+            let percent = Int((min(1, max(0, fraction)) * 100).rounded(.down))
+            guard lastPercent.replace(with: percent) else { return }
+            let message = "\(label) \(percent)%"
+            progress(message)
+            context.reportProgress(fraction, total: 1, message: message)
+        }
+    }
+
+    /// The highest percentage reported so far, shared by progress callbacks;
+    /// progress only ever moves forward (MCP clients require that).
+    private final class PercentMemo: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+
+        /// Stores `percent` and returns whether it is higher than any before.
+        func replace(with percent: Int) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard percent > value else { return false }
+            value = percent
+            return true
+        }
+    }
+
+    /// Adds `fields` to an object value (for results built from shared parts).
+    static func merged(_ value: AIJSONValue, _ fields: [String: AIJSONValue]) -> AIJSONValue {
+        guard case var .object(existing) = value else { return .object(fields) }
+        for (key, field) in fields { existing[key] = field }
+        return .object(existing)
     }
 
     static func mediaDuration(_ url: URL) async -> Double? {
@@ -297,11 +523,11 @@ struct GenerateImageTool: AIAssistantTool {
         let referenceURLs = try references.map { try AIToolPaths.mediaURL($0, kind: .image, context: context) }
         let size = ArkMediaClient.defaultImageSize(ratio: ratio)
 
-        progress(L10n.tr("Requesting image from Seedream…"))
+        progress(context.tr("Requesting image from Seedream…"))
         let result = try await client.generateImage(model: model, prompt: prompt, size: size, referenceImages: referenceURLs)
         let output = try context.newAssetURL(prefix: "image", fileExtension: "png")
         let download = output.deletingPathExtension().appendingPathExtension("download")
-        progress(L10n.tr("Downloading…"))
+        progress(context.tr("Downloading…"))
         try await client.saveImage(result, to: download)
         let pixelSize = try ArkMediaClient.writePNG(from: download, to: output)
         try? FileManager.default.removeItem(at: download)
@@ -313,8 +539,8 @@ struct GenerateImageTool: AIAssistantTool {
             "usage": ["generated_images": result.usage?.generatedImages ?? 1, "total_tokens": result.usage?.totalTokens ?? 0],
         ], nextTo: output)
 
-        var lines = [L10n.format("Image saved: %@ (%lld × %lld)", output.lastPathComponent, pixelSize.width, pixelSize.height)]
-        if let estimate { lines.append(L10n.format("Estimated cost ≈ ¥%@", AIToolSupport.yuan(estimate))) }
+        var lines = [context.format("Image saved: %@ (%lld × %lld)", output.lastPathComponent, pixelSize.width, pixelSize.height)]
+        if let estimate { lines.append(context.format("Estimated cost ≈ ¥%@", AIToolSupport.yuan(estimate))) }
         lines.append(output.path)
         return AIToolResult(text: lines.joined(separator: "\n"), attachments: [output])
     }
@@ -432,16 +658,16 @@ struct GenerateVideoTool: AIAssistantTool {
         request.watermark = false
         request.seed = arguments.int("seed")
 
-        progress(L10n.tr("Submitting Seedance task…"))
+        progress(context.tr("Submitting Seedance task…"))
         let taskID = try await client.createVideoTask(request)
         let family = ArkMediaClient.displayName(forModel: plan.model)
         let task = try await client.waitForTask(id: taskID) { _, elapsed in
-            progress(L10n.format("%@ generating… %lld s", family, Int(elapsed.rounded())))
+            progress(context.format("%@ generating… %lld s", family, Int(elapsed.rounded())))
         }
         guard let videoURL = task.videoURL else {
             throw AIToolError.failed("Ark task \(taskID) succeeded without a video URL.")
         }
-        progress(L10n.tr("Downloading…"))
+        progress(context.tr("Downloading…"))
         let output = try context.newAssetURL(prefix: "video", fileExtension: "mp4")
         try await client.download(videoURL, to: output)
         if let lastFrame = task.lastFrameURL {
@@ -462,9 +688,9 @@ struct GenerateVideoTool: AIAssistantTool {
             "usage": ["completion_tokens": task.usage?.completionTokens ?? 0, "total_tokens": task.usage?.totalTokens ?? 0],
         ], nextTo: output)
 
-        var lines = [L10n.format("Video saved: %@ (%@ s, %@)", output.lastPathComponent,
-                                 AIToolSupport.seconds(duration ?? Double(plan.duration)), AIToolSupport.bytes(output))]
-        if let estimate { lines.append(L10n.format("Estimated cost ≈ ¥%@", AIToolSupport.yuan(estimate))) }
+        var lines = [context.format("Video saved: %@ (%@ s, %@)", output.lastPathComponent,
+                                    AIToolSupport.seconds(duration ?? Double(plan.duration)), AIToolSupport.bytes(output))]
+        if let estimate { lines.append(context.format("Estimated cost ≈ ¥%@", AIToolSupport.yuan(estimate))) }
         lines.append(output.path)
         return AIToolResult(text: lines.joined(separator: "\n"), attachments: [output])
     }
@@ -482,7 +708,7 @@ struct CaptureFrameTool: AIAssistantTool {
             "required": ["time"],
             "properties": [
                 "time": ["type": "number", "description": "Seconds into the recording."],
-                "width": ["type": "integer", "minimum": 640, "maximum": 3840, "default": 1920],
+                "width": ["type": "integer", "minimum": 640, "maximum": 3840, "default": 1920, "description": "Width of the frame in pixels, from 640 to 3840 (default 1920)."],
             ],
         ]
     }
@@ -499,7 +725,7 @@ struct CaptureFrameTool: AIAssistantTool {
         let clampedTime = time.clamped(to: 0...max(0, project.duration - 0.05))
         project.settings.exportWidth = (arguments.int("width") ?? 1_920).clamped(to: 640...3_840)
 
-        progress(L10n.tr("Rendering frame…"))
+        progress(context.tr("Rendering frame…"))
         let prepared = try await ProjectVideoRenderer.prepare(project: project)
         let generator = AVAssetImageGenerator(asset: prepared.asset)
         generator.videoComposition = prepared.videoComposition
@@ -509,8 +735,16 @@ struct CaptureFrameTool: AIAssistantTool {
         let (image, _) = try await generator.image(at: CMTime(seconds: clampedTime, preferredTimescale: 600))
         let output = try context.newAssetURL(prefix: "frame", fileExtension: "png")
         try AIToolSupport.writePNG(image, to: output)
-        let text = L10n.format("Frame captured at %@ s: %@ (%lld × %lld)", AIToolSupport.seconds(clampedTime), output.lastPathComponent, image.width, image.height)
-        return AIToolResult(text: text + "\n" + output.path, attachments: [output])
+        let text = context.format("Frame captured at %@ s: %@ (%lld × %lld)", AIToolSupport.seconds(clampedTime), output.lastPathComponent, image.width, image.height)
+        let data: AIJSONValue = [
+            "project_id": AIJSONValue(project.id.uuidString),
+            "path": AIJSONValue(output),
+            "time": .rounded(clampedTime),
+            "width": AIJSONValue(image.width),
+            "height": AIJSONValue(image.height),
+            "size_bytes": AIJSONValue(Int(clamping: AIToolSupport.fileSize(output))),
+        ]
+        return AIToolResult(text: text + "\n" + output.path, attachments: [output], data: data)
     }
 }
 
@@ -537,16 +771,20 @@ struct SetBackgroundImageTool: AIAssistantTool {
     ) async throws -> AIToolResult {
         let arguments = AIToolArguments(raw)
         let url = try AIToolPaths.existingLocalFile(try arguments.requiredString("path"), context: context)
-        guard ArkMediaClient.imagePixelSize(at: url) != nil else { throw AIToolError.invalidArgument("\(url.lastPathComponent) is not a readable image.") }
-        guard await MainActor.run(body: { context.readProject() }) != nil else { throw AIToolError.noProject }
+        guard let size = ArkMediaClient.imagePixelSize(at: url) else { throw AIToolError.invalidArgument("\(url.lastPathComponent) is not a readable image.") }
+        let project = try await AIToolSupport.requireProject(context)
         let path = url.path
-        await MainActor.run {
-            context.updateProject { project in
-                project.settings.backgroundStyle = .image
-                project.settings.backgroundImagePath = path
-            }
+        try await AIToolSupport.edit(context, projectID: project.id) { project in
+            project.settings.backgroundStyle = .image
+            project.settings.backgroundImagePath = path
         }
-        return AIToolResult(text: L10n.format("Background image set: %@", url.lastPathComponent), attachments: [url])
+        let data: AIJSONValue = [
+            "project_id": AIJSONValue(project.id.uuidString),
+            "path": AIJSONValue(url),
+            "width": AIJSONValue(size.width),
+            "height": AIJSONValue(size.height),
+        ]
+        return AIToolResult(text: context.format("Background image set: %@", url.lastPathComponent), attachments: [url], data: data)
     }
 }
 
@@ -554,10 +792,13 @@ struct SetBackgroundImageTool: AIAssistantTool {
 
 struct UpdateSettingsTool: AIAssistantTool {
     let name = "update_settings"
-    let summary = "Change how the recording looks: background (style, preset, colours, image, blur, brightness), padding, corner radius, shadow, screen animation, zoom scale, aspect ratio, motion blur, caption style and the product description. Only the given keys change."
+    let summary = "Change how the recording looks and exports: background (style, preset, colours, image, blur, brightness), padding, corner radius, shadow, screen animation, zoom scale, aspect ratio, motion blur, caption style, the product description, and the export width and frame rate. Only the given keys change."
 
     static let backgroundPresetNames = BackgroundPreset.allCases.map(\.rawValue)
     static let aspectRatioNames = CanvasAspectRatio.allCases.map(\.rawValue) + ["auto", "16:9", "9:16", "1:1", "4:3", "3:4"]
+    /// The choices the editor's Export inspector offers.
+    static let exportWidths = [1_280, 1_920, 2_560, 3_840]
+    static let exportFrameRates = [24, 30, 60]
 
     static let ranges: [String: ClosedRange<Double>] = [
         "padding": 0...160,
@@ -574,6 +815,7 @@ struct UpdateSettingsTool: AIAssistantTool {
         "backgroundStyle", "backgroundPreset", "backgroundColor", "secondaryBackgroundColor", "backgroundImagePath",
         "backgroundBlur", "backgroundBrightness", "padding", "cornerRadius", "shadow", "screenAnimation", "zoomScale",
         "aspectRatio", "motionBlur", "captionPosition", "captionScale", "showsChapterNumber", "productDescription",
+        "exportWidth", "frameRate",
     ]
 
     var parametersSchema: [String: Any] {
@@ -585,19 +827,21 @@ struct UpdateSettingsTool: AIAssistantTool {
                 "backgroundColor": ["type": "string", "description": "Hex like #6D5DFB"],
                 "secondaryBackgroundColor": ["type": "string", "description": "Hex; second gradient stop"],
                 "backgroundImagePath": ["type": "string"],
-                "backgroundBlur": ["type": "number", "minimum": 0, "maximum": 60],
-                "backgroundBrightness": ["type": "number", "minimum": -0.5, "maximum": 0.35],
-                "padding": ["type": "number", "minimum": 0, "maximum": 160, "description": "Pixels around the screen"],
-                "cornerRadius": ["type": "number", "minimum": 0, "maximum": 52],
-                "shadow": ["type": "number", "minimum": 0, "maximum": 0.8],
+                "backgroundBlur": ["type": "number", "minimum": 0, "maximum": 60, "description": "Blur of the background image, from 0 (sharp) to 60."],
+                "backgroundBrightness": ["type": "number", "minimum": -0.5, "maximum": 0.35, "description": "Background image brightness, from -0.5 (darker) to 0.35 (brighter); 0 leaves it as it is."],
+                "padding": ["type": "number", "minimum": 0, "maximum": 160, "description": "Pixels around the screen, from 0 to 160."],
+                "cornerRadius": ["type": "number", "minimum": 0, "maximum": 52, "description": "Corner radius of the screen in pixels, from 0 (square) to 52."],
+                "shadow": ["type": "number", "minimum": 0, "maximum": 0.8, "description": "Shadow strength behind the screen, from 0 (none) to 0.8 (strongest)."],
                 "screenAnimation": ["type": "string", "enum": ScreenAnimationStyle.allCases.map(\.rawValue)],
-                "zoomScale": ["type": "number", "minimum": 1.1, "maximum": 3],
+                "zoomScale": ["type": "number", "minimum": 1.1, "maximum": 3, "description": "Default magnification for automatic zooms and new manual zooms, from 1.1 to 3."],
                 "aspectRatio": ["type": "string", "enum": CanvasAspectRatio.allCases.map(\.rawValue), "description": "wide = 16:9, vertical = 9:16, square, classic = 4:3, tall = 3:4"],
-                "motionBlur": ["type": "number", "minimum": 0, "maximum": 0.3],
+                "motionBlur": ["type": "number", "minimum": 0, "maximum": 0.3, "description": "Motion blur while the camera moves, from 0 (off) to 0.3."],
                 "captionPosition": ["type": "string", "enum": CaptionPosition.allCases.map(\.rawValue)],
-                "captionScale": ["type": "number", "minimum": 0.7, "maximum": 1.6],
+                "captionScale": ["type": "number", "minimum": 0.7, "maximum": 1.6, "description": "Caption size, from 0.7 to 1.6 times the normal size (1)."],
                 "showsChapterNumber": ["type": "boolean"],
                 "productDescription": ["type": "string", "description": "What the demo shows, in the user's words."],
+                "exportWidth": ["type": "integer", "enum": Self.exportWidths, "description": "Width of the exported video in pixels; the height follows the aspect ratio."],
+                "frameRate": ["type": "integer", "enum": Self.exportFrameRates, "description": "Frames per second of the exported video."],
             ],
         ]
     }
@@ -607,13 +851,33 @@ struct UpdateSettingsTool: AIAssistantTool {
         context: AIAssistantContext,
         progress: @escaping @Sendable (String) -> Void
     ) async throws -> AIToolResult {
-        let changes = try await Self.apply(arguments: raw, context: context)
-        return AIToolResult(text: L10n.format("Updated %@", changes.joined(separator: ", ")))
+        let update = try Self.prepare(arguments: raw, context: context)
+        let project = try await AIToolSupport.requireProject(context)
+        let settings = try await AIToolSupport.edit(context, projectID: project.id) { project -> ProjectSettings in
+            try update.apply(&project.settings)
+            return project.settings
+        }
+        let data: AIJSONValue = [
+            "project_id": AIJSONValue(project.id.uuidString),
+            "changes": .array(update.changes.map { AIJSONValue($0) }),
+            "look": AIProjectReport.lookData(settings),
+            "export_width": AIJSONValue(settings.exportWidth),
+            "frame_rate": AIJSONValue(settings.frameRate),
+        ]
+        return AIToolResult(text: context.format("Updated %@", update.changes.joined(separator: ", ")), data: data)
     }
 
-    /// Validates and applies the settings, returning one "key = value" note per
-    /// change. Shared with set_zoom_style for the keys both tools accept.
-    static func apply(arguments raw: [String: Any], context: AIAssistantContext) async throws -> [String] {
+    /// A validated call: one "key = value" note per change, and the change
+    /// itself, which sets only the requested keys on whatever the project
+    /// holds when it is written.
+    struct SettingsUpdate: Sendable {
+        var changes: [String]
+        var apply: @Sendable (inout ProjectSettings) throws -> Void
+    }
+
+    /// Validates every argument before anything is written, so a bad call
+    /// changes nothing. Shared with set_zoom_style for the keys both tools accept.
+    static func prepare(arguments raw: [String: Any], context: AIAssistantContext) throws -> SettingsUpdate {
         let arguments = AIToolArguments(raw)
         let requested = raw.keys.filter { !(raw[$0] is NSNull) }
         let unknown = requested.filter { !Self.allowedKeys.contains($0) }
@@ -621,10 +885,10 @@ struct UpdateSettingsTool: AIAssistantTool {
             throw AIToolError.invalidArgument("Unknown settings \(unknown.sorted().joined(separator: ", ")). Allowed: \(Self.allowedKeys.joined(separator: ", ")).")
         }
         guard !requested.isEmpty else { throw AIToolError.invalidArgument("No settings given.") }
-        guard var project = await MainActor.run(body: { context.readProject() }) else { throw AIToolError.noProject }
 
         var changes: [String] = []
-        var settings = project.settings
+        // Applied in order to the settings as they are at write time.
+        var steps: [@Sendable (inout ProjectSettings) throws -> Void] = []
         func clamp(_ key: String, _ value: Double) -> Double {
             let range = Self.ranges[key] ?? (-Double.infinity...Double.infinity)
             let clamped = value.clamped(to: range)
@@ -636,47 +900,80 @@ struct UpdateSettingsTool: AIAssistantTool {
             guard let value = arguments.double(key) else { throw AIToolError.invalidArgument("\"\(key)\" must be a number.") }
             return value
         }
+        let setsStyle = arguments.has("backgroundStyle")
+        let setsImagePath = arguments.has("backgroundImagePath")
 
         if let preset = try arguments.choice("backgroundPreset", in: Self.backgroundPresetNames, default: nil),
            let value = BackgroundPreset(rawValue: preset) {
-            settings.backgroundStyle = .gradient
-            settings.backgroundColor = value.primaryHex
-            settings.secondaryBackgroundColor = value.secondaryHex
+            steps.append { settings in
+                settings.backgroundStyle = .gradient
+                settings.backgroundColor = value.primaryHex
+                settings.secondaryBackgroundColor = value.secondaryHex
+            }
             changes.append("backgroundPreset = \(value.title)")
         }
         if let style = try arguments.choice("backgroundStyle", in: BackgroundStyle.allCases.map(\.rawValue), default: nil),
            let value = BackgroundStyle(rawValue: style) {
-            if value == .image, (settings.backgroundImagePath ?? "").isEmpty, !arguments.has("backgroundImagePath") {
-                throw AIToolError.invalidArgument("backgroundStyle image needs backgroundImagePath (or call set_background_image).")
+            steps.append { settings in
+                if value == .image, (settings.backgroundImagePath ?? "").isEmpty, !setsImagePath {
+                    throw AIToolError.invalidArgument("backgroundStyle image needs backgroundImagePath (or call set_background_image).")
+                }
+                settings.backgroundStyle = value
             }
-            settings.backgroundStyle = value
             changes.append("backgroundStyle = \(value.rawValue)")
         }
         for key in ["backgroundColor", "secondaryBackgroundColor"] where arguments.has(key) {
             guard let hex = AIToolSupport.hexColor(arguments.string(key) ?? "") else {
                 throw AIToolError.invalidArgument("\"\(key)\" must be a hex colour like #6D5DFB.")
             }
-            if key == "backgroundColor" { settings.backgroundColor = hex } else { settings.secondaryBackgroundColor = hex }
-            if settings.backgroundStyle == .image, !arguments.has("backgroundStyle") { settings.backgroundStyle = .gradient }
+            let isPrimary = key == "backgroundColor"
+            steps.append { settings in
+                if isPrimary { settings.backgroundColor = hex } else { settings.secondaryBackgroundColor = hex }
+                if settings.backgroundStyle == .image, !setsStyle { settings.backgroundStyle = .gradient }
+            }
             changes.append("\(key) = \(hex)")
         }
         if let path = arguments.string("backgroundImagePath") {
             let url = try AIToolPaths.existingLocalFile(path, context: context)
             guard ArkMediaClient.imagePixelSize(at: url) != nil else { throw AIToolError.invalidArgument("\(url.lastPathComponent) is not a readable image.") }
-            settings.backgroundImagePath = url.path
-            if !arguments.has("backgroundStyle") { settings.backgroundStyle = .image }
+            let imagePath = url.path
+            steps.append { settings in
+                settings.backgroundImagePath = imagePath
+                if !setsStyle { settings.backgroundStyle = .image }
+            }
             changes.append("backgroundImagePath = \(url.lastPathComponent)")
         }
-        if let value = try number("backgroundBlur") { settings.backgroundBlur = clamp("backgroundBlur", value) }
-        if let value = try number("backgroundBrightness") { settings.backgroundBrightness = clamp("backgroundBrightness", value) }
-        if let value = try number("padding") { settings.padding = clamp("padding", value) }
-        if let value = try number("cornerRadius") { settings.cornerRadius = clamp("cornerRadius", value) }
-        if let value = try number("shadow") { settings.shadow = clamp("shadow", value) }
-        if let value = try number("zoomScale") { settings.zoomScale = clamp("zoomScale", value) }
-        if let value = try number("motionBlur") { settings.motionBlur = clamp("motionBlur", value) }
+        if let value = try number("backgroundBlur") {
+            let blur = clamp("backgroundBlur", value)
+            steps.append { $0.backgroundBlur = blur }
+        }
+        if let value = try number("backgroundBrightness") {
+            let brightness = clamp("backgroundBrightness", value)
+            steps.append { $0.backgroundBrightness = brightness }
+        }
+        if let value = try number("padding") {
+            let padding = clamp("padding", value)
+            steps.append { $0.padding = padding }
+        }
+        if let value = try number("cornerRadius") {
+            let radius = clamp("cornerRadius", value)
+            steps.append { $0.cornerRadius = radius }
+        }
+        if let value = try number("shadow") {
+            let shadow = clamp("shadow", value)
+            steps.append { $0.shadow = shadow }
+        }
+        if let value = try number("zoomScale") {
+            let scale = clamp("zoomScale", value)
+            steps.append { $0.zoomScale = scale }
+        }
+        if let value = try number("motionBlur") {
+            let blur = clamp("motionBlur", value)
+            steps.append { $0.motionBlur = blur }
+        }
         if let animation = try arguments.choice("screenAnimation", in: ScreenAnimationStyle.allCases.map(\.rawValue), default: nil),
            let value = ScreenAnimationStyle(rawValue: animation) {
-            settings.screenAnimation = value
+            steps.append { $0.screenAnimation = value }
             changes.append("screenAnimation = \(value.rawValue)")
         }
         if let ratio = try arguments.choice("aspectRatio", in: Self.aspectRatioNames, default: nil) {
@@ -690,44 +987,59 @@ struct UpdateSettingsTool: AIAssistantTool {
             case "3:4": value = .tall
             default: value = CanvasAspectRatio(rawValue: ratio.lowercased()) ?? .wide
             }
-            settings.aspectRatio = value
+            steps.append { $0.aspectRatio = value }
             changes.append("aspectRatio = \(value.rawValue) (\(value.title))")
         }
-        var caption = settings.resolvedCaptionStyle
-        var captionChanged = false
+        var captionPosition: CaptionPosition?
+        var captionScale: Double?
+        var showsChapterNumber: Bool?
         if let position = try arguments.choice("captionPosition", in: CaptionPosition.allCases.map(\.rawValue), default: nil),
            let value = CaptionPosition(rawValue: position) {
-            caption.position = value
-            captionChanged = true
+            captionPosition = value
             changes.append("captionPosition = \(value.rawValue)")
         }
         if let value = try number("captionScale") {
-            caption.scale = clamp("captionScale", value)
-            captionChanged = true
+            captionScale = clamp("captionScale", value)
         }
         if arguments.has("showsChapterNumber") {
             guard let value = arguments.bool("showsChapterNumber") else { throw AIToolError.invalidArgument("\"showsChapterNumber\" must be true or false.") }
-            caption.showsChapterNumber = value
-            captionChanged = true
+            showsChapterNumber = value
             changes.append("showsChapterNumber = \(value)")
         }
-        if captionChanged { settings.captionStyle = caption.sanitized }
+        if captionPosition != nil || captionScale != nil || showsChapterNumber != nil {
+            let (position, scale, showsNumber) = (captionPosition, captionScale, showsChapterNumber)
+            steps.append { settings in
+                var caption = settings.resolvedCaptionStyle
+                if let position { caption.position = position }
+                if let scale { caption.scale = scale }
+                if let showsNumber { caption.showsChapterNumber = showsNumber }
+                settings.captionStyle = caption.sanitized
+            }
+        }
         if arguments.has("productDescription") {
             let description = (arguments.string("productDescription") ?? "").prefix(600)
-            settings.productDescription = description.isEmpty ? nil : String(description)
+            let stored = description.isEmpty ? nil : String(description)
+            steps.append { $0.productDescription = stored }
             changes.append("productDescription = \(description.isEmpty ? "(cleared)" : "\"\(description.prefix(60))\(description.count > 60 ? "…" : "")\"")")
         }
-
-        project.settings = settings
-        let updated = settings
-        await MainActor.run {
-            context.updateProject { $0.settings = updated }
+        if let width = try arguments.option("exportWidth", in: Self.exportWidths) {
+            steps.append { $0.exportWidth = width }
+            changes.append("exportWidth = \(width)")
         }
-        return changes
+        if let rate = try arguments.option("frameRate", in: Self.exportFrameRates) {
+            steps.append { $0.frameRate = rate }
+            changes.append("frameRate = \(rate)")
+        }
+
+        let ordered = steps
+        return SettingsUpdate(changes: changes) { settings in
+            for step in ordered { try step(&settings) }
+        }
     }
 
     static func number(_ value: Double) -> String {
-        value == value.rounded() ? String(Int(value)) : String(format: "%.2f", value)
+        if value == value.rounded(), let whole = Int(exactly: value) { return String(whole) }
+        return String(format: "%.2f", value)
     }
 }
 
@@ -779,23 +1091,32 @@ struct SetChaptersTool: AIAssistantTool {
             )
         }
         let append = arguments.bool("append") ?? false
-        let combined = append ? (project.chapters ?? []) + candidates : candidates
-        let chapters = ChapterMath.sanitized(combined, duration: project.duration)
-        guard !chapters.isEmpty else {
-            throw AIToolError.invalidArgument("No valid chapters: each needs start < end inside 0–\(AIToolSupport.seconds(project.duration)) s, at least \(ChapterMath.minimumDuration) s long, with a title or caption.")
+        // Appending merges with the chapters the project has when it is written,
+        // so a parallel call's chapters are kept.
+        let (chapters, kept) = try await AIToolSupport.edit(context, projectID: project.id) { current -> ([DemoChapter], Int) in
+            let existing = append ? (current.chapters ?? []) : []
+            let chapters = ChapterMath.sanitized(existing + candidates, duration: current.duration)
+            guard !chapters.isEmpty else {
+                throw AIToolError.invalidArgument("No valid chapters: each needs start < end inside 0–\(AIToolSupport.seconds(current.duration)) s, at least \(ChapterMath.minimumDuration) s long, with a title or caption.")
+            }
+            current.chapters = chapters
+            return (chapters, existing.count)
         }
-        await MainActor.run {
-            context.updateProject { $0.chapters = chapters }
-        }
-        var lines = [L10n.format("Set %lld chapters", chapters.count)]
+        var lines = [context.format("Set %lld chapters", chapters.count)]
         for (index, chapter) in chapters.enumerated() {
             let text = chapter.caption.isEmpty ? chapter.title : "\(chapter.title) — \(chapter.caption)"
             lines.append("\(index + 1). \(AIToolSupport.seconds(chapter.start))–\(AIToolSupport.seconds(chapter.end)) s  \(text)")
         }
-        if candidates.count != chapters.count - (append ? (project.chapters?.count ?? 0) : 0) {
-            lines.append("(\(candidates.count - (chapters.count - (append ? (project.chapters?.count ?? 0) : 0))) invalid chapters were dropped)")
+        let dropped = candidates.count - (chapters.count - kept)
+        if dropped != 0 {
+            lines.append("(\(dropped) invalid chapters were dropped)")
         }
-        return AIToolResult(text: lines.joined(separator: "\n"))
+        let data: AIJSONValue = [
+            "project_id": AIJSONValue(project.id.uuidString),
+            "chapters": .array(chapters.enumerated().map { AIProjectReport.chapterData(index: $0.offset + 1, chapter: $0.element) }),
+            "dropped": AIJSONValue(max(0, dropped) + max(0, entries.count - candidates.count)),
+        ]
+        return AIToolResult(text: lines.joined(separator: "\n"), data: data)
     }
 }
 
@@ -815,35 +1136,54 @@ struct ListAssetsTool: AIAssistantTool {
         progress: @escaping @Sendable (String) -> Void
     ) async throws -> AIToolResult {
         let directory = context.assetsDirectory
-        let fileManager = FileManager.default
-        let contents = (try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey], options: [.skipsHiddenFiles])) ?? []
-        let media = contents
-            .filter { AIToolPaths.kind(of: $0) != nil }
-            .sorted { lhs, rhs in
-                let left = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-                let right = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-                return left > right
-            }
+        let media = AIToolSupport.mediaFiles(in: directory)
         guard !media.isEmpty else {
-            return AIToolResult(text: L10n.tr("No assets yet") + "\n" + directory.path)
+            let data: AIJSONValue = ["directory": AIJSONValue(directory), "count": 0, "assets": []]
+            return AIToolResult(text: context.tr("No assets yet") + "\n" + directory.path, data: data)
         }
-        var lines = [L10n.format("%lld assets", media.count), directory.path]
+        var lines = [context.format("%lld assets", media.count), directory.path]
+        var entries: [AIJSONValue] = []
         for url in media {
-            var details = [AIToolSupport.bytes(url)]
-            switch AIToolPaths.kind(of: url) {
+            let size = AIToolSupport.fileSize(url)
+            var details = [ByteCountFormatter.string(fromByteCount: size, countStyle: .file)]
+            let kind = AIToolPaths.kind(of: url)
+            var entry: [String: AIJSONValue] = [
+                "name": AIJSONValue(url.lastPathComponent),
+                "path": AIJSONValue(url),
+                "kind": kind.map { AIJSONValue($0.rawValue) } ?? .null,
+                "size_bytes": AIJSONValue(Int(clamping: size)),
+                "modified_at": AIJSONValue(AIToolSupport.modificationDate(url)),
+            ]
+            switch kind {
             case .image:
-                if let size = ArkMediaClient.imagePixelSize(at: url) { details.insert("\(size.width) × \(size.height)", at: 0) }
+                if let pixels = ArkMediaClient.imagePixelSize(at: url) {
+                    details.insert("\(pixels.width) × \(pixels.height)", at: 0)
+                    entry["width"] = AIJSONValue(pixels.width)
+                    entry["height"] = AIJSONValue(pixels.height)
+                }
             case .video:
-                if let duration = await AIToolSupport.mediaDuration(url) { details.insert(L10n.format("%@s", AIToolSupport.seconds(duration)), at: 0) }
-                if let size = await AIToolSupport.videoSize(url) { details.insert("\(Int(size.width)) × \(Int(size.height))", at: 0) }
+                if let duration = await AIToolSupport.mediaDuration(url) {
+                    details.insert(context.format("%@s", AIToolSupport.seconds(duration)), at: 0)
+                    entry["duration"] = .rounded(duration)
+                }
+                if let pixels = await AIToolSupport.videoSize(url) {
+                    details.insert("\(Int(pixels.width)) × \(Int(pixels.height))", at: 0)
+                    entry["width"] = AIJSONValue(Int(pixels.width))
+                    entry["height"] = AIJSONValue(Int(pixels.height))
+                }
             case .audio:
-                if let duration = await AIToolSupport.mediaDuration(url) { details.insert(L10n.format("%@s", AIToolSupport.seconds(duration)), at: 0) }
+                if let duration = await AIToolSupport.mediaDuration(url) {
+                    details.insert(context.format("%@s", AIToolSupport.seconds(duration)), at: 0)
+                    entry["duration"] = .rounded(duration)
+                }
             case nil:
                 break
             }
             lines.append("\(url.lastPathComponent) · \(details.joined(separator: " · "))")
+            entries.append(.object(entry))
         }
-        return AIToolResult(text: lines.joined(separator: "\n"), attachments: Array(media.prefix(8)))
+        let data: AIJSONValue = ["directory": AIJSONValue(directory), "count": AIJSONValue(media.count), "assets": .array(entries)]
+        return AIToolResult(text: lines.joined(separator: "\n"), attachments: Array(media.prefix(8)), data: data)
     }
 }
 
@@ -874,7 +1214,7 @@ struct ExportDemoTool: AIAssistantTool {
 
 struct AssembleVideoTool: AIAssistantTool {
     let name = "assemble_video"
-    let summary = "Join clips in order (for example intro + exported demo + outro) into one 1080p MP4, with a cut or a 0.5 s crossfade. Each clip is scaled and letterboxed to fit; audio is kept."
+    let summary = "Join clips in order (for example intro + exported demo + outro) into one 1080p MP4, with a cut or a 0.5 s crossfade. Each clip is scaled and letterboxed to fit; audio is kept. Default location: assembled-<timestamp>.mp4 in the assets folder; an optional path may name a file (.mp4) or a folder, and an existing file is only replaced with overwrite: true."
 
     var parametersSchema: [String: Any] {
         [
@@ -882,8 +1222,10 @@ struct AssembleVideoTool: AIAssistantTool {
             "required": ["clips"],
             "properties": [
                 "clips": ["type": "array", "items": ["type": "string"], "minItems": 1, "description": "Local video paths or asset file names, in playback order."],
-                "transition": ["type": "string", "enum": ["cut", "crossfade"], "default": "cut"],
-                "output": ["type": "string", "enum": ["1080p", "720p"], "default": "1080p"],
+                "transition": ["type": "string", "enum": ["cut", "crossfade"], "default": "cut", "description": "How one clip gives way to the next: cut (the default) or a 0.5 s crossfade."],
+                "output": ["type": "string", "enum": ["1080p", "720p"], "default": "1080p", "description": "Size of the joined video: 1080p (the default) or 720p."],
+                "path": ["type": "string", "description": "Optional output file or folder; ~ is expanded. Never one of the clips, and not inside the Focus Studio library except the project's ai folder."],
+                "overwrite": ["type": "boolean", "default": false, "description": "Replace the file at path if it already exists."],
             ],
         ]
     }
@@ -900,12 +1242,24 @@ struct AssembleVideoTool: AIAssistantTool {
         let transition = VideoAssembler.Transition(rawValue: try arguments.choice("transition", in: ["cut", "crossfade"], default: "cut") ?? "cut") ?? .cut
         let output = try arguments.choice("output", in: ["1080p", "720p"], default: "1080p") ?? "1080p"
         let renderSize = output == "720p" ? CGSize(width: 1_280, height: 720) : CGSize(width: 1_920, height: 1_080)
-        let destination = try context.newAssetURL(prefix: "assembled", fileExtension: "mp4")
-        progress(L10n.format("Assembling %lld clips…", clips.count))
-        let result = try await VideoAssembler.assemble(clips: clips, transition: transition, renderSize: renderSize, to: destination)
-        let text = L10n.format("Assembled %@ from %lld clips (%@ s, %lld × %lld)", destination.lastPathComponent, clips.count,
-                               AIToolSupport.seconds(result.duration), Int(result.renderSize.width), Int(result.renderSize.height))
-        return AIToolResult(text: text + "\n" + destination.path, attachments: [destination])
+        let overwrite = try ExportProjectTool.overwriteArgument(arguments)
+        // The project the call is pinned to, else the open one (if any),
+        // decides which library folder may be written; the clips themselves
+        // are never replaced.
+        let project = await AIToolSupport.referencedProject(context)
+        let outputGuard = ExportProjectTool.OutputGuard(project: project, context: context, protecting: clips)
+        let destination = try AIToolPaths.outputFile(path: arguments.string("path"), context: context, prefix: "assembled", fileExtension: "mp4",
+                                                     outputGuard: outputGuard, overwrite: overwrite)
+        let rendering = AIToolSupport.renderProgress(context.format("Assembling %lld clips…", clips.count), context: context, progress: progress)
+        let result = try await VideoAssembler.assemble(clips: clips, transition: transition, renderSize: renderSize, to: destination, progress: rendering)
+        let text = context.format("Assembled %@ from %lld clips (%@ s, %lld × %lld)", destination.lastPathComponent, clips.count,
+                                  AIToolSupport.seconds(result.duration), Int(result.renderSize.width), Int(result.renderSize.height))
+        let data = AIToolSupport.merged(
+            AIToolSupport.videoData(destination, duration: result.duration, width: Int(result.renderSize.width), height: Int(result.renderSize.height)),
+            ["clip_count": AIJSONValue(clips.count), "transition": AIJSONValue(transition.rawValue),
+             "clips": .array(clips.map { AIJSONValue($0) })]
+        )
+        return AIToolResult(text: text + "\n" + destination.path, attachments: [destination], data: data)
     }
 }
 
@@ -944,12 +1298,16 @@ enum VideoAssembler {
         let end: CMTime
     }
 
+    /// `progress` receives the completed fraction (0...1) while AVFoundation
+    /// renders. Cancelling the task removes the partial file and throws
+    /// `CancellationError`.
     static func assemble(
         clips: [URL],
         transition: Transition,
         renderSize: CGSize,
         frameRate: Int = 30,
-        to outputURL: URL
+        to outputURL: URL,
+        progress: (@Sendable (Double) -> Void)? = nil
     ) async throws -> Result {
         guard !clips.isEmpty else { throw AIToolError.invalidArgument("clips must contain at least one file.") }
         guard outputURL.pathExtension.lowercased() == "mp4" else { throw AIToolError.invalidArgument("The output must be an .mp4 file.") }
@@ -1068,7 +1426,7 @@ enum VideoAssembler {
         try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
         let temporaryURL = parent.appendingPathComponent(".\(outputURL.deletingPathExtension().lastPathComponent)-\(UUID().uuidString).partial.mp4")
         do {
-            try await session.export(to: temporaryURL, as: .mp4)
+            try await ProjectVideoRenderer.runExportSession(session, to: temporaryURL, as: .mp4, progress: progress)
             if FileManager.default.fileExists(atPath: outputURL.path) {
                 _ = try FileManager.default.replaceItemAt(outputURL, withItemAt: temporaryURL)
             } else {
@@ -1076,8 +1434,10 @@ enum VideoAssembler {
             }
         } catch {
             try? FileManager.default.removeItem(at: temporaryURL)
+            if error is CancellationError || Task.isCancelled { throw CancellationError() }
             throw AIToolError.failed("Video assembly failed: \(error.localizedDescription)")
         }
+        progress?(1)
         return Result(url: outputURL, duration: totalDuration.seconds, renderSize: renderSize, clipCount: loaded.count)
     }
 
@@ -1118,17 +1478,18 @@ struct RevealInFinderTool: AIAssistantTool {
         await MainActor.run {
             NSWorkspace.shared.activateFileViewerSelecting([url])
         }
-        return AIToolResult(text: L10n.format("Revealed %@ in Finder", url.lastPathComponent))
+        return AIToolResult(text: context.format("Revealed %@ in Finder", url.lastPathComponent))
     }
 }
 
 // MARK: - Wait
 
-/// Lets multi-step flows pause, for example between start_recording and
-/// stop_recording, or while a page settles. Cancellable; capped at two minutes.
+/// Lets multi-step flows pause, for example while a page settles.
+/// Cancellable; capped at two minutes. (A recording of a set length passes
+/// duration to start_recording and waits with wait_for_recording instead.)
 struct WaitTool: AIAssistantTool {
     let name = "wait"
-    let summary = "Pause for a number of seconds (1-120) before the next step, e.g. to let a recording run for the requested time or a page load. Reports progress every 5 seconds."
+    let summary = "Pause for a number of seconds (1-120) before the next step, e.g. while a page loads. Not for recordings: pass duration to start_recording and call wait_for_recording. Reports progress every 5 seconds."
 
     var parametersSchema: [String: Any] {
         ["type": "object",
@@ -1158,7 +1519,7 @@ struct WaitTool: AIAssistantTool {
             guard remaining > 0 else { break }
             try await Task.sleep(nanoseconds: UInt64(min(5, remaining) * 1_000_000_000))
             let left = seconds - Date().timeIntervalSince(start)
-            if left > 0.5 { progress(L10n.format("Waiting… %lld s left", Int(left.rounded(.up)))) }
+            if left > 0.5 { progress(context.format("Waiting… %lld s left", Int(left.rounded(.up)))) }
         }
         return AIToolResult(text: "Waited \(Int(seconds.rounded())) s.")
     }

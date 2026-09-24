@@ -1,3 +1,4 @@
+import FocusStudioAutomation
 import FocusStudioCapture
 import FocusStudioCore
 import Foundation
@@ -8,11 +9,18 @@ import Foundation
 final class AssistantAssetsLocator: @unchecked Sendable {
     private let lock = NSLock()
     private var projectFolder: URL?
+    /// Used when no project is open.
+    let sharedDirectory: URL
 
-    /// `~/Library/Application Support/FocusStudio/AI Assets`, used when no project is open.
-    static let sharedDirectory: URL = FileManager.default
-        .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("FocusStudio/AI Assets", isDirectory: true)
+    init(sharedDirectory: URL) {
+        self.sharedDirectory = sharedDirectory
+    }
+
+    /// `AI Assets` next to the library: `~/Library/Application Support/FocusStudio/AI Assets`
+    /// for the real library, and inside the temporary folder of a test library.
+    static func sharedDirectory(forLibrary library: URL) -> URL {
+        library.standardizedFileURL.deletingLastPathComponent().appendingPathComponent("AI Assets", isDirectory: true)
+    }
 
     /// Loaded projects carry an absolute raw.mp4 path inside their own folder.
     func update(sourceVideoPath: String?) {
@@ -29,7 +37,7 @@ final class AssistantAssetsLocator: @unchecked Sendable {
     var directory: URL {
         lock.lock()
         defer { lock.unlock() }
-        return projectFolder?.appendingPathComponent("ai", isDirectory: true) ?? Self.sharedDirectory
+        return projectFolder?.appendingPathComponent("ai", isDirectory: true) ?? sharedDirectory
     }
 }
 
@@ -40,15 +48,15 @@ extension StudioModel: AppControlling {
     func refreshRecordingSources() async throws -> [AIRecordingSource] {
         if captureEngine.isRecording || destination == .countdown {
             // Never leave a live recording; just refresh the list.
-            return try await captureEngine.refreshAvailableTargets().map(AIRecordingSource.init)
+            return try await refreshListedSources().map(AIRecordingSource.init)
         }
         guard !isManagingProjects else {
-            throw AIToolError.failed(L10n.tr("Finish the current library operation before starting another."))
+            throw AILocalizedFailure("Finish the current library operation before starting another.")
         }
         if destination == .editor { closeEditor() }
         if destination == .recorder {
             do {
-                _ = try await captureEngine.refreshAvailableTargets()
+                try await refreshListedSources()
                 capturePermissionDenied = false
                 captureFailureDetails = nil
             } catch {
@@ -62,7 +70,8 @@ extension StudioModel: AppControlling {
             let wasShowingError = isShowingError
             await showRecorder()
             if capturePermissionDenied {
-                throw AIToolError.failed(captureFailureDetails ?? L10n.tr("Screen Recording permission is required."))
+                if let captureFailureDetails { throw AIToolError.failed(captureFailureDetails) }
+                throw AILocalizedFailure("Screen Recording permission is required.")
             }
             if isShowingError, !wasShowingError, captureEngine.availableTargets.isEmpty {
                 throw AIToolError.failed(errorMessage)
@@ -76,8 +85,29 @@ extension StudioModel: AppControlling {
     }
 
     var recordingPhase: AIRecordingPhase {
+        Self.recordingPhase(
+            destination: destination,
+            isFinishingRecording: isFinishingRecording,
+            engineState: captureEngine.state,
+            attemptIsLive: currentRecording?.isLive == true,
+            isRunningCodexPlan: isRunningCodexPlan
+        )
+    }
+
+    /// The recording phase from the model's state, kept apart so regression
+    /// tests can check it for states only a real capture reaches.
+    static func recordingPhase(
+        destination: Destination,
+        isFinishingRecording: Bool,
+        engineState: RecordingState,
+        attemptIsLive: Bool,
+        isRunningCodexPlan: Bool
+    ) -> AIRecordingPhase {
         if destination == .countdown { return .countdown }
-        switch captureEngine.state {
+        // Saving the project follows the engine's own stop; the phase stays
+        // `.stopping` until the editor shows the result.
+        if isFinishingRecording { return .stopping }
+        switch engineState {
         case .preparing:
             return .countdown
         case .recording:
@@ -89,43 +119,132 @@ extension StudioModel: AppControlling {
             // afterwards the engine keeps the old state until the next start.
             return destination == .recording ? .failed(message) : .idle
         case .idle, .completed:
-            return .idle
+            // A Codex Director plan saves its capture (the project is created
+            // and saved) after the engine completes and before the editor
+            // opens it; it has no recording attempt, so that save is reported
+            // as stopping, not idle (which a waiting tool reads as cancelled).
+            // Its success opens the editor and its failure the Director, both
+            // idle again.
+            if destination == .recording, isRunningCodexPlan { return .stopping }
+            // A capture this model started and nothing has ended yet. In the
+            // app the engine then reports `.recording` itself; a capture
+            // scripted through `startCapture` (regression tests) leaves the
+            // engine idle.
+            return destination == .recording && attemptIsLive ? .recording : .idle
         }
     }
+
+    // isRecordingPaused: StudioModel.swift (the control bar's Pause).
 
     var lastReportedError: String? {
         if isShowingError, !errorMessage.isEmpty { return errorMessage }
+        // A refused Screen Recording permission is shown on the recorder screen
+        // rather than as an alert; without this the assistant would read the
+        // failed start as a cancelled countdown.
+        if capturePermissionDenied { return captureFailureDetails ?? L10n.tr("Screen Recording permission is required.") }
         return nil
     }
 
-    func startRecording(sourceID: String, options: AIRecordingOptions) throws {
-        guard !captureEngine.isRecording, destination != .countdown else {
+    /// The sound the recorder's own choices record, which an external
+    /// start_recording may add to only with the person's consent.
+    var recorderAudio: AIRecordingAudio {
+        AIRecordingAudio(microphone: recordMicrophone, systemAudio: recordSystemAudio)
+    }
+
+    func startRecording(sourceID: String, options: AIRecordingOptions) throws -> UUID {
+        guard !captureEngine.isRecording, destination != .countdown, currentRecording?.isLive != true else {
             throw AIToolError.failed("A recording is already in progress.")
         }
         guard !isManagingProjects, !isRunningCodexPlan else {
-            throw AIToolError.failed(L10n.tr("Finish the current library operation before starting another."))
+            throw AILocalizedFailure("Finish the current library operation before starting another.")
         }
         guard let target = captureEngine.availableTargets.first(where: { $0.id == sourceID }) else {
             throw AIToolError.invalidArgument("Source \(sourceID) is no longer available; call list_recording_sources again.")
         }
+        return try startRecording(target: target, options: options)
+    }
+
+    /// Starts the countdown for a target the engine listed, recording with
+    /// the recorder's choices overridden by `options` for this recording only
+    /// (the recorder keeps its own), and returns the attempt's id. Kept apart
+    /// from the lookup so regression tests, which cannot fill the engine's
+    /// list without ScreenCaptureKit, can drive it.
+    func startRecording(target: CaptureTargetInfo, options: AIRecordingOptions) throws -> UUID {
+        guard !isFinishingRecording else {
+            throw AIToolError.failed("The last recording is still being saved. Try again when the editor shows it.")
+        }
+        // Checked before anything changes: the person's area and source
+        // choice stay as they are (the in-app assistant comes here without
+        // the bridge's navigation check).
+        guard !isSelectingArea else { throw AIToolError.failed(Self.drawingAreaRefusal) }
+        // The person's Record waits for macOS's microphone dialog: its
+        // countdown starts when they answer, with the source they chose.
+        guard !isWaitingForMicrophoneAccess else { throw AIToolError.failed(Self.waitingForMicrophoneRefusal) }
         if destination == .editor { closeEditor() }
-        if let value = options.systemAudio { recordSystemAudio = value }
-        if let value = options.microphone { recordMicrophone = value }
-        if let value = options.automaticZooms { automaticZooms = value }
-        if let value = options.browserContentOnly { browserContentOnly = value }
-        if let value = options.frameRate { frameRate = value }
         selectedTargetID = target.id
         recordingSourceKind = target.kind
         destination = .recorder
+        // Errors from earlier attempts must not be read as this attempt's outcome.
         isShowingError = false
-        startRecordingCountdown(allowUnavailableTracking: true)
-        guard destination == .countdown else {
+        capturePermissionDenied = false
+        captureFailureDetails = nil
+        let id = beginRecordingCountdown(
+            target: target,
+            settings: recorderSettings.applying(options),
+            duration: options.duration,
+            allowUnavailableTracking: true
+        )
+        guard let id, destination == .countdown else {
             throw AIToolError.failed(lastReportedError ?? "The countdown could not start.")
         }
+        return id
+    }
+
+    /// Applies an assistant edit to the project open in the editor through the
+    /// same path as an inspector change. Throws instead of dropping the edit
+    /// when no editor is showing or a library operation is running.
+    func applyAssistantEdit(_ mutate: (inout RecordingProject) throws -> Void) throws {
+        guard destination == .editor, var project = activeProject else { throw AIToolError.noProject }
+        guard !isManagingProjects else {
+            throw AILocalizedFailure("Finish the current library operation before starting another.")
+        }
+        try mutate(&project)
+        guard updateActiveProject(project) else {
+            throw AIToolError.failed("The editor changed before the edit was saved; nothing was changed.")
+        }
+    }
+
+    /// Seconds recorded so far, paused time left out (as in the video and
+    /// the control bar's clock).
+    var recordingElapsed: TimeInterval? {
+        guard recordingPhase == .recording else { return nil }
+        if let attempt = currentRecording, attempt.isLive {
+            return attempt.recordedDuration(at: recordingClock.now())
+        }
+        // A capture without an attempt (a Codex Director plan): the engine's clock.
+        return captureEngine.isRecording ? max(0, captureEngine.duration) : nil
+    }
+
+    /// Seconds of recording left before the duration stops it; it does not
+    /// count down while paused.
+    var recordingRemaining: TimeInterval? {
+        guard recordingPhase == .recording, let attempt = currentRecording, attempt.isLive else { return nil }
+        return attempt.remaining(at: recordingClock.now())
+    }
+
+    var recordingSession: AIRecordingSession? {
+        currentRecording?.session(at: recordingClock.now())
     }
 
     var projectSummaries: [AIProjectSummary] {
         projects.map(AIProjectSummary.init)
+    }
+
+    /// The editor holds the newest edits of the open project; every other
+    /// project is as the library last loaded or saved it.
+    func project(id: UUID) -> RecordingProject? {
+        if destination == .editor, let active = activeProject, active.id == id { return active }
+        return projects.first { $0.id == id }
     }
 
     var openProjectID: UUID? {
@@ -140,7 +259,7 @@ extension StudioModel: AppControlling {
             throw AIToolError.failed("Stop the current recording before opening a project.")
         }
         guard !isManagingProjects, !isRunningCodexPlan, !isBusy else {
-            throw AIToolError.failed(L10n.tr("Finish the current library operation before starting another."))
+            throw AILocalizedFailure("Finish the current library operation before starting another.")
         }
         if destination == .editor {
             if activeProject?.id == id { return }
@@ -154,5 +273,29 @@ extension StudioModel: AppControlling {
             guard let path = bundledAudioPath(for: asset) else { return nil }
             return AIMusicTrack(asset: asset, path: path)
         }
+    }
+
+    // importVideo(from:title:) and importScreenshotDemo(from:title:) are the
+    // Import video and Animate screenshot actions themselves (StudioModel.swift).
+
+    func renameLibraryProject(id: UUID, to title: String) async throws -> RecordingProject {
+        guard projects.contains(where: { $0.id == id }) else {
+            throw AIToolError.invalidArgument("No project has the id \(id.uuidString).")
+        }
+        try showLibraryForProjectManagement()
+        return try await renameProjectInLibrary(id: id, to: title)
+    }
+
+    func trashLibraryProject(id: UUID) async throws -> RecordingProject {
+        guard let project = project(id: id) else {
+            throw AIToolError.invalidArgument("No project has the id \(id.uuidString).")
+        }
+        try showLibraryForProjectManagement()
+        let outcome = await moveProjectsToTrash(ids: [id])
+        if let refusal = outcome.refusal { throw refusal }
+        guard outcome.deleted.contains(id) else {
+            throw outcome.failures.first ?? AILocalizedFailure("The project could not be moved to Trash. Its files were kept.")
+        }
+        return project
     }
 }

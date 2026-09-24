@@ -1,4 +1,5 @@
 import AppKit
+import FocusStudioAutomation
 import FocusStudioCore
 import SwiftUI
 import UniformTypeIdentifiers
@@ -17,7 +18,6 @@ struct EditorView: View {
         .environment["FOCUS_STUDIO_EDITOR_TOOL"]
         .flatMap(EditorTool.init(rawValue:)) ?? .zoom
     @State private var renderError: String?
-    @State private var isExporting = false
     @State private var exportMessage: String?
     @Namespace private var toolHighlight
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -73,7 +73,7 @@ struct EditorView: View {
         }
         .animation(reduceMotion ? nil : StudioMotion.panelAnimation, value: selectedTool)
         .overlay {
-            if isExporting {
+            if model.isExportingFromEditor {
                 Color.black.opacity(0.42).ignoresSafeArea()
                 VStack(spacing: 12) {
                     ProgressView().controlSize(.large)
@@ -246,15 +246,16 @@ struct EditorView: View {
         panel.allowedContentTypes = [.mpeg4Movie]
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
-        isExporting = true
+        // The model holds the export's state so automation leaves the editor
+        // alone while it renders.
+        let snapshot = project
         Task {
             do {
-                let result = try await ProjectVideoRenderer.export(project: project, to: url)
+                let result = try await model.exportFromEditor(snapshot, to: url)
                 exportMessage = L10n.format("Exported %lld × %lld at %lld fps to %@.", result.width, result.height, result.frameRate, result.outputURL.lastPathComponent)
             } catch {
                 exportMessage = L10n.format("Export failed: %@", error.localizedDescription)
             }
-            isExporting = false
         }
     }
 }

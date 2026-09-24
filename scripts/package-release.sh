@@ -38,6 +38,11 @@ fi
 if [[ -n "$NOTARY_PROFILE" ]]; then
     [[ "$RELEASE_KIND" == "developer-id" ]] || { echo "Notarization requires a Developer ID Application signature." >&2; exit 1; }
     [[ "$SIGNATURE_DETAILS" == *"runtime"* ]] || { echo "Notarization requires the hardened runtime." >&2; exit 1; }
+    # Notarization checks nested code too: the MCP helper needs the same
+    # Developer ID signature and the hardened runtime.
+    HELPER_SIGNATURE_DETAILS="$(codesign -dv --verbose=4 "$APP_DIR/Contents/MacOS/focus-studio-mcp" 2>&1)"
+    [[ "$HELPER_SIGNATURE_DETAILS" == *"Authority=Developer ID Application:"* ]] || { echo "Notarization requires the MCP helper to be signed with Developer ID Application." >&2; exit 1; }
+    [[ "$HELPER_SIGNATURE_DETAILS" == *"runtime"* ]] || { echo "Notarization requires the hardened runtime on the MCP helper." >&2; exit 1; }
     RELEASE_KIND="notarized"
 fi
 
@@ -54,6 +59,7 @@ PAYLOAD="$PACKAGE_STAGE/Focus Studio"
 mkdir -p "$PAYLOAD"
 ditto "$APP_DIR" "$PAYLOAD/Focus Studio.app"
 cp "$PROJECT_DIR/docs/INSTALL.md" "$PAYLOAD/INSTALL.md"
+cp "$APP_DIR/Contents/Resources/ThirdPartyNotices.txt" "$PAYLOAD/ThirdPartyNotices.txt"
 ln -s /Applications "$PAYLOAD/Applications"
 
 if [[ -n "$NOTARY_PROFILE" ]]; then

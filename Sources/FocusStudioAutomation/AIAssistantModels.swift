@@ -4,8 +4,8 @@ import Foundation
 /// One row of the assistant transcript. Tool and status rows are rendered
 /// differently from chat bubbles but share the same list so the order in
 /// which things happened is preserved.
-struct AIAssistantMessage: Identifiable, Equatable, Codable, Sendable {
-    enum Role: String, Codable, Sendable {
+public struct AIAssistantMessage: Identifiable, Equatable, Codable, Sendable {
+    public enum Role: String, Codable, Sendable {
         case user
         case assistant
         /// A tool result (text plus generated files) that is also fed back to the model.
@@ -15,12 +15,12 @@ struct AIAssistantMessage: Identifiable, Equatable, Codable, Sendable {
         case error
     }
 
-    var id: UUID
-    var role: Role
-    var text: String
-    var attachments: [URL]
-    var toolName: String?
-    var timestamp: Date
+    public var id: UUID
+    public var role: Role
+    public var text: String
+    public var attachments: [URL]
+    public var toolName: String?
+    public var timestamp: Date
 
     init(
         id: UUID = UUID(),
@@ -41,15 +41,15 @@ struct AIAssistantMessage: Identifiable, Equatable, Codable, Sendable {
 
 /// Providers with hidden server-side context must discard it when the local
 /// conversation or selected provider changes. Stateless HTTP providers need no hook.
-protocol AssistantConversationResetting: TextCompletionProviding {
+public protocol AssistantConversationResetting: TextCompletionProviding {
     func resetConversation() async
 }
 
 /// Shown before a paid call runs. Prices are budgeting estimates in 人民币;
 /// the Volcengine console bill is authoritative.
-struct AIToolCostEstimate: Equatable, Sendable {
-    var yuan: Double
-    var summary: String
+public struct AIToolCostEstimate: Equatable, Sendable {
+    public var yuan: Double
+    public var summary: String
 
     init(yuan: Double, summary: String) {
         self.yuan = yuan
@@ -57,43 +57,87 @@ struct AIToolCostEstimate: Equatable, Sendable {
     }
 }
 
-struct AIToolResult: Equatable, Sendable {
+public struct AIToolResult: Equatable, Sendable {
     /// Plain text for the user and the model. Keep it short and factual.
-    var text: String
+    public var text: String
     /// Files the tool produced or wants to show (images, videos, exports).
-    var attachments: [URL]
+    public var attachments: [URL]
+    /// The same outcome for a program: ids, absolute paths, counts, durations
+    /// and sizes. External clients receive it as structured content; the
+    /// in-app assistant shows only the text.
+    public var data: AIJSONValue?
 
-    init(text: String, attachments: [URL] = []) {
+    public init(text: String, attachments: [URL] = [], data: AIJSONValue? = nil) {
         self.text = text
         self.attachments = attachments
+        self.data = data
     }
 }
+
+/// Measured progress of a long call: `completed` out of `total` (nil when the
+/// total is unknown) with an optional message, e.g. `0.42, 1, "Exporting… 42%"`.
+public typealias AIToolProgressHandler = @Sendable (_ completed: Double, _ total: Double?, _ message: String?) -> Void
 
 /// Everything a tool may touch. The integrator builds one for the app; tools
 /// never reach into app state any other way, which keeps them testable.
 /// The project, the assets folder and the language are resolved on every
 /// access so one long-lived session follows whatever the user has open.
-struct AIAssistantContext: Sendable {
+public struct AIAssistantContext: Sendable {
     /// Where generated files land right now: the open project's `ai/` folder or
     /// the shared AI Assets folder. Created on first use via ``ensuredAssetsDirectory()``.
-    var assetsDirectory: URL {
+    public var assetsDirectory: URL {
         get { assetsDirectoryProvider() }
         set { let fixed = newValue; assetsDirectoryProvider = { fixed } }
     }
-    /// "zh-Hans" or "en": the language the model should answer in.
-    var uiLanguage: String {
+    /// "zh-Hans" or "en": the language the model should answer in, and the
+    /// language of every text a tool returns (results, progress, errors).
+    /// The in-app assistant follows the UI language; an external call is English.
+    public var uiLanguage: String {
         get { uiLanguageProvider() }
         set { let fixed = newValue; uiLanguageProvider = { fixed } }
     }
-    var readProject: @MainActor @Sendable () -> RecordingProject?
-    var updateProject: @MainActor @Sendable ((inout RecordingProject) -> Void) -> Void
+    public var readProject: @MainActor @Sendable () -> RecordingProject?
+    /// Applies a change to the open project. Throws, writing nothing, when the
+    /// app cannot take the edit (the editor closed, a library operation is
+    /// running) or when the change itself throws, so a tool never reports an
+    /// edit that did not happen. Tools call it through `AIToolSupport.edit`.
+    public var updateProject: @MainActor @Sendable ((inout RecordingProject) throws -> Void) throws -> Void
     /// Read on the main actor when a paid tool runs, so a key added in Settings
     /// after the session was created is picked up.
     var arkAPIKey: @MainActor @Sendable () -> String?
     var arkBaseURL: URL
+    /// The projects library root. Exports never write inside it except into
+    /// the open project's `ai/` folder. Nil when unknown (unit tests).
+    public var projectsDirectory: URL?
     /// The app itself (recording, library, editor). Nil in unit tests that only
     /// exercise project tools; app tools then report that control is unavailable.
-    var app: (any AppControlling)?
+    public var app: (any AppControlling)?
+    /// The caller's current directory (an MCP client's working directory).
+    /// Relative input paths are looked up there first; relative output paths
+    /// are written there. Nil or "/" means there is none.
+    public var workingDirectory: URL?
+    /// The call comes from outside the app (an MCP client). A relative output
+    /// path then needs a working directory instead of falling back to the
+    /// assets folder, which the caller cannot see.
+    public var isExternal = false
+    /// The project an external call targets (its `project_id`). When set,
+    /// tools refuse to read or edit any other project, and read-only tools
+    /// such as get_project look it up without opening it.
+    public var projectID: UUID?
+    /// Measured progress for long calls (exports), next to the text progress
+    /// every tool gets. Nil when nobody listens.
+    public var numericProgress: AIToolProgressHandler?
+    /// Asks the person using the app whether an external start_recording may
+    /// record sound their own recorder settings leave off (the app's prompt;
+    /// tests pass their own). Only external calls ask; with none set, such a
+    /// call is refused rather than recording sound unasked.
+    public var recordingAudioConsent: AIRecordingAudioConsentHandler?
+    /// Makes sure macOS has decided about Focus Studio's microphone access
+    /// before start_recording counts down to a recording that captures the
+    /// microphone (the app asks macOS then, not while the recording runs).
+    /// An external call is refused when the access is off; the in-app
+    /// assistant goes on as the person asked. Nil: not checked (unit tests).
+    public var microphoneAccess: AIMicrophoneAccessHandler?
 
     private var assetsDirectoryProvider: @Sendable () -> URL
     private var uiLanguageProvider: @Sendable () -> String
@@ -102,9 +146,10 @@ struct AIAssistantContext: Sendable {
         assetsDirectory: URL,
         uiLanguage: String,
         readProject: @escaping @MainActor @Sendable () -> RecordingProject?,
-        updateProject: @escaping @MainActor @Sendable ((inout RecordingProject) -> Void) -> Void,
+        updateProject: @escaping @MainActor @Sendable ((inout RecordingProject) throws -> Void) throws -> Void,
         arkAPIKey: @escaping @MainActor @Sendable () -> String?,
         arkBaseURL: URL = URL(string: "https://ark.cn-beijing.volces.com/api/v3")!,
+        projectsDirectory: URL? = nil,
         app: (any AppControlling)? = nil
     ) {
         self.init(
@@ -114,17 +159,19 @@ struct AIAssistantContext: Sendable {
             updateProject: updateProject,
             arkAPIKey: arkAPIKey,
             arkBaseURL: arkBaseURL,
+            projectsDirectory: projectsDirectory,
             app: app
         )
     }
 
-    init(
+    public init(
         assetsDirectoryProvider: @escaping @Sendable () -> URL,
         uiLanguageProvider: @escaping @Sendable () -> String,
         readProject: @escaping @MainActor @Sendable () -> RecordingProject?,
-        updateProject: @escaping @MainActor @Sendable ((inout RecordingProject) -> Void) -> Void,
+        updateProject: @escaping @MainActor @Sendable ((inout RecordingProject) throws -> Void) throws -> Void,
         arkAPIKey: @escaping @MainActor @Sendable () -> String?,
         arkBaseURL: URL = URL(string: "https://ark.cn-beijing.volces.com/api/v3")!,
+        projectsDirectory: URL? = nil,
         app: (any AppControlling)? = nil
     ) {
         self.assetsDirectoryProvider = assetsDirectoryProvider
@@ -133,10 +180,36 @@ struct AIAssistantContext: Sendable {
         self.updateProject = updateProject
         self.arkAPIKey = arkAPIKey
         self.arkBaseURL = arkBaseURL
+        self.projectsDirectory = projectsDirectory
         self.app = app
     }
 
     var isChinese: Bool { uiLanguage.lowercased().hasPrefix("zh") }
+
+    /// The language tool texts are written in, taken from ``uiLanguage`` on
+    /// every call and never from the app's global setting, so an external
+    /// call reads English while the app's own alerts stay in the UI language.
+    public var resultLanguage: AppLanguage { AppLanguage(localeIdentifier: uiLanguage) }
+
+    /// `L10n.tr` in ``resultLanguage``.
+    func tr(_ key: String) -> String { L10n.tr(key, language: resultLanguage) }
+
+    /// `L10n.format` in ``resultLanguage``.
+    func format(_ key: String, _ arguments: CVarArg...) -> String {
+        L10n.format(key, language: resultLanguage, arguments: arguments)
+    }
+
+    /// The working directory when there is a usable one (not nil, not "/").
+    var usableWorkingDirectory: URL? {
+        guard let workingDirectory, workingDirectory.isFileURL else { return nil }
+        let standardized = workingDirectory.standardizedFileURL
+        return standardized.path == "/" ? nil : standardized
+    }
+
+    /// Sends measured progress when someone listens.
+    func reportProgress(_ completed: Double, total: Double?, message: String?) {
+        numericProgress?(completed, total, message)
+    }
 
     @discardableResult
     func ensuredAssetsDirectory() throws -> URL {
@@ -168,7 +241,7 @@ struct AIAssistantContext: Sendable {
 /// A capability the assistant can invoke. `parametersSchema` is a JSON-schema
 /// style dictionary shown to the model verbatim; `run` validates arguments
 /// itself because the model may still send anything.
-protocol AIAssistantTool: Sendable {
+public protocol AIAssistantTool: Sendable {
     var name: String { get }
     var summary: String { get }
     var parametersSchema: [String: Any] { get }
@@ -182,12 +255,12 @@ protocol AIAssistantTool: Sendable {
 }
 
 extension AIAssistantTool {
-    func costEstimate(arguments: [String: Any]) -> AIToolCostEstimate? { nil }
+    public func costEstimate(arguments: [String: Any]) -> AIToolCostEstimate? { nil }
 }
 
 /// Argument problems are reported to the model in plain words so it can fix
 /// the call instead of giving up.
-enum AIToolError: LocalizedError, Equatable {
+public enum AIToolError: LocalizedError, Equatable {
     case invalidArgument(String)
     case fileNotFound(String)
     case noProject
@@ -197,7 +270,7 @@ enum AIToolError: LocalizedError, Equatable {
     /// A wait for the app (countdown, stop, export) exceeded its time limit.
     case timedOut(String)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case let .invalidArgument(message): return message
         case let .fileNotFound(path): return "File not found: \(path)"
@@ -207,4 +280,20 @@ enum AIToolError: LocalizedError, Equatable {
         case let .timedOut(message): return message
         }
     }
+}
+
+/// A tool failure that also hands programs structured data: an MCP client
+/// gets `data` as the `structuredContent` of its `isError` result (such as
+/// start_recording's `microphone_unavailable`); the in-app assistant reads
+/// only the message.
+public struct AIToolFailure: LocalizedError, Equatable, Sendable {
+    public var message: String
+    public var data: AIJSONValue
+
+    public init(_ message: String, data: AIJSONValue) {
+        self.message = message
+        self.data = data
+    }
+
+    public var errorDescription: String? { message }
 }

@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import FocusStudioAutomation
 import FocusStudioCapture
 import FocusStudioCore
 import SwiftUI
@@ -10,9 +11,21 @@ import SwiftUI
 /// The console shrinks to a bar once a take is under way, so it stops covering
 /// what is being demonstrated. Geometry lives here as pure functions so the
 /// window frame and the SwiftUI layout can never disagree.
+///
+/// The bar is also the countdown everyone sees, a recording an AI tool
+/// started included: it follows the model (``RecordingControlPanelCoordinator/follow(_:)``),
+/// not a window, so it is on every display from the countdown's first second
+/// even while the person works in another app or no main window is open. It
+/// names the AI tool that asked for the recording and the sound it records,
+/// and shows the recorded time left when a duration will stop it.
 enum RecordingPanelLayout: Equatable {
     case expanded
     case compact
+    /// The bar with room for what a recording started with a duration or
+    /// with sound shows beside the clock: the recorded time left and the
+    /// microphone / system-audio icons. Chosen at the countdown, so the bar
+    /// keeps its size for the whole take.
+    case compactDetailed
 
     static let bottomInset: CGFloat = 22
     static let edgeInset: CGFloat = 16
@@ -21,14 +34,25 @@ enum RecordingPanelLayout: Equatable {
         switch self {
         case .expanded: return NSSize(width: 760, height: 116)
         case .compact: return NSSize(width: 324, height: 46)
+        case .compactDetailed: return NSSize(width: 392, height: 46)
         }
     }
 
     var cornerRadius: CGFloat {
         switch self {
         case .expanded: return 22
-        case .compact: return 15
+        case .compact, .compactDetailed: return 15
         }
+    }
+
+    /// Either bar, as opposed to the full console.
+    var isCompact: Bool { self != .expanded }
+
+    /// The bar for a countdown or recording of `attempt`.
+    static func compact(for attempt: RecordingAttempt?) -> RecordingPanelLayout {
+        guard let attempt, attempt.outcome == nil,
+              attempt.duration != nil || attempt.settings.audioDescription != nil else { return .compact }
+        return .compactDetailed
     }
 
     func size(in visibleFrame: NSRect) -> NSSize {
@@ -79,9 +103,66 @@ final class RecordingControlPanelCoordinator: ObservableObject {
     /// Expanding mid-take is deliberate but temporary: every take starts as a bar.
     private var expandedWhileRecording = false
 
+    /// The model whose recorder, countdown and recording the bar follows.
+    private weak var followedModel: StudioModel?
+    private var followers: Set<AnyCancellable> = []
+
     private init() {}
 
+    /// Whether the bar belongs on screen: on the recorder, during a countdown
+    /// and while recording, but not while an area is being drawn.
+    static func showsControls(destination: StudioModel.Destination, isSelectingArea: Bool) -> Bool {
+        !isSelectingArea && [.recorder, .countdown, .recording].contains(destination)
+    }
+
+    /// Only a countdown or a recording stays on screen when Focus Studio is
+    /// hidden (⌘H), so the person can always see it and cancel it; the
+    /// recorder's ready console hides with the app, as any window does.
+    static func staysWhenAppHidden(_ destination: StudioModel.Destination) -> Bool {
+        destination == .countdown || destination == .recording
+    }
+
+    /// Lets the panels hide with the app, or keeps them, for `destination`.
+    private func applyHideBehavior(for destination: StudioModel.Destination) {
+        let stays = Self.staysWhenAppHidden(destination)
+        for panel in panels {
+            panel.canHide = !stays
+            // A console ⌘H already took away comes back for the countdown:
+            // changing canHide alone does not show it again.
+            if stays, !panel.isVisible { panel.orderFrontRegardless() }
+        }
+    }
+
+    /// Shows and hides the bar as `model` moves between pages, window or
+    /// not: a countdown an AI tool starts while no main window is open still
+    /// gets its bar. Called once, by the app's services.
+    func follow(_ model: StudioModel) {
+        followers.removeAll()
+        followedModel = model
+        // @Published delivers before the value changes; sync on the next pass.
+        model.$destination.combineLatest(model.$isSelectingArea)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in MainActor.assumeIsolated { self?.sync() } }
+            .store(in: &followers)
+    }
+
+    /// Puts the bar on screen for the followed model's page, or takes it away.
+    func sync() {
+        guard let model = followedModel else { return }
+        if Self.showsControls(destination: model.destination, isSelectingArea: model.isSelectingArea) {
+            show(model: model)
+            // show() early-returns once the panels exist, so this call is what
+            // lets the console shrink to the recording bar and expand back.
+            updateLayout()
+        } else {
+            hide()
+        }
+    }
+
     func show(model: StudioModel) {
+        // No application (a command-line test run), or one that may not show
+        // windows (an offscreen snapshot harness): nothing to put on screen.
+        guard let app = NSApp, app.activationPolicy() != .prohibited else { return }
         if self.model === model, !panels.isEmpty {
             // Already on screen; only the size may need to catch up.
             updateLayout()
@@ -125,7 +206,7 @@ final class RecordingControlPanelCoordinator: ObservableObject {
     private func desiredLayout(for model: StudioModel) -> RecordingPanelLayout {
         switch model.destination {
         case .countdown, .recording:
-            return expandedWhileRecording ? .expanded : .compact
+            return expandedWhileRecording ? .expanded : .compact(for: model.currentRecording)
         default:
             return .expanded
         }
@@ -139,10 +220,13 @@ final class RecordingControlPanelCoordinator: ObservableObject {
     func updateLayout(for destination: StudioModel.Destination? = nil, animated: Bool = true) {
         guard let model else { return }
         let current = destination ?? model.destination
+        // Every page change comes through here (the destination observer
+        // passes the incoming page; sync() calls it after show()).
+        applyHideBehavior(for: current)
         if current != .countdown, current != .recording { expandedWhileRecording = false }
         let desired: RecordingPanelLayout = {
             switch current {
-            case .countdown, .recording: return expandedWhileRecording ? .expanded : .compact
+            case .countdown, .recording: return expandedWhileRecording ? .expanded : .compact(for: model.currentRecording)
             default: return .expanded
             }
         }()
@@ -201,6 +285,7 @@ final class RecordingControlPanelCoordinator: ObservableObject {
 
             panel.homeVisibleFrame = visible
             panel.setFrameOrigin(frame.origin)
+            panel.canHide = !Self.staysWhenAppHidden(model.destination)
             model.captureEngine.eventMonitor.ignoredWindowNumbers.insert(panel.windowNumber)
             panel.orderFrontRegardless()
             return panel
@@ -243,6 +328,8 @@ private final class RecordingControlPanel: NSPanel {
         ]
         isFloatingPanel = true
         hidesOnDeactivate = false
+        // Whether it stays when Focus Studio is hidden (⌘H) depends on the
+        // page: see RecordingControlPanelCoordinator.staysWhenAppHidden.
         becomesKeyOnlyIfNeeded = true
         isMovableByWindowBackground = true
         isReleasedWhenClosed = false
@@ -285,6 +372,40 @@ struct FloatingRecordingControls: View {
 
     private var locked: Bool {
         model.isBusy || isStopping || captureEngine.isChangingPauseState
+            || model.isFinishingRecording || model.isChangingRecordingPause
+    }
+
+    /// The AI tool whose call started this countdown or recording, if one did.
+    private var requester: String? {
+        guard let attempt = model.currentRecording, attempt.outcome == nil else { return nil }
+        return attempt.requester
+    }
+
+    /// What is being recorded, as the person reads it.
+    private var sourceTitle: String {
+        guard let target = model.currentRecording.flatMap({ $0.outcome == nil ? $0.target : nil }) ?? model.selectedTarget else {
+            return L10n.tr("Selected source")
+        }
+        if target.kind == .window, let app = target.appName, !app.isEmpty, app != target.title {
+            return target.title.isEmpty ? app : "\(app) — \(target.title)"
+        }
+        return target.title
+    }
+
+    /// The sound this countdown or recording captures besides the screen (an
+    /// AI tool can turn it on for one recording), with the text that says so.
+    private var recordedAudio: (settings: RecordingSettings, description: String)? {
+        guard let attempt = model.currentRecording, attempt.outcome == nil,
+              let description = attempt.settings.audioDescription else { return nil }
+        return (attempt.settings, description)
+    }
+
+    /// Seconds of recording left before a duration stops it, on the engine's
+    /// clock like the timer beside it: paused time is not counted, so it
+    /// holds still while paused.
+    private var remaining: TimeInterval? {
+        guard let attempt = model.currentRecording, attempt.isLive, let limit = attempt.duration, !isStopping else { return nil }
+        return max(0, limit - captureEngine.duration)
     }
 
     private var ready: Bool { model.destination == .recorder }
@@ -297,7 +418,7 @@ struct FloatingRecordingControls: View {
 
     var body: some View {
         Group {
-            if layout == .compact {
+            if layout.isCompact {
                 compactControls
             } else {
                 consoleControls
@@ -343,11 +464,23 @@ struct FloatingRecordingControls: View {
                 Text("\(model.recordingCountdown)")
                     .font(.system(size: 26, weight: .semibold, design: .rounded))
                     .monospacedDigit()
-                Text(model.selectedTarget?.title ?? L10n.tr("Selected source"))
-                    .lineLimit(1).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(verbatim: requester.map { L10n.format("%@ asked to record %@", $0, sourceTitle) } ?? sourceTitle)
+                        .lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("recording.toolbar.countdownSource")
+                    if let recordedAudio {
+                        Label(LocalizedStringKey(recordedAudio.description),
+                              systemImage: recordedAudio.settings.microphone ? "mic.fill" : "speaker.wave.2.fill")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(StudioTheme.yellow)
+                            .lineLimit(1)
+                            .accessibilityIdentifier("recording.toolbar.countdownAudio")
+                    }
+                }
                 Spacer()
                 Button("Cancel") { model.cancelRecordingCountdown() }
                     .buttonStyle(FloatingControlButtonStyle())
+                    .help("Cancel this recording before it starts")
                     .accessibilityIdentifier("recording.toolbar.cancelCountdown")
             } else {
                 activeControls
@@ -384,10 +517,17 @@ struct FloatingRecordingControls: View {
             } else {
                 statusDot
                 clock
+                if model.destination == .countdown {
+                    if let requester { requesterBadge(requester) }
+                } else if let remaining {
+                    remainingChip(remaining)
+                }
+                if let recordedAudio { audioIcons(recordedAudio) }
                 Spacer(minLength: 0)
                 if model.destination == .countdown {
                     Button("Cancel") { model.cancelRecordingCountdown() }
                         .buttonStyle(FloatingControlButtonStyle(compact: true, height: 30))
+                        .help("Cancel this recording before it starts")
                         .accessibilityIdentifier("recording.toolbar.cancelCountdown")
                 } else {
                     pauseButton(compact: true)
@@ -413,6 +553,51 @@ struct FloatingRecordingControls: View {
                 .frame(width: 8, height: 8)
                 .accessibilityIdentifier("recording.toolbar.status")
         }
+    }
+
+    /// Which AI tool asked for this recording: its name beside a sparkle,
+    /// with what it asked to record on hover and for VoiceOver.
+    private func requesterBadge(_ requester: String) -> some View {
+        let summary = L10n.format("%@ asked to record %@", requester, sourceTitle)
+        return Label(requester, systemImage: "sparkles")
+            .font(.system(size: 10, weight: .semibold))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .foregroundStyle(Color(red: 0.72, green: 0.65, blue: 1))
+            .help(Text(verbatim: summary))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(verbatim: summary))
+            .accessibilityIdentifier("recording.toolbar.requester")
+    }
+
+    /// The sound being recorded, as yellow microphone and speaker icons
+    /// (an AI tool may turn sound on for one recording).
+    private func audioIcons(_ audio: (settings: RecordingSettings, description: String)) -> some View {
+        HStack(spacing: 3) {
+            if audio.settings.microphone { Image(systemName: "mic.fill") }
+            if audio.settings.systemAudio { Image(systemName: "speaker.wave.2.fill") }
+        }
+        .font(.system(size: 10, weight: .semibold))
+        .foregroundStyle(StudioTheme.yellow)
+        .help(LocalizedStringKey(audio.description))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(LocalizedStringKey(audio.description))
+        .accessibilityIdentifier("recording.toolbar.audio")
+    }
+
+    /// The recorded time left before the duration stops the recording.
+    private func remainingChip(_ remaining: TimeInterval) -> some View {
+        let text = remaining.rounded(.up).formattedDuration
+        return Label(text, systemImage: "timer")
+            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+            .monospacedDigit()
+            .lineLimit(1)
+            .fixedSize()
+            .foregroundStyle(.secondary)
+            .help("Stops by itself after this much more recording. Paused time does not count; finish or cancel any time.")
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(verbatim: L10n.format("Stops in %@", text)))
+            .accessibilityIdentifier("recording.toolbar.remaining")
     }
 
     /// A fixed width stops ticking digits reflowing the row every second.
@@ -854,6 +1039,8 @@ struct FloatingRecordingControls: View {
                         .accessibilityIdentifier("recording.floatingInteractionCounts")
                 }
                 .frame(minWidth: 88, alignment: .leading)
+                if let remaining { remainingChip(remaining) }
+                if let recordedAudio { audioIcons(recordedAudio) }
             }
             .padding(.leading, 5)
 
@@ -863,8 +1050,11 @@ struct FloatingRecordingControls: View {
 
             screenshotButton(iconOnly: false)
 
-            Text(model.selectedTarget?.title ?? L10n.tr("Selected source"))
-                .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+            // The source's name gives way first, so the buttons keep their
+            // words when the time left and the sound icons share the row.
+            Text(sourceTitle)
+                .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                .layoutPriority(-1)
             Spacer(minLength: 0)
 
             pauseButton(compact: false)

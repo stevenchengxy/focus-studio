@@ -1,3 +1,4 @@
+import FocusStudioAutomation
 import Foundation
 
 @main

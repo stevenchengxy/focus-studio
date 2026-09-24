@@ -1,3 +1,4 @@
+import FocusStudioAutomation
 import FocusStudioCore
 import Foundation
 
