@@ -1,3 +1,4 @@
+import FocusStudioAutomation
 import SwiftUI
 
 /// A self-contained Director panel. Its run action is intentionally a callback:

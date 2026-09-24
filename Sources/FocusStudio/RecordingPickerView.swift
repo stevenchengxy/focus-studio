@@ -1,3 +1,4 @@
+import FocusStudioAutomation
 import FocusStudioCapture
 import FocusStudioCore
 import SwiftUI

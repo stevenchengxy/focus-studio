@@ -5,8 +5,8 @@ import Foundation
 // MARK: - App control seam
 
 /// A display or window the app can record, described the way the model sees it.
-struct AIRecordingSource: Equatable, Sendable, Identifiable {
-    var id: String
+public struct AIRecordingSource: Equatable, Sendable, Identifiable {
+    public var id: String
     var kind: CaptureTargetKind
     var appName: String?
     var title: String
@@ -25,7 +25,7 @@ struct AIRecordingSource: Equatable, Sendable, Identifiable {
         self.isMainDisplay = isMainDisplay
     }
 
-    init(target: CaptureTargetInfo) {
+    public init(target: CaptureTargetInfo) {
         self.init(target: target, mainDisplayID: CGMainDisplayID())
     }
 
@@ -66,7 +66,7 @@ struct AIRecordingSource: Equatable, Sendable, Identifiable {
 }
 
 /// Where the app is in the record → stop cycle, as far as the tools care.
-enum AIRecordingPhase: Equatable, Sendable {
+public enum AIRecordingPhase: Equatable, Sendable {
     case idle
     /// The 3-second countdown (or the capture start) is under way.
     case countdown
@@ -86,14 +86,14 @@ enum AIRecordingPhase: Equatable, Sendable {
 }
 
 /// Capture options the assistant may set before a recording. Nil keeps the app's current value.
-struct AIRecordingOptions: Equatable, Sendable {
-    var systemAudio: Bool?
-    var microphone: Bool?
-    var automaticZooms: Bool?
-    var browserContentOnly: Bool?
-    var frameRate: Int?
+public struct AIRecordingOptions: Equatable, Sendable {
+    public var systemAudio: Bool?
+    public var microphone: Bool?
+    public var automaticZooms: Bool?
+    public var browserContentOnly: Bool?
+    public var frameRate: Int?
 
-    init(systemAudio: Bool? = nil, microphone: Bool? = nil, automaticZooms: Bool? = nil, browserContentOnly: Bool? = nil, frameRate: Int? = nil) {
+    public init(systemAudio: Bool? = nil, microphone: Bool? = nil, automaticZooms: Bool? = nil, browserContentOnly: Bool? = nil, frameRate: Int? = nil) {
         self.systemAudio = systemAudio
         self.microphone = microphone
         self.automaticZooms = automaticZooms
@@ -103,8 +103,8 @@ struct AIRecordingOptions: Equatable, Sendable {
 }
 
 /// A library entry as listed to the model.
-struct AIProjectSummary: Equatable, Sendable, Identifiable {
-    var id: UUID
+public struct AIProjectSummary: Equatable, Sendable, Identifiable {
+    public var id: UUID
     var title: String
     var duration: Double
     var createdAt: Date
@@ -124,7 +124,7 @@ struct AIProjectSummary: Equatable, Sendable, Identifiable {
         self.chapterCount = chapterCount
     }
 
-    init(project: RecordingProject) {
+    public init(project: RecordingProject) {
         self.init(
             id: project.id,
             title: project.title,
@@ -144,8 +144,8 @@ struct AIProjectSummary: Equatable, Sendable, Identifiable {
 }
 
 /// A bundled music track (from `AudioAssetCatalog`) resolved to a playable file.
-struct AIMusicTrack: Equatable, Sendable, Identifiable {
-    var id: String
+public struct AIMusicTrack: Equatable, Sendable, Identifiable {
+    public var id: String
     var title: String
     var mood: String
     var durationSeconds: Double
@@ -161,7 +161,7 @@ struct AIMusicTrack: Equatable, Sendable, Identifiable {
         self.path = path
     }
 
-    init(asset: AudioAssetCatalog.Asset, path: String) {
+    public init(asset: AudioAssetCatalog.Asset, path: String) {
         self.init(id: asset.id, title: asset.title, mood: asset.mood, durationSeconds: asset.durationSeconds,
                   suggestedVolume: asset.suggestedVolume, path: path)
     }
@@ -171,7 +171,7 @@ struct AIMusicTrack: Equatable, Sendable, Identifiable {
 /// browse and open the library, and look up bundled audio. `StudioModel`
 /// conforms; tests use a fake. Every member runs on the main actor.
 @MainActor
-protocol AppControlling: AnyObject, Sendable {
+public protocol AppControlling: AnyObject, Sendable {
     /// Refreshes the displays and windows from the OS and returns them.
     func refreshRecordingSources() async throws -> [AIRecordingSource]
     /// The sources from the last refresh.
@@ -619,14 +619,16 @@ struct CloseEditorTool: AIAssistantTool {
 
 // MARK: - add_zoom
 
-struct AddZoomTool: AIAssistantTool {
-    let name = "add_zoom"
-    let summary = "Add a manual zoom to the open project: the camera moves to (x, y) on the recording between start and end seconds. Existing automatic zooms stay."
+public struct AddZoomTool: AIAssistantTool {
+    public let name = "add_zoom"
+    public let summary = "Add a manual zoom to the open project: the camera moves to (x, y) on the recording between start and end seconds. Existing automatic zooms stay."
 
     static let minimumDuration = 0.2
     static let scaleRange = 1.1...3.0
 
-    var parametersSchema: [String: Any] {
+    public init() {}
+
+    public var parametersSchema: [String: Any] {
         [
             "type": "object",
             "required": ["start", "end", "x", "y"],
@@ -640,7 +642,7 @@ struct AddZoomTool: AIAssistantTool {
         ]
     }
 
-    func run(
+    public func run(
         arguments raw: [String: Any],
         context: AIAssistantContext,
         progress: @escaping @Sendable (String) -> Void
@@ -972,9 +974,9 @@ struct SetSoundEffectsTool: AIAssistantTool {
 
 // MARK: - export_project
 
-struct ExportProjectTool: AIAssistantTool {
-    let name: String
-    let summary: String
+public struct ExportProjectTool: AIAssistantTool {
+    public let name: String
+    public let summary: String
 
     init() {
         self.init(name: "export_project", summary: "Render the open project with its look, zooms, captions and audio to an MP4. Default location: export-<timestamp>.mp4 in the assets folder; an optional path may name a file (.mp4) or a folder. An existing file is only replaced with overwrite: true, and the project's own recording and media are never written.")
@@ -985,7 +987,7 @@ struct ExportProjectTool: AIAssistantTool {
         self.summary = summary
     }
 
-    var parametersSchema: [String: Any] {
+    public var parametersSchema: [String: Any] {
         [
             "type": "object",
             "properties": [
@@ -995,7 +997,7 @@ struct ExportProjectTool: AIAssistantTool {
         ]
     }
 
-    func run(
+    public func run(
         arguments raw: [String: Any],
         context: AIAssistantContext,
         progress: @escaping @Sendable (String) -> Void
@@ -1019,7 +1021,7 @@ struct ExportProjectTool: AIAssistantTool {
     /// a file name gets an `.mp4` extension when it lacks one. With a project,
     /// the destination must also pass ``OutputGuard``, checked before any
     /// folder is created.
-    static func resolveOutputURL(
+    public static func resolveOutputURL(
         path: String?,
         context: AIAssistantContext,
         date: Date = Date(),

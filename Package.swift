@@ -9,6 +9,7 @@ let package = Package(
     products: [
         .library(name: "FocusStudioCore", targets: ["FocusStudioCore"]),
         .library(name: "FocusStudioCapture", targets: ["FocusStudioCapture"]),
+        .library(name: "FocusStudioAutomation", targets: ["FocusStudioAutomation"]),
         .executable(name: "FocusStudio", targets: ["FocusStudio"]),
         .executable(name: "FocusStudioE2E", targets: ["FocusStudioE2E"]),
         .executable(name: "FocusStudioPermissionTests", targets: ["FocusStudioPermissionTests"])
@@ -23,9 +24,14 @@ let package = Package(
             dependencies: ["FocusStudioCore"],
             path: "Sources/FocusStudio/Capture"
         ),
+        .target(
+            name: "FocusStudioAutomation",
+            dependencies: ["FocusStudioCore"],
+            path: "Sources/FocusStudioAutomation"
+        ),
         .executableTarget(
             name: "FocusStudio",
-            dependencies: ["FocusStudioCore", "FocusStudioCapture"],
+            dependencies: ["FocusStudioCore", "FocusStudioCapture", "FocusStudioAutomation"],
             path: "Sources/FocusStudio",
             exclude: ["Capture"]
         ),

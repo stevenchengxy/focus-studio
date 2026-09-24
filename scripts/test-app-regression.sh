@@ -14,10 +14,11 @@ APP_SOURCES=(Sources/FocusStudio/*.swift Sources/FocusStudio/AI/*.swift Sources/
 APP_SOURCES=("${(@)APP_SOURCES:#Sources/FocusStudio/FocusStudioApp.swift}")
 CORE_OBJECTS=("$BUILD_DIR"/FocusStudioCore.build/*.swift.o)
 CAPTURE_OBJECTS=("$BUILD_DIR"/FocusStudioCapture.build/*.swift.o)
+AUTOMATION_OBJECTS=("$BUILD_DIR"/FocusStudioAutomation.build/*.swift.o)
 swiftc -parse-as-library -g \
   -I "$BUILD_DIR/Modules" \
   "${APP_SOURCES[@]}" \
   Tests/FocusStudioAppRegression/*.swift \
-  "${CORE_OBJECTS[@]}" "${CAPTURE_OBJECTS[@]}" \
+  "${CORE_OBJECTS[@]}" "${CAPTURE_OBJECTS[@]}" "${AUTOMATION_OBJECTS[@]}" \
   -o "$TEST_DIR/navigation-regression"
 "$TEST_DIR/navigation-regression"

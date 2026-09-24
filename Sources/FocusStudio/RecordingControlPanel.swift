@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import FocusStudioAutomation
 import FocusStudioCapture
 import SwiftUI
 

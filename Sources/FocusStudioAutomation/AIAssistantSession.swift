@@ -134,12 +134,12 @@ enum AIAssistantProtocol {
 /// One conversation with the assistant: the transcript, the agent loop that
 /// turns model replies into tool calls, and the confirmation gate for paid calls.
 @MainActor
-final class AIAssistantSession: ObservableObject {
-    struct PendingToolCall: Identifiable {
-        let id = UUID()
+public final class AIAssistantSession: ObservableObject {
+    public struct PendingToolCall: Identifiable {
+        public let id = UUID()
         let tool: any AIAssistantTool
         let arguments: [String: Any]
-        let estimate: AIToolCostEstimate
+        public let estimate: AIToolCostEstimate
 
         var toolName: String { tool.name }
     }
@@ -149,16 +149,16 @@ final class AIAssistantSession: ObservableObject {
     static let maximumListedAssets = 12
     static let maximumListedZooms = 16
 
-    @Published private(set) var messages: [AIAssistantMessage] = []
-    @Published private(set) var isRunning = false
-    @Published private(set) var pendingConfirmation: PendingToolCall?
+    @Published public private(set) var messages: [AIAssistantMessage] = []
+    @Published public private(set) var isRunning = false
+    @Published public private(set) var pendingConfirmation: PendingToolCall?
     /// Follow-ups offered by the last reply.
-    @Published private(set) var suggestions: [String] = []
+    @Published public private(set) var suggestions: [String] = []
     /// Whether a text model (or Codex) can answer right now. Re-evaluated with
     /// ``refreshModelAvailability()`` whenever the app's AI settings change.
-    @Published private(set) var hasModel: Bool
+    @Published public private(set) var hasModel: Bool
 
-    let context: AIAssistantContext
+    public let context: AIAssistantContext
     let tools: [any AIAssistantTool]
 
     private let completionResolver: @MainActor () -> (any TextCompletionProviding)?
@@ -178,7 +178,7 @@ final class AIAssistantSession: ObservableObject {
 
     /// `completionResolver` is consulted on every send, so switching the model
     /// or the assistant brain in Settings applies to the next message.
-    init(
+    public init(
         context: AIAssistantContext,
         completionResolver: @escaping @MainActor () -> (any TextCompletionProviding)?,
         tools: [any AIAssistantTool] = AIAssistantToolCatalog.standard
@@ -193,14 +193,14 @@ final class AIAssistantSession: ObservableObject {
     /// The provider that would answer the next message.
     var completion: (any TextCompletionProviding)? { completionResolver() }
 
-    func refreshModelAvailability() {
+    public func refreshModelAvailability() {
         let available = completionResolver() != nil
         if available != hasModel { hasModel = available }
     }
 
     // MARK: - Public actions
 
-    func send(_ text: String, attachments: [URL] = []) {
+    public func send(_ text: String, attachments: [URL] = []) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !isRunning, !trimmed.isEmpty || !attachments.isEmpty else { return }
         refreshModelAvailability()
@@ -220,12 +220,12 @@ final class AIAssistantSession: ObservableObject {
         }
     }
 
-    func confirmPending() { resolveConfirmation(true) }
+    public func confirmPending() { resolveConfirmation(true) }
 
-    func cancelPending() { resolveConfirmation(false) }
+    public func cancelPending() { resolveConfirmation(false) }
 
     /// Cancels the running step (and any Ark task being polled).
-    func stop() {
+    public func stop() {
         guard isRunning else { return }
         runningTask?.cancel()
         resolveConfirmation(false)

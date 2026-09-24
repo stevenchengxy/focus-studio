@@ -3,6 +3,7 @@ import ApplicationServices
 import AVFoundation
 import Combine
 import CoreImage
+import FocusStudioAutomation
 import FocusStudioCapture
 import FocusStudioCore
 import Foundation

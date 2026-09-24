@@ -4,8 +4,8 @@ import Foundation
 /// One row of the assistant transcript. Tool and status rows are rendered
 /// differently from chat bubbles but share the same list so the order in
 /// which things happened is preserved.
-struct AIAssistantMessage: Identifiable, Equatable, Sendable {
-    enum Role: String, Sendable {
+public struct AIAssistantMessage: Identifiable, Equatable, Sendable {
+    public enum Role: String, Sendable {
         case user
         case assistant
         /// A tool result (text plus generated files) that is also fed back to the model.
@@ -15,12 +15,12 @@ struct AIAssistantMessage: Identifiable, Equatable, Sendable {
         case error
     }
 
-    var id: UUID
-    var role: Role
-    var text: String
-    var attachments: [URL]
-    var toolName: String?
-    var timestamp: Date
+    public var id: UUID
+    public var role: Role
+    public var text: String
+    public var attachments: [URL]
+    public var toolName: String?
+    public var timestamp: Date
 
     init(
         id: UUID = UUID(),
@@ -41,9 +41,9 @@ struct AIAssistantMessage: Identifiable, Equatable, Sendable {
 
 /// Shown before a paid call runs. Prices are budgeting estimates in 人民币;
 /// the Volcengine console bill is authoritative.
-struct AIToolCostEstimate: Equatable, Sendable {
-    var yuan: Double
-    var summary: String
+public struct AIToolCostEstimate: Equatable, Sendable {
+    public var yuan: Double
+    public var summary: String
 
     init(yuan: Double, summary: String) {
         self.yuan = yuan
@@ -51,7 +51,7 @@ struct AIToolCostEstimate: Equatable, Sendable {
     }
 }
 
-struct AIToolResult: Equatable, Sendable {
+public struct AIToolResult: Equatable, Sendable {
     /// Plain text for the user and the model. Keep it short and factual.
     var text: String
     /// Files the tool produced or wants to show (images, videos, exports).
@@ -67,7 +67,7 @@ struct AIToolResult: Equatable, Sendable {
 /// never reach into app state any other way, which keeps them testable.
 /// The project, the assets folder and the language are resolved on every
 /// access so one long-lived session follows whatever the user has open.
-struct AIAssistantContext: Sendable {
+public struct AIAssistantContext: Sendable {
     /// Where generated files land right now: the open project's `ai/` folder or
     /// the shared AI Assets folder. Created on first use via ``ensuredAssetsDirectory()``.
     var assetsDirectory: URL {
@@ -84,14 +84,14 @@ struct AIAssistantContext: Sendable {
     /// app cannot take the edit (the editor closed, a library operation is
     /// running) or when the change itself throws, so a tool never reports an
     /// edit that did not happen. Tools call it through `AIToolSupport.edit`.
-    var updateProject: @MainActor @Sendable ((inout RecordingProject) throws -> Void) throws -> Void
+    public var updateProject: @MainActor @Sendable ((inout RecordingProject) throws -> Void) throws -> Void
     /// Read on the main actor when a paid tool runs, so a key added in Settings
     /// after the session was created is picked up.
     var arkAPIKey: @MainActor @Sendable () -> String?
     var arkBaseURL: URL
     /// The projects library root. Exports never write inside it except into
     /// the open project's `ai/` folder. Nil when unknown (unit tests).
-    var projectsDirectory: URL?
+    public var projectsDirectory: URL?
     /// The app itself (recording, library, editor). Nil in unit tests that only
     /// exercise project tools; app tools then report that control is unavailable.
     var app: (any AppControlling)?
@@ -121,7 +121,7 @@ struct AIAssistantContext: Sendable {
         )
     }
 
-    init(
+    public init(
         assetsDirectoryProvider: @escaping @Sendable () -> URL,
         uiLanguageProvider: @escaping @Sendable () -> String,
         readProject: @escaping @MainActor @Sendable () -> RecordingProject?,
@@ -173,7 +173,7 @@ struct AIAssistantContext: Sendable {
 /// A capability the assistant can invoke. `parametersSchema` is a JSON-schema
 /// style dictionary shown to the model verbatim; `run` validates arguments
 /// itself because the model may still send anything.
-protocol AIAssistantTool: Sendable {
+public protocol AIAssistantTool: Sendable {
     var name: String { get }
     var summary: String { get }
     var parametersSchema: [String: Any] { get }
@@ -187,12 +187,12 @@ protocol AIAssistantTool: Sendable {
 }
 
 extension AIAssistantTool {
-    func costEstimate(arguments: [String: Any]) -> AIToolCostEstimate? { nil }
+    public func costEstimate(arguments: [String: Any]) -> AIToolCostEstimate? { nil }
 }
 
 /// Argument problems are reported to the model in plain words so it can fix
 /// the call instead of giving up.
-enum AIToolError: LocalizedError, Equatable {
+public enum AIToolError: LocalizedError, Equatable {
     case invalidArgument(String)
     case fileNotFound(String)
     case noProject
@@ -202,7 +202,7 @@ enum AIToolError: LocalizedError, Equatable {
     /// A wait for the app (countdown, stop, export) exceeded its time limit.
     case timedOut(String)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case let .invalidArgument(message): return message
         case let .fileNotFound(path): return "File not found: \(path)"

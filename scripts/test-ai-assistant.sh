@@ -18,12 +18,12 @@ CORE_OBJECTS=("$BUILD_DIR"/FocusStudioCore.build/*.swift.o)
 swiftc -parse-as-library -g \
   -target "$(uname -m)-apple-macosx15.0" \
   -I "$BUILD_DIR/Modules" \
-  Sources/FocusStudio/AppLocalization.swift \
-  Sources/FocusStudio/AI/Assistant/AIAssistantModels.swift \
-  Sources/FocusStudio/AI/Assistant/ArkMediaClient.swift \
-  Sources/FocusStudio/AI/Assistant/AIAssistantTools.swift \
-  Sources/FocusStudio/AI/Assistant/AIAssistantAppControl.swift \
-  Sources/FocusStudio/AI/Assistant/AIAssistantSession.swift \
+  Sources/FocusStudioAutomation/Localization.swift \
+  Sources/FocusStudioAutomation/AIAssistantModels.swift \
+  Sources/FocusStudioAutomation/ArkMediaClient.swift \
+  Sources/FocusStudioAutomation/AIAssistantTools.swift \
+  Sources/FocusStudioAutomation/AIAssistantAppControl.swift \
+  Sources/FocusStudioAutomation/AIAssistantSession.swift \
   Tests/AIAssistantTests/main.swift \
   "${CORE_OBJECTS[@]}" \
   -o "$TEST_DIR/AIAssistantTests"

@@ -104,7 +104,7 @@ MINIMUM_MACOS="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$PR
 source_digest() {
     {
         shasum -a 256 "$PROJECT_DIR/Package.swift" "$PROJECT_DIR/Resources/Info.plist" "$PROJECT_DIR/Resources/FocusStudio.entitlements"
-        find "$PROJECT_DIR/Sources/FocusStudio" "$PROJECT_DIR/Sources/FocusStudioCore" -type f -name '*.swift' -print | LC_ALL=C sort | while IFS= read -r source_file; do
+        find "$PROJECT_DIR/Sources/FocusStudio" "$PROJECT_DIR/Sources/FocusStudioCore" "$PROJECT_DIR/Sources/FocusStudioAutomation" -type f -name '*.swift' -print | LC_ALL=C sort | while IFS= read -r source_file; do
             shasum -a 256 "$source_file"
         done
         find "$PROJECT_DIR/Resources" -type f -print | LC_ALL=C sort | while IFS= read -r resource_file; do

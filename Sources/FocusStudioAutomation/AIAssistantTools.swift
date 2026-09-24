@@ -5,8 +5,8 @@ import Foundation
 import UniformTypeIdentifiers
 
 /// The tools the assistant may call, in the order they are described to the model.
-enum AIAssistantToolCatalog {
-    static var standard: [any AIAssistantTool] {
+public enum AIAssistantToolCatalog {
+    public static var standard: [any AIAssistantTool] {
         [
             // Pacing for multi-step flows ("record for 8 seconds").
             WaitTool(),
@@ -120,13 +120,13 @@ struct AIToolArguments {
 
 // MARK: - Paths
 
-enum AIToolPaths {
+public enum AIToolPaths {
     enum Reference: Equatable {
         case remote(String)
         case local(URL)
     }
 
-    enum MediaKind {
+    public enum MediaKind {
         case image
         case video
         case audio
@@ -219,7 +219,7 @@ enum AIToolPaths {
         UTType(filenameExtension: url.pathExtension.lowercased())?.preferredMIMEType
     }
 
-    static func kind(of url: URL) -> MediaKind? {
+    public static func kind(of url: URL) -> MediaKind? {
         let ext = url.pathExtension.lowercased()
         if imageExtensions.contains(ext) { return .image }
         if videoExtensions.contains(ext) { return .video }
@@ -230,7 +230,7 @@ enum AIToolPaths {
 
 // MARK: - Shared helpers
 
-enum AIToolSupport {
+public enum AIToolSupport {
     static func requireArkClient(_ context: AIAssistantContext) async throws -> ArkMediaClient {
         let stored = await MainActor.run { context.arkAPIKey() }
         guard let key = stored?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty else {
@@ -250,7 +250,7 @@ enum AIToolSupport {
     /// calls and the user's own edits to other keys survive. Throws, changing
     /// nothing, when the app drops the write, when `change` throws, or when a
     /// different project was opened since the tool read `projectID`.
-    static func edit<Value: Sendable>(
+    public static func edit<Value: Sendable>(
         _ context: AIAssistantContext,
         projectID: UUID,
         _ change: @escaping @Sendable (inout RecordingProject) throws -> Value

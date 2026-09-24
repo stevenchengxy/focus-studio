@@ -1,4 +1,5 @@
 import CoreGraphics
+import FocusStudioAutomation
 import FocusStudioCapture
 import FocusStudioCore
 import Foundation
