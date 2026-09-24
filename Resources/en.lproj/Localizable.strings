@@ -541,7 +541,6 @@
 "Focus Studio is recording. Try again after the recording is stopped." = "Focus Studio is recording. Try again after the recording is stopped.";
 "Focus Studio is busy. Try again when the current task finishes." = "Focus Studio is busy. Try again when the current task finishes.";
 "Project “%@” could not be renamed: %@" = "Project “%@” could not be renamed: %@";
-"Moved %lld of %lld selected projects to Trash. The remaining projects were kept.\n%@" = "Moved %lld of %lld selected projects to Trash. The remaining projects were kept.\n%@";
 "“%@”: %@" = "“%@”: %@";
 "%lld selected projects are no longer in the library." = "%lld selected projects are no longer in the library.";
 
@@ -728,6 +727,133 @@
 "Screen Recording permission is required." = "Screen Recording permission is required.";
 "Waiting… %lld s left" = "Waiting… %lld s left";
 
+/* 1.5: shared conversation and verified installation */
+"Installation" = "Installation";
+"Demo Director" = "Demo Director";
+"Create with AI" = "Create with AI";
+"Finish recording, exporting, and assistant tasks before managing installation." = "Finish recording, exporting, and assistant tasks before managing installation.";
+"This copy" = "This copy";
+"Version" = "Version";
+"Installed copy" = "Installed copy";
+"Not installed" = "Not installed";
+"You opened an older copy. A newer version is already installed." = "You opened an older copy. A newer version is already installed.";
+"This version and build are already installed with different contents. Use a newer build to update." = "This version and build are already installed with different contents. Use a newer build to update.";
+"You are using the installed copy." = "You are using the installed copy.";
+"Install one canonical copy in Applications to avoid opening an older download or build." = "Install one canonical copy in Applications to avoid opening an older download or build.";
+"Install this copy to Applications" = "Install this copy to Applications";
+"Open installed copy" = "Open installed copy";
+"Refresh" = "Refresh";
+"Previous app recovery folder" = "Previous app recovery folder";
+"Updates and permissions" = "Updates and permissions";
+"Open a newer trusted release, then use its installation action. Automatic online updates are not enabled." = "Open a newer trusted release, then use its installation action. Automatic online updates are not enabled.";
+"Projects and credentials stay in your user Library. Other app copies are never deleted automatically." = "Projects and credentials stay in your user Library. Other app copies are never deleted automatically.";
+"Local builds are not Apple-notarized. Moving or rebuilding an ad-hoc signed app may require granting macOS permissions again." = "Local builds are not Apple-notarized. Moving or rebuilding an ad-hoc signed app may require granting macOS permissions again.";
+"After opening the installed copy, quit the older window yourself and replace any old Dock shortcut with the app in Applications." = "After opening the installed copy, quit the older window yourself and replace any old Dock shortcut with the app in Applications.";
+"Install" = "Install";
+"Installing…" = "Installing…";
+"The verified app will be copied to /Applications/Focus Studio.app. A previous installation is backed up. Running apps are not replaced, and your projects are not changed." = "The verified app will be copied to /Applications/Focus Studio.app. A previous installation is backed up. Running apps are not replaced, and your projects are not changed.";
+"Installation settings" = "Installation settings";
+"Install Focus Studio in Applications?" = "Install Focus Studio in Applications?";
+"This app is running outside Applications." = "This app is running outside Applications.";
+"Installed successfully. Open the installed copy when you are ready." = "Installed successfully. Open the installed copy when you are ready.";
+"This version is already installed." = "This version is already installed.";
+"The app has an invalid version or build number." = "The app has an invalid version or build number.";
+"Choose a valid Focus Studio app bundle." = "Choose a valid Focus Studio app bundle.";
+"The Applications folder is not writable. Ask an administrator to install this app." = "The Applications folder is not writable. Ask an administrator to install this app.";
+"Another installation is in progress. If it was interrupted, review the installation lock before retrying." = "Another installation is in progress. If it was interrupted, review the installation lock before retrying.";
+"A newer version is already installed. Downgrades are not allowed." = "A newer version is already installed. Downgrades are not allowed.";
+"Quit the installed Focus Studio first. A running app will never be replaced." = "Quit the installed Focus Studio first. A running app will never be replaced.";
+"The copied app did not match its source. The installed app was not changed." = "The copied app did not match its source. The installed app was not changed.";
+"The installed app changed during installation. Please retry." = "The installed app changed during installation. Please retry.";
+"The installed app failed verification." = "The installed app failed verification.";
+"Installation could not be rolled back automatically. Your previous app is preserved in the recovery folder." = "Installation could not be rolled back automatically. Your previous app is preserved in the recovery folder.";
+"The app signature could not be verified. Download a fresh copy from a trusted source." = "The app signature could not be verified. Download a fresh copy from a trusted source.";
+"This app does not support this Mac's processor architecture." = "This app does not support this Mac's processor architecture.";
+"One conversation, from idea to recording" = "One conversation, from idea to recording";
+"Draft · review before running" = "Draft · review before running";
+"Ask in chat to change the steps. Nothing runs until you approve the plan." = "Ask in chat to change the steps. Nothing runs until you approve the plan.";
+"Discuss your idea in chat. A recording plan will appear here when you ask for one." = "Discuss your idea in chat. A recording plan will appear here when you ask for one.";
+"Run this recording plan?" = "Run this recording plan?";
+"This opens the selected target and may click, scroll, navigate, and record it. Review every step before continuing." = "This opens the selected target and may click, scroll, navigate, and record it. Review every step before continuing.";
+"Recording plan approved. See the recorder for progress." = "Recording plan approved. See the recorder for progress.";
+"Live clicks need a freshly observed target. This chat can draft navigation, scrolling, and waiting; use manual recording for clicks." = "Live clicks need a freshly observed target. This chat can draft navigation, scrolling, and waiting; use manual recording for clicks.";
+"This action was already attempted for this request. It was not run again. Review its earlier result; send a new message to explicitly try the action again." = "This action was already attempted for this request. It was not run again. Review its earlier result; send a new message to explicitly try the action again.";
+"Allow %@? Recording only changes after you confirm." = "Allow %@? Recording only changes after you confirm.";
+"Saved conversation could not be read. Start a new conversation to replace it." = "Saved conversation could not be read. Start a new conversation to replace it.";
+"Conversation is available in this window, but could not be saved locally." = "Conversation is available in this window, but could not be saved locally.";
+"Retry reply" = "Retry reply";
+"Continues the conversation without repeating completed actions." = "Continues the conversation without repeating completed actions.";
+"Start a new conversation?" = "Start a new conversation?";
+"New conversation" = "New conversation";
+"Clears the saved chat and draft plan. Your recordings and edits stay unchanged." = "Clears the saved chat and draft plan. Your recordings and edits stay unchanged.";
+"Model settings" = "Model settings";
+"Plan submitted" = "Plan submitted";
+"Confirm recording action" = "Confirm recording action";
+"Help me plan a product demo before recording" = "Help me plan a product demo before recording";
+"Show cursor" = "Show cursor";
+"Hiding the pointer keeps click effects and zooms. You can change this after recording." = "Hiding the pointer keeps click effects and zooms. You can change this after recording.";
+"Does not erase a pointer already baked into an imported video or screenshot." = "Does not erase a pointer already baked into an imported video or screenshot.";
+"No sources available" = "No sources available";
+"Ready to record" = "Ready to record";
+"Browser content only" = "Browser content only";
+"Paused" = "Paused";
+"Recording" = "Recording";
+"Pause recording" = "Pause recording";
+"Resume recording" = "Resume recording";
+"Paused — video, audio and interaction timing are paused." = "Paused — video, audio and interaction timing are paused.";
+"The recording clock became invalid. Focus Studio stopped the plan before sending another input." = "The recording clock became invalid. Focus Studio stopped the plan before sending another input.";
+"Recording controls" = "Recording controls";
+"Capture console" = "Capture console";
+"Choose recording source" = "Choose recording source";
+"Follow cursor" = "Follow cursor";
+
+/* zoom transition boundaries */
+"Zoom in ends" = "Zoom in ends";
+"Zoom out starts" = "Zoom out starts";
+"Drag to change when the zoom-in finishes" = "Drag to change when the zoom-in finishes";
+"Drag to change when the zoom-out starts" = "Drag to change when the zoom-out starts";
+
+/* timeline zoom actions */
+"Add zoom at playhead" = "Add zoom at playhead";
+"Duplicate zoom" = "Duplicate zoom";
+"Moved %lld of %lld selected projects to Trash. The remaining projects were kept.\n%@" = "Moved %lld of %lld selected projects to Trash. The remaining projects were kept.\n%@";
+
+
+/* cursor styles and press animation */
+"Elevated" = "Elevated";
+"Light" = "Light";
+"Cursor press" = "Cursor press";
+"Press in" = "Press in";
+"Pop out" = "Pop out";
+"Press amount" = "Press amount";
+
+/* compact recording controls */
+"Cancel recording" = "Cancel recording";
+"Discard?" = "Discard?";
+"Discard recording" = "Discard recording";
+"Keep recording" = "Keep recording";
+"Expand controls" = "Expand controls";
+"Collapse controls" = "Collapse controls";
+
+/* recording bar */
+"Discard recording?" = "Discard recording?";
+"Discard" = "Discard";
+"Keep" = "Keep";
+"Discarding recording…" = "Discarding recording…";
+"Show full controls" = "Show full controls";
+"Hide full controls" = "Hide full controls";
+"This recording could not be moved to the Trash, so it was kept at %@.\n%@" = "This recording could not be moved to the Trash, so it was kept at %@.\n%@";
+
+/* area selection overlay */
+"Use this area" = "Use this area";
+"Draw again" = "Draw again";
+"Whole display" = "Whole display";
+"Drag to select the clean recording area" = "Drag to select the clean recording area";
+"Drag again to adjust, or use the buttons below" = "Drag again to adjust, or use the buttons below";
+"That area is not on “%@”. Draw the area again inside the display." = "That area is not on “%@”. Draw the area again inside the display.";
+
+/* bundled backgrounds */
+"FOCUS STUDIO BACKGROUNDS" = "FOCUS STUDIO BACKGROUNDS";
 /* 1.5: AI tools over MCP (control channel, approval, Settings › AI tools) */
 "Allow AI tools to control Focus Studio" = "Allow AI tools to control Focus Studio";
 "Claude Code, Codex and other MCP clients can record, edit and export in Focus Studio through focus-studio-mcp. The first time an AI tool calls, Focus Studio asks you to approve it. Every recording still shows the countdown and the control bar." = "Claude Code, Codex and other MCP clients can record, edit and export in Focus Studio through focus-studio-mcp. The first time an AI tool calls, Focus Studio asks you to approve it. Every recording still shows the countdown and the control bar.";
@@ -781,7 +907,6 @@
 "“%@” wants to record system audio" = "“%@” wants to record system audio";
 "It is about to record “%@”. Your recorder settings leave this sound off; your answer applies to this recording only and changes no settings." = "It is about to record “%@”. Your recorder settings leave this sound off; your answer applies to this recording only and changes no settings.";
 "“Record without sound” records the screen only, with no sound at all. If nobody answers within %lld seconds, nothing is recorded." = "“Record without sound” records the screen only, with no sound at all. If nobody answers within %lld seconds, nothing is recorded.";
-"Cancel recording" = "Cancel recording";
 "Record without sound" = "Record without sound";
 "Allow for this recording" = "Allow for this recording";
 "AI tools are turned off. Focus Studio refuses their calls." = "AI tools are turned off. Focus Studio refuses their calls.";
@@ -796,3 +921,7 @@
 "Recording microphone and system audio" = "Recording microphone and system audio";
 "Recording microphone" = "Recording microphone";
 "Recording system audio" = "Recording system audio";
+
+/* Merge of the MCP work with 1.6–1.11: the recording control bar's remaining time, a plan refused during a recording */
+"Stops by itself after this much more recording. Paused time does not count; finish or cancel any time." = "Stops by itself after this much more recording. Paused time does not count; finish or cancel any time.";
+"Finish or cancel the current recording first." = "Finish or cancel the current recording first.";

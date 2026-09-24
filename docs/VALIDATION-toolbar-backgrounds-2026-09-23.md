@@ -1,0 +1,51 @@
+# 录制控制条重设计与自带背景图（2026-09-23，1.11.0 / build 18）
+
+## 1. 控制条：用图标代替文字，并把区域操作放回控制条
+
+你报的两个问题的根因：
+
+- 控制条里其实有启动区域框选的入口，但它藏在来源菜单的「区域」分区里，那些行显示的是**显示器名字**，和上面「显示器」分区的行一模一样，没有图标也没有任何提示说点了会进入框选。谁都找不到。
+- 一旦框好区域，控制条里没有任何重新框选的入口，唯一的入口是右侧面板里 9pt 的「重新选择区域」链接。
+- 区域模式下还没框选时，开始录制按钮是静默禁用的，控制条里没有任何补救路径，这正是你卡住的地方。
+
+现在的样子：
+
+| 位置 | 之前 | 现在 |
+| --- | --- | --- |
+| 标题行 | FOCUS STUDIO + 「录制控制台」+「准备就绪，等待开始」胶囊 | 只剩 FOCUS STUDIO 和一个状态圆点，状态文字移到悬停提示和 VoiceOver |
+| 来源 | 一个下拉菜单，三个分区，文字重复 | 三个图标分段：显示器 / 窗口 / 区域，当前模式一眼可见 |
+| 区域已框选 | 控制条里没有 | 一枚紫色徽标「✓ 1280 × 720 ↺」，点一下直接重新框选 |
+| 区域未框选 | 开始录制静默禁用 | 主按钮变成「选择录制区域」，图标是虚线框，状态点转黄 |
+| 截图 | 图标 + 文字 | 仅图标，悬停提示保留（录制中的小控制条仍保留文字） |
+| 多显示器 | 无 | 显示器多于一台时才出现屏幕选择菜单，单屏用户看不到多余控件 |
+
+空闲行的可见文字从「来源名 + 截图 + 开始录制 + 录制控制台 + 准备就绪」减到「来源名 + 开始录制」。**没有新增任何本地化字符串**，全部复用已存在的中英文键。
+
+模型层新增 `selectToolbarSourceKind`、`beginAreaSelection`、`areaDrawDisplay`，都带着和 `selectToolbarTarget` 相同的守卫（必须在录制页、不忙、未在框选中），回归测试已覆盖忙碌和离开页面两种情况。右侧面板的「重新选择区域」现在走同一个模型入口，两处不会再各走各的。
+
+## 2. 更多背景图
+
+分两部分，一部分是修 bug，一部分是新增素材。
+
+**macOS 壁纸之前只找到极少数。** 现代 macOS 在 `/System/Library/Desktop Pictures` 里只放 `.madesktop` 占位文件，真正的图片在隐藏的 `.wallpapers` 目录和 `~/Library/Application Support/com.apple.mobileAssetDesktop`，而枚举器用了 `.skipsHiddenFiles`，全部跳过了。现在会搜索这些位置，并按文件大小过滤掉缩略图。本机上可选壁纸从 10 张变成 30 张。这些文件只被引用路径，从不复制进应用或工程。
+
+**新增 12 张我们自己的背景图。** `scripts/generate-background-assets.swift` 用种子随机数和 Core Graphics 渐变算出来，2560 × 1600，没有任何下载，没有读取任何第三方图片，任何人 clone 仓库都能复现同样的字节。清单 `Resources/Backgrounds/catalog.json` 钉了 SHA-256，构建时会校验，发布白名单已加入这 12 个文件。编辑器 Design → 背景 → 图片下新增「FOCUS STUDIO BACKGROUNDS」一行，排在 macOS 壁纸之前。
+
+色板：Aurora Drift、Deep Ocean、Sunset Haze、Blossom、Citrus Fold、Midnight Ink、Graphite、Cloud Deck、Emerald Dusk、Copper Sand、Arctic、Plum Velvet。浅色的两张用 multiply 混合，避免在浅底上叠加光线糊成一片白。
+
+**我没有做的事：** 没有把 Apple 的壁纸打包进应用。把它们从「引用用户机器上的文件」变成「随产品分发的文件」，是昨天那份许可证审计里最清楚的一条红线。自带的 12 张正是为了在不碰这条线的前提下给你更多选择。
+
+## 3. 自动化
+
+- `zsh scripts/test.sh`：全部 PASS，退出码 0，本地化 818 键对齐。
+- `RecordingLifecycleRegression` 新增：控制条切换来源类型、回到区域时复用已注册的区域、忙碌时忽略、在库页面时忽略、无显示器时无处可画。
+- `ToolbarSnapshotTests` 扩展到六张离屏快照：760/640 宽的空闲控制条、324×46 录制条、窗口模式控制条、光标检查器、背景检查器、区域框选浮层。
+- 实机验证壁纸枚举：改动前后分别枚举，本机从 10 张增加到 30 张全分辨率图片。
+
+## 4. 安装包与安装（1.11.0 / build 18）
+
+- Universal 2 打包通过：`dist/releases/Focus-Studio-1.11.0-universal-local.dmg`（SHA-256 `de00442e8db2febcc78d8ba2f7b044328f584c06a96194e0cb2a6f40dd0df0cc`）、`.zip`（`501b7c94d370146a87493ed8e9e9f9212628a7fb39cdb95986895e2fbbafa287`）。
+- `/Applications/Focus Studio.app` 1.10.0 在空闲时退出后安装 1.11.0 build 18，安装校验、`codesign --verify --deep --strict` 与 12 张背景图落包均已确认，应用已重新启动。
+- 旧版本清理：候选构建、`dist/Focus Studio.app`、1.10.0 的安装包与安装器恢复副本已移入废纸篓。本机只保留 `/Applications/Focus Studio.app` 1.11.0 与 1.11.0 的安装包。
+- 代码已作为 `b0e0c0d` 推送到 `main`。
+

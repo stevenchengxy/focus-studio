@@ -2,6 +2,7 @@
 .swiftpm/
 dist/
 .artifacts/
+.tools/
 .DS_Store
 *.xcuserstate
 # Local secrets and generated AI assets

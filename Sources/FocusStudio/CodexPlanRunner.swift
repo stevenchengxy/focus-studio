@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import CoreGraphics
+import FocusStudioAutomation
 import FocusStudioCore
 import Foundation
 
@@ -15,6 +16,7 @@ enum CodexPlanRunner {
         case eventCreationFailed
         case targetWindowUnavailable
         case targetWindowObscured
+        case invalidActiveClock
 
         var errorDescription: String? {
             switch self {
@@ -30,6 +32,8 @@ enum CodexPlanRunner {
                 return "The selected recording window moved off screen or closed, so Focus Studio stopped before sending another input."
             case .targetWindowObscured:
                 return "The selected recording window is covered at the planned interaction point. Bring that window to the front, review the plan, and run it again."
+            case .invalidActiveClock:
+                return "The recording clock became invalid. Focus Studio stopped the plan before sending another input."
             }
         }
     }
@@ -40,11 +44,14 @@ enum CodexPlanRunner {
         }
     }
 
+    @MainActor
     static func run(
         actions: [CodexRecordingAction],
         in target: CaptureTargetInfo,
         cropInsets: SourceCropInsets? = nil,
         browserApplicationURL: URL? = nil,
+        waitUntilReady: (@MainActor () async throws -> Void)? = nil,
+        activeClock: (@MainActor () -> TimeInterval)? = nil,
         onPlannedClick: @escaping @MainActor (Double, Double) -> Void
     ) async throws {
         let needsInputAutomation = actions.contains { action in
@@ -56,12 +63,12 @@ enum CodexPlanRunner {
 
         for action in actions {
             try Task.checkCancellation()
+            try await waitUntilReady?()
+            try Task.checkCancellation()
             switch action.type {
             case .wait:
                 let seconds = (action.seconds ?? 0).clamped(to: 0...30)
-                if seconds > 0 {
-                    try await Task.sleep(for: .seconds(seconds))
-                }
+                try await waitForDuration(seconds, waitUntilReady: waitUntilReady, activeClock: activeClock)
 
             case .navigate:
                 guard let value = action.url,
@@ -78,7 +85,8 @@ enum CodexPlanRunner {
                 let frame = try await verifiedWindowFrame(
                     for: target,
                     sourceX: sourcePoint.x,
-                    sourceY: sourcePoint.y
+                    sourceY: sourcePoint.y,
+                    waitUntilReady: waitUntilReady
                 )
                 let point = globalPoint(x: sourcePoint.x, y: sourcePoint.y, in: frame)
                 guard let down = CGEvent(
@@ -93,9 +101,11 @@ enum CodexPlanRunner {
                     mouseButton: .left
                 ) else { throw RunnerError.eventCreationFailed }
                 down.post(tap: .cghidEventTap)
+                // Always release a pressed mouse button, including cancellation
+                // or pausing during the tiny down/up interval.
+                defer { up.post(tap: .cghidEventTap) }
+                onPlannedClick(sourcePoint.x, sourcePoint.y)
                 try await Task.sleep(for: .milliseconds(45))
-                up.post(tap: .cghidEventTap)
-                await onPlannedClick(sourcePoint.x, sourcePoint.y)
 
             case .scroll:
                 let vertical = (action.deltaY ?? 0).clamped(to: -1_200...1_200)
@@ -104,7 +114,8 @@ enum CodexPlanRunner {
                 let frame = try await verifiedWindowFrame(
                     for: target,
                     sourceX: sourcePoint.x,
-                    sourceY: sourcePoint.y
+                    sourceY: sourcePoint.y,
+                    waitUntilReady: waitUntilReady
                 )
                 guard let event = CGEvent(
                     scrollWheelEvent2Source: nil,
@@ -117,6 +128,36 @@ enum CodexPlanRunner {
                 event.location = globalPoint(x: sourcePoint.x, y: sourcePoint.y, in: frame)
                 event.post(tap: .cghidEventTap)
             }
+        }
+        // The caller typically stops capture as soon as run returns. Do not
+        // finish the recording while its last action is paused or transitioning.
+        try await waitUntilReady?()
+        try Task.checkCancellation()
+    }
+
+    /// Tests can supply a deterministic clock. Production supplies capture
+    /// duration, which freezes during pause; wall time is the compatible default.
+    @MainActor
+    static func waitForDuration(
+        _ seconds: TimeInterval,
+        waitUntilReady: (@MainActor () async throws -> Void)? = nil,
+        activeClock: (@MainActor () -> TimeInterval)? = nil
+    ) async throws {
+        try Task.checkCancellation()
+        try await waitUntilReady?()
+        let clock = activeClock ?? { ProcessInfo.processInfo.systemUptime }
+        let started = clock()
+        guard seconds.isFinite, started.isFinite, started >= 0 else { throw RunnerError.invalidActiveClock }
+        var previous = started
+        while true {
+            try Task.checkCancellation()
+            try await waitUntilReady?()
+            try Task.checkCancellation()
+            let now = clock()
+            guard now.isFinite, now >= previous else { throw RunnerError.invalidActiveClock }
+            if now - started >= max(0, seconds) { return }
+            previous = now
+            try await Task.sleep(for: .milliseconds(50))
         }
     }
 
@@ -147,18 +188,28 @@ enum CodexPlanRunner {
     /// Re-resolves the ScreenCaptureKit window by its stable CGWindowID before
     /// every input. It also refuses to send an event when another layer-0 window
     /// is in front at the intended point.
+    @MainActor
     private static func verifiedWindowFrame(
         for target: CaptureTargetInfo,
         sourceX: Double,
-        sourceY: Double
+        sourceY: Double,
+        waitUntilReady: (@MainActor () async throws -> Void)?
     ) async throws -> CaptureRect {
-        guard target.kind == .window else { return target.frame }
+        guard target.kind == .window else {
+            try await waitUntilReady?()
+            try Task.checkCancellation()
+            return target.frame
+        }
         let before = try windowSnapshot(for: target.nativeID)
         if let application = NSRunningApplication(processIdentifier: before.ownerPID) {
             application.activate(options: [])
             try await Task.sleep(for: .milliseconds(180))
         }
 
+        try await waitUntilReady?()
+        try Task.checkCancellation()
+        // Re-resolve after the pause gate, not before it: the user may have
+        // moved or covered the target while paused.
         let snapshot = try windowSnapshot(for: target.nativeID)
         let point = globalPoint(x: sourceX, y: sourceY, in: snapshot.frame)
         guard topmostLayerZeroWindow(at: point) == target.nativeID else {

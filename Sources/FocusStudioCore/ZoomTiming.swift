@@ -9,6 +9,10 @@ public struct ResolvedZoomTiming: Hashable, Sendable {
     public var easeOut: Double
 
     public var duration: Double { end - start }
+    /// Absolute time at which the zoom-in has fully arrived.
+    public var fullZoomStart: Double { start + easeIn }
+    /// Absolute time at which the zoom-out begins.
+    public var zoomOutStart: Double { end - easeOut }
 }
 
 public enum ZoomTimingEdit: Sendable {
@@ -18,6 +22,12 @@ public enum ZoomTimingEdit: Sendable {
     case hold(Double)
     case easeIn(Double)
     case easeOut(Double)
+    /// Absolute time when the zoom-in should be complete (moves the inner
+    /// boundary; start and end stay fixed).
+    case fullZoomAt(Double)
+    /// Absolute time when the zoom-out should begin (moves the inner
+    /// boundary; start and end stay fixed).
+    case zoomOutAt(Double)
     /// New start time, keeping the existing length whenever it fits the video.
     case move(Double)
     case resetTransitions
@@ -70,7 +80,8 @@ public enum ZoomTiming {
         guard projectDuration.isFinite, projectDuration > 0 else { return segment }
         switch edit {
         case let .start(value), let .end(value), let .duration(value), let .hold(value),
-             let .easeIn(value), let .easeOut(value), let .move(value):
+             let .easeIn(value), let .easeOut(value), let .move(value),
+             let .fullZoomAt(value), let .zoomOutAt(value):
             guard value.isFinite else { return segment }
         case .resetTransitions:
             break
@@ -105,6 +116,17 @@ public enum ZoomTiming {
             result.isInstant = false
         case .easeOut(let value):
             result.zoomEaseOut = max(0, value)
+            result.isInstant = false
+        case .fullZoomAt(let value):
+            // The zoom-out keeps its current length; the zoom-in fills what is left.
+            let available = max(0, timing.duration - timing.easeOut)
+            result.zoomEaseIn = (value - timing.start).clamped(to: 0...available)
+            result.zoomEaseOut = timing.easeOut
+            result.isInstant = false
+        case .zoomOutAt(let value):
+            let available = max(0, timing.duration - timing.easeIn)
+            result.zoomEaseOut = (timing.end - value).clamped(to: 0...available)
+            result.zoomEaseIn = timing.easeIn
             result.isInstant = false
         case .move(let value):
             let length = timing.duration.clamped(to: minimum...projectDuration)

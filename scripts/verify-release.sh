@@ -31,6 +31,7 @@ for app_language in en zh-Hans; do
     plutil -lint "$APP_DIR/Contents/Resources/$app_language.lproj/InfoPlist.strings"
 done
 swift "$SCRIPT_DIR/test-localization.swift" "$APP_DIR/Contents/Resources"
+[[ ! -e "$APP_DIR/Contents/Resources/Avatars" ]] || { echo "Removed digital-human assets must not ship." >&2; exit 1; }
 
 architecture_list="$(lipo -archs "$EXECUTABLE")"
 if [[ "$REQUIRE_UNIVERSAL" == "--require-universal" ]]; then
@@ -49,6 +50,7 @@ helper_architecture_list="$(lipo -archs "$HELPER")"
 minimum_macos="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$PLIST")"
 bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST")"
 app_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")"
+background_count="$(find "$APP_DIR/Contents/Resources/Backgrounds" -name '*.jpg' -type f 2>/dev/null | wc -l | tr -d ' ')"
 [[ "$minimum_macos" == "15.0" && "$bundle_id" == "com.local.focusstudio" ]] || {
     echo "Unexpected app platform or bundle identity." >&2
     exit 1
@@ -144,10 +146,14 @@ while IFS= read -r entry; do
         Contents/Resources/Audio/product-demo-bed.wav|Contents/Resources/Audio/calm-gradient-bed.wav|Contents/Resources/Audio/bright-launch-bed.wav|Contents/Resources/Audio/midnight-focus-bed.wav) ;;
         Contents/Resources/Audio/ui-click.wav|Contents/Resources/Audio/soft-tap.wav|Contents/Resources/Audio/typing-key.wav|Contents/Resources/Audio/zoom-whoosh.wav) ;;
         Contents/Resources/Audio/city-loop.mp3|Contents/Resources/Audio/overworld.mp3|Contents/Resources/Audio/calm-loop.mp3|Contents/Resources/Audio/loading-screen-loop.wav) ;;
+        Contents/Resources/Backgrounds/catalog.json) ;;
+        Contents/Resources/Backgrounds/aurora-drift.jpg|Contents/Resources/Backgrounds/deep-ocean.jpg|Contents/Resources/Backgrounds/sunset-haze.jpg|Contents/Resources/Backgrounds/blossom.jpg) ;;
+        Contents/Resources/Backgrounds/citrus-fold.jpg|Contents/Resources/Backgrounds/midnight-ink.jpg|Contents/Resources/Backgrounds/graphite.jpg|Contents/Resources/Backgrounds/cloud-deck.jpg) ;;
+        Contents/Resources/Backgrounds/emerald-dusk.jpg|Contents/Resources/Backgrounds/copper-sand.jpg|Contents/Resources/Backgrounds/arctic.jpg|Contents/Resources/Backgrounds/plum-velvet.jpg) ;;
         *) echo "Unexpected release file: $entry" >&2; exit 1 ;;
     esac
 done < <(cd "$APP_DIR" && find Contents -type f -print)
 [[ -z "$(find "$APP_DIR/Contents" -type l -print)" ]] || { echo "App bundle contains external symlinks." >&2; exit 1; }
 
 helper_tool_count="$(grep -cv -e '^#' -e '^[[:space:]]*$' "$PROJECT_DIR/Tests/MCPTests/v1-tools.txt")"
-echo "Verified app: macOS $minimum_macos+, architectures [$architecture_list], system frameworks only, MCP helper focus-studio-mcp ($HELPER_IDENTIFIER, same architectures, $helper_tool_count tools over stdio on [${helper_slices_run[*]:-none}]), third-party notices, icon and both language catalogs verified, $asset_count bundled audio assets verified."
+echo "Verified app: macOS $minimum_macos+, architectures [$architecture_list], system frameworks only, MCP helper focus-studio-mcp ($HELPER_IDENTIFIER, same architectures, $helper_tool_count tools over stdio on [${helper_slices_run[*]:-none}]), third-party notices, icon and both language catalogs verified, $asset_count audio assets, $background_count backgrounds, chat-only assistant (no digital-human resources)."

@@ -69,10 +69,12 @@ extension StudioModel {
     /// Why an external call may not change what the window shows now, on top
     /// of what ``automationBlocker`` covers for its own paths: the in-app
     /// assistant is partway through a request (its tools edit whichever
-    /// project is open), the editor's Export is rendering, or a save or open
-    /// panel is up. Checked for every call that navigates, the recording
-    /// tools included. Kept out of automationBlocker, which the app's own
-    /// Import video and Animate screenshot also check.
+    /// project is open), the editor's Export is rendering, a save or open
+    /// panel is up, or the person is drawing a recording area (its overlay
+    /// covers the screen, and the recorder's source is theirs to choose).
+    /// Checked for every call that navigates, the recording tools included.
+    /// Kept out of automationBlocker, which the app's own Import video and
+    /// Animate screenshot also check.
     var automationNavigationRefusal: String? {
         if isAssistantRunning {
             return "Focus Studio's own assistant is working on a request in the app. Try again when it finishes."
@@ -81,8 +83,12 @@ extension StudioModel {
         if NSApp?.modalWindow != nil {
             return "Focus Studio is showing a dialog, such as a save or open panel. Try again when the person has closed it."
         }
+        if isSelectingArea { return Self.drawingAreaRefusal }
         return nil
     }
+
+    /// For a call that arrives while the person draws a recording area.
+    static let drawingAreaRefusal = "The person is drawing a recording area in Focus Studio. Try again when they have finished or cancelled it."
 
     /// Shows `id` in the editor for a call that edits or renders it: saves
     /// and closes any other open project first (as Back does), then opens

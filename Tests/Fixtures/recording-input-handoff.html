@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>Focus Studio QA — Input handoff</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #101321; color: #f7f8ff; font: 18px system-ui, sans-serif; }
+  main { max-width: 1060px; margin: 42px auto; padding: 32px; }
+  header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 60px; }
+  small { color: #abb6d1; } h1 { margin: 10px 0; font-size: 34px; }
+  button { background: #8868ff; color: white; border: 0; border-radius: 12px; padding: 15px 24px; font: inherit; cursor: pointer; }
+  section { max-width: 640px; background: #1c243a; padding: 28px; border-radius: 20px; }
+  label { display: block; margin-bottom: 16px; font-weight: 600; }
+  textarea { width: 100%; min-height: 145px; background: #f5f7ff; color: #141a2b; border: 3px solid transparent; border-radius: 12px; padding: 20px; font: 20px/1.6 system-ui; resize: vertical; }
+  textarea:focus { outline: none; border-color: #ad99ff; }
+  output { display: block; min-height: 40px; padding-top: 14px; color: #a9eee5; }
+  p { color: #abb6d1; line-height: 1.7; }
+</style>
+<main>
+  <header><div><small>FOCUS STUDIO · LOCAL QA FIXTURE</small><h1>输入与点击镜头交接</h1></div><button id="details">查看详情</button></header>
+  <section><label for="message">产品演示消息</label><textarea id="message" placeholder="在这里持续输入；点击右上按钮后继续输入…"></textarea><output id="status" aria-live="polite">等待输入</output></section>
+  <p>本页只有合成测试内容，没有网络请求、登录或表单提交。<br>检查：点击输入框 → 连续输入 → 点击远处按钮 → 返回输入 → 停止输入。</p>
+</main>
+<script>
+  let clicks = 0;
+  const message = document.querySelector('#message');
+  const status = document.querySelector('#status');
+  document.querySelector('#details').addEventListener('click', () => { status.textContent = `详情按钮已点击 ${++clicks} 次`; });
+  message.addEventListener('input', () => { status.textContent = `已输入 ${message.value.length} 个字符`; });
+</script>
+</html>

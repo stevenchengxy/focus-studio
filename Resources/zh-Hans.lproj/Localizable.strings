@@ -541,7 +541,6 @@
 "Focus Studio is recording. Try again after the recording is stopped." = "Focus Studio 正在录制。请在录制停止后重试。";
 "Focus Studio is busy. Try again when the current task finishes." = "Focus Studio 正忙。请在当前任务完成后重试。";
 "Project “%@” could not be renamed: %@" = "无法重命名项目“%@”：%@";
-"Moved %lld of %lld selected projects to Trash. The remaining projects were kept.\n%@" = "已将所选项目中的 %lld / %lld 个移到废纸篓，其余项目已保留。\n%@";
 "“%@”: %@" = "“%@”：%@";
 "%lld selected projects are no longer in the library." = "所选项目中有 %lld 个已不在项目库中。";
 
@@ -728,6 +727,133 @@
 "Screen Recording permission is required." = "需要“屏幕录制”权限。";
 "Waiting… %lld s left" = "等待中… 还剩 %lld 秒";
 
+/* 1.5: shared conversation and verified installation */
+"Installation" = "安装管理";
+"Demo Director" = "Demo 导演";
+"Create with AI" = "使用 AI 创作";
+"Finish recording, exporting, and assistant tasks before managing installation." = "请先结束录制、导出和助手任务，再管理安装。";
+"This copy" = "当前副本";
+"Version" = "版本";
+"Installed copy" = "已安装的副本";
+"Not installed" = "尚未安装";
+"You opened an older copy. A newer version is already installed." = "你打开了旧副本，已有更新版本安装在本机。";
+"This version and build are already installed with different contents. Use a newer build to update." = "已安装的版本号和构建号相同，但内容不同。请使用更高构建号更新。";
+"You are using the installed copy." = "你正在使用正式安装位置的副本。";
+"Install one canonical copy in Applications to avoid opening an older download or build." = "将主副本安装到“应用程序”，避免误开旧下载或旧构建。";
+"Install this copy to Applications" = "将此副本安装到“应用程序”";
+"Open installed copy" = "打开已安装副本";
+"Refresh" = "刷新";
+"Previous app recovery folder" = "旧版本恢复文件夹";
+"Updates and permissions" = "更新与权限";
+"Open a newer trusted release, then use its installation action. Automatic online updates are not enabled." = "打开可信来源的新版本，再使用其中的安装功能。目前未启用在线自动更新。";
+"Projects and credentials stay in your user Library. Other app copies are never deleted automatically." = "项目和凭据仍保存在用户资源库中，不会自动删除其他应用副本。";
+"Local builds are not Apple-notarized. Moving or rebuilding an ad-hoc signed app may require granting macOS permissions again." = "本地构建尚未经 Apple 公证。移动或重建临时签名的应用后，macOS 可能要求重新授权。";
+"After opening the installed copy, quit the older window yourself and replace any old Dock shortcut with the app in Applications." = "打开已安装副本后，请自行退出旧窗口，并将 Dock 中的旧快捷方式替换为“应用程序”中的版本。";
+"Install" = "安装";
+"Installing…" = "正在安装…";
+"The verified app will be copied to /Applications/Focus Studio.app. A previous installation is backed up. Running apps are not replaced, and your projects are not changed." = "将把验证过的应用复制到 /Applications/Focus Studio.app，并备份此前的安装。不会替换正在运行的应用，也不会修改项目。";
+"Installation settings" = "安装设置";
+"Install Focus Studio in Applications?" = "将 Focus Studio 安装到“应用程序”？";
+"This app is running outside Applications." = "此应用正在“应用程序”文件夹以外的位置运行。";
+"Installed successfully. Open the installed copy when you are ready." = "安装成功。准备好后可打开已安装副本。";
+"This version is already installed." = "此版本已安装。";
+"The app has an invalid version or build number." = "应用的版本号或构建号无效。";
+"Choose a valid Focus Studio app bundle." = "请选择有效的 Focus Studio 应用。";
+"The Applications folder is not writable. Ask an administrator to install this app." = "没有“应用程序”文件夹的写入权限，请联系管理员安装。";
+"Another installation is in progress. If it was interrupted, review the installation lock before retrying." = "另一个安装正在进行。若上次安装已中断，请先检查安装锁再重试。";
+"A newer version is already installed. Downgrades are not allowed." = "已安装更新版本，不允许降级。";
+"Quit the installed Focus Studio first. A running app will never be replaced." = "请先退出已安装的 Focus Studio。不会替换正在运行的应用。";
+"The copied app did not match its source. The installed app was not changed." = "复制后的应用与源文件不一致，已安装的应用未被更改。";
+"The installed app changed during installation. Please retry." = "安装过程中目标应用发生了变化，请重试。";
+"The installed app failed verification." = "安装后的应用未通过验证。";
+"Installation could not be rolled back automatically. Your previous app is preserved in the recovery folder." = "无法自动回滚安装，旧应用已保留在恢复文件夹中。";
+"The app signature could not be verified. Download a fresh copy from a trusted source." = "无法验证应用签名，请从可信来源重新下载。";
+"This app does not support this Mac's processor architecture." = "此应用不支持这台 Mac 的处理器架构。";
+"One conversation, from idea to recording" = "从构思到录制，一段对话即可衔接";
+"Draft · review before running" = "草稿 · 执行前请确认";
+"Ask in chat to change the steps. Nothing runs until you approve the plan." = "可在聊天中修改步骤。只有你确认计划后才会执行。";
+"Discuss your idea in chat. A recording plan will appear here when you ask for one." = "先在聊天中讨论想法；当你要求制定录制计划时，草稿会显示在这里。";
+"Run this recording plan?" = "执行此录制计划？";
+"This opens the selected target and may click, scroll, navigate, and record it. Review every step before continuing." = "这会打开选定目标，并可能执行点击、滚动、跳转和录制。继续前请检查每一步。";
+"Recording plan approved. See the recorder for progress." = "录制计划已确认，请在录制界面查看进度。";
+"Live clicks need a freshly observed target. This chat can draft navigation, scrolling, and waiting; use manual recording for clicks." = "实时点击需要刚刚观察并核验的目标。目前聊天可规划跳转、滚动和等待；需要点击交互时请使用手动录制。";
+"This action was already attempted for this request. It was not run again. Review its earlier result; send a new message to explicitly try the action again." = "此请求已尝试过该操作，本次没有重复执行。请检查此前结果；若要再次尝试，请发送新消息明确要求。";
+"Allow %@? Recording only changes after you confirm." = "允许执行 %@？确认后才会改变录制状态。";
+"Saved conversation could not be read. Start a new conversation to replace it." = "无法读取已保存的对话。可新建对话以替换它。";
+"Conversation is available in this window, but could not be saved locally." = "对话仍可在此窗口使用，但未能保存到本地。";
+"Retry reply" = "重试回复";
+"Continues the conversation without repeating completed actions." = "继续对话，不重复执行已完成的操作。";
+"Start a new conversation?" = "开始新对话？";
+"New conversation" = "新建对话";
+"Clears the saved chat and draft plan. Your recordings and edits stay unchanged." = "清除已保存的聊天和计划草稿，录屏和编辑内容保持不变。";
+"Model settings" = "模型设置";
+"Plan submitted" = "计划已提交";
+"Confirm recording action" = "确认录制操作";
+"Help me plan a product demo before recording" = "录制前，先帮我规划产品演示";
+"Show cursor" = "显示鼠标指针";
+"Hiding the pointer keeps click effects and zooms. You can change this after recording." = "隐藏指针仍会保留点击效果和缩放，录制后也可修改。";
+"Does not erase a pointer already baked into an imported video or screenshot." = "无法移除已嵌入导入视频或截图中的指针。";
+"No sources available" = "暂无可用录制来源";
+"Ready to record" = "准备就绪，等待开始";
+"Browser content only" = "仅录制浏览器网页内容";
+"Paused" = "已暂停";
+"Recording" = "录制中";
+"Pause recording" = "暂停录制";
+"Resume recording" = "继续录制";
+"Paused — video, audio and interaction timing are paused." = "已暂停：视频、音频与交互计时均已暂停。";
+"The recording clock became invalid. Focus Studio stopped the plan before sending another input." = "录制时钟异常，Focus Studio 已在执行下一个输入操作前停止计划。";
+"Recording controls" = "录制控制台";
+"Capture console" = "录制控制台";
+"Choose recording source" = "选择录制来源";
+"Follow cursor" = "跟随光标";
+
+/* zoom transition boundaries */
+"Zoom in ends" = "放大完成于";
+"Zoom out starts" = "缩小开始于";
+"Drag to change when the zoom-in finishes" = "拖动以改变放大完成的时刻";
+"Drag to change when the zoom-out starts" = "拖动以改变缩小开始的时刻";
+
+/* timeline zoom actions */
+"Add zoom at playhead" = "在播放头处添加缩放";
+"Duplicate zoom" = "复制缩放";
+"Moved %lld of %lld selected projects to Trash. The remaining projects were kept.\n%@" = "已将所选项目中的 %lld / %lld 个移到废纸篓，其余项目已保留。\n%@";
+
+
+/* cursor styles and press animation */
+"Elevated" = "立体";
+"Light" = "浅色";
+"Cursor press" = "点击时的光标";
+"Press in" = "按下";
+"Pop out" = "弹出";
+"Press amount" = "幅度";
+
+/* compact recording controls */
+"Cancel recording" = "取消录制";
+"Discard?" = "放弃这段录制？";
+"Discard recording" = "放弃录制";
+"Keep recording" = "继续录制";
+"Expand controls" = "展开控制条";
+"Collapse controls" = "收起控制条";
+
+/* recording bar */
+"Discard recording?" = "要丢弃这次录制吗？";
+"Discard" = "丢弃";
+"Keep" = "保留";
+"Discarding recording…" = "正在丢弃录制…";
+"Show full controls" = "显示完整控制栏";
+"Hide full controls" = "收起完整控制栏";
+"This recording could not be moved to the Trash, so it was kept at %@.\n%@" = "本次录制无法移到废纸篓，已保留在 %@。\n%@";
+
+/* area selection overlay */
+"Use this area" = "使用此区域";
+"Draw again" = "重新框选";
+"Whole display" = "整个屏幕";
+"Drag to select the clean recording area" = "拖动以框选需要录制的区域";
+"Drag again to adjust, or use the buttons below" = "可再次拖动调整，或使用下方按钮";
+"That area is not on “%@”. Draw the area again inside the display." = "该区域不在“%@”上，请在该屏幕范围内重新框选。";
+
+/* bundled backgrounds */
+"FOCUS STUDIO BACKGROUNDS" = "FOCUS STUDIO 背景";
 /* 1.5: AI tools over MCP (control channel, approval, Settings › AI tools) */
 "Allow AI tools to control Focus Studio" = "允许 AI 工具控制 Focus Studio";
 "Claude Code, Codex and other MCP clients can record, edit and export in Focus Studio through focus-studio-mcp. The first time an AI tool calls, Focus Studio asks you to approve it. Every recording still shows the countdown and the control bar." = "Claude Code、Codex 等 MCP 客户端可以通过 focus-studio-mcp 在 Focus Studio 中录制、编辑和导出。AI 工具第一次调用时，Focus Studio 会请你批准。每次录制仍会显示倒计时和控制条。";
@@ -781,7 +907,6 @@
 "“%@” wants to record system audio" = "“%@”想录制系统音频";
 "It is about to record “%@”. Your recorder settings leave this sound off; your answer applies to this recording only and changes no settings." = "它即将录制“%@”。你的录制设置里没有打开这些声音；你的选择只对这一次录制有效，不会改变任何设置。";
 "“Record without sound” records the screen only, with no sound at all. If nobody answers within %lld seconds, nothing is recorded." = "选择“无声录制”只录制画面，不录任何声音。%lld 秒内没有回答，就不会录制。";
-"Cancel recording" = "取消录制";
 "Record without sound" = "无声录制";
 "Allow for this recording" = "仅本次允许";
 "AI tools are turned off. Focus Studio refuses their calls." = "已关闭 AI 工具控制，Focus Studio 会拒绝它们的调用。";
@@ -796,3 +921,7 @@
 "Recording microphone and system audio" = "正在录制麦克风和系统音频";
 "Recording microphone" = "正在录制麦克风";
 "Recording system audio" = "正在录制系统音频";
+
+/* Merge of the MCP work with 1.6–1.11: the recording control bar's remaining time, a plan refused during a recording */
+"Stops by itself after this much more recording. Paused time does not count; finish or cancel any time." = "再录制这么长时间后自动停止。暂停的时间不计入；可随时结束或丢弃。";
+"Finish or cancel the current recording first." = "请先结束或取消当前的录制。";

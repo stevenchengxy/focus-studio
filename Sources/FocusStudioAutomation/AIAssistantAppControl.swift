@@ -58,7 +58,7 @@ public struct AIRecordingSource: Equatable, Sendable, Identifiable {
     }
 
     /// What the person reads: a display's name, or a window's app and title
-    /// ("Safari — Docs"), as the floating countdown names it.
+    /// ("Safari — Docs"), as the sound prompt and the control bar name it.
     public var displayName: String {
         if kind == .window, let appName, !appName.isEmpty, appName != title {
             return title.isEmpty ? appName : "\(appName) — \(title)"
@@ -144,9 +144,10 @@ public struct AIRecordingOptions: Equatable, Sendable {
     public var automaticZooms: Bool?
     public var browserContentOnly: Bool?
     public var frameRate: Int?
-    /// Seconds after the capture actually starts (after the countdown) at
-    /// which the app stops the recording by itself, through the same stop as
-    /// the Finish button; nil records until stopped.
+    /// Seconds of recording after which the app stops it by itself, through
+    /// the same stop as the Finish button: counted from the capture's actual
+    /// start (after the countdown), with time the person spends paused left
+    /// out; nil records until stopped.
     public var duration: TimeInterval?
 
     /// What `duration` may be: one second to ten minutes.
@@ -254,26 +255,39 @@ public struct AIRecordingSession: Equatable, Sendable {
     /// When frames started arriving: the recording's real start, after the
     /// countdown and the capture start. Nil until then.
     public var startedAt: Date?
-    /// Seconds after `startedAt` at which the app stops by itself; nil when
-    /// the recording runs until someone stops it.
+    /// Seconds of recording (paused time left out) after which the app stops
+    /// by itself; nil when the recording runs until someone stops it.
     public var duration: TimeInterval?
     /// Nil while the attempt is counting down, recording or being saved.
     public var outcome: AIRecordingOutcome?
     public var endedAt: Date?
+    /// The person paused the recording from its control bar: nothing is
+    /// recorded, and a duration waits for the resume.
+    public var isPaused: Bool
+    /// Seconds spent paused since `startedAt`, which the recording and its
+    /// duration leave out.
+    public var pausedDuration: TimeInterval
 
-    public init(id: UUID, sourceID: String, startedAt: Date? = nil, duration: TimeInterval? = nil, outcome: AIRecordingOutcome? = nil, endedAt: Date? = nil) {
+    public init(
+        id: UUID, sourceID: String, startedAt: Date? = nil, duration: TimeInterval? = nil, outcome: AIRecordingOutcome? = nil, endedAt: Date? = nil,
+        isPaused: Bool = false, pausedDuration: TimeInterval = 0
+    ) {
         self.id = id
         self.sourceID = sourceID
         self.startedAt = startedAt
         self.duration = duration
         self.outcome = outcome
         self.endedAt = endedAt
+        self.isPaused = isPaused
+        self.pausedDuration = pausedDuration
     }
 
-    /// When the app stops by itself, for a recording with a duration.
+    /// When the app stops by itself, for a recording with a duration: its
+    /// start plus the duration plus the time paused so far. Nil while paused,
+    /// when that time is not known yet.
     public var autoStopAt: Date? {
-        guard let startedAt, let duration else { return nil }
-        return startedAt.addingTimeInterval(duration)
+        guard let startedAt, let duration, !isPaused else { return nil }
+        return startedAt.addingTimeInterval(duration + max(0, pausedDuration))
     }
 }
 
@@ -371,21 +385,32 @@ public protocol AppControlling: AnyObject, Sendable {
     /// (unknown source, recording in progress).
     func startRecording(sourceID: String, options: AIRecordingOptions) throws -> UUID
     /// Finishes the recording; on success the app opens the editor with the new
-    /// project. A call while a stop is already under way (the Finish button,
-    /// the recording's duration running out, another tool call) waits for that
-    /// stop instead of finalizing again; a call with no live recording (a stop
-    /// that already finished, a cancel winding down) does nothing.
+    /// project and brings it forward, as the Finish button does. A call while
+    /// a stop is already under way (the Finish button, the recording's
+    /// duration running out, another tool call) waits for that stop instead
+    /// of finalizing again; a call with no live recording (a stop that
+    /// already finished, a cancel winding down) does nothing.
     func stopRecording() async
+    /// ``stopRecording()`` for stop_recording: the in-app assistant's
+    /// (the person confirmed it inside the app) shows the editor in front;
+    /// an external AI tool's (`external`) leaves the app where it is, since
+    /// the person may be typing in another app.
+    func stopRecording(external: Bool) async
     /// Cancels attempt `id` (its countdown, its capture start or the
     /// recording) and keeps nothing, as the Cancel buttons do. Does nothing
     /// once that attempt has ended or while a stop is saving it.
     func discardRecording(id: UUID) async
     /// The latest recording attempt, live or ended; nil before the first.
     var recordingSession: AIRecordingSession? { get }
-    /// Seconds since frames started arriving, while `.recording`; nil otherwise.
+    /// Whether the person paused the recording from its control bar (the
+    /// phase stays `.recording`: stop_recording and Cancel still work).
+    var isRecordingPaused: Bool { get }
+    /// Seconds recorded so far, paused time left out, while `.recording`;
+    /// nil otherwise.
     var recordingElapsed: TimeInterval? { get }
-    /// Seconds until a recording with a duration stops by itself, while it
-    /// records; nil otherwise.
+    /// Seconds of recording left before a recording with a duration stops by
+    /// itself, while `.recording` (it does not count down while paused); nil
+    /// otherwise.
     var recordingRemaining: TimeInterval? { get }
     /// Library entries, newest first.
     var projectSummaries: [AIProjectSummary] { get }
@@ -422,6 +447,17 @@ public protocol AppControlling: AnyObject, Sendable {
     /// returns the project as it was. The app returns to the library first,
     /// saving and closing the editor.
     func trashLibraryProject(id: UUID) async throws -> RecordingProject
+}
+
+extension AppControlling {
+    /// An app without a pause (test fakes) never reports one.
+    public var isRecordingPaused: Bool { false }
+
+    /// An app that never activates itself (test fakes) stops the same way
+    /// for every caller.
+    public func stopRecording(external: Bool) async {
+        await stopRecording()
+    }
 }
 
 // MARK: - Shared helpers
@@ -646,7 +682,7 @@ struct ListRecordingSourcesTool: AIAssistantTool {
 
 struct StartRecordingTool: AIAssistantTool {
     let name = "start_recording"
-    let summary = "Select a display or window and start recording after the app's 3-second countdown. Returns as soon as the recording is live; the user sees a control bar and can finish or cancel it. Optional capture settings apply to this recording only; with duration the app stops by itself that many seconds after the recording started. Then reply to the user: call stop_recording when they say they are done, or, for a recording with a duration, wait_for_recording."
+    let summary = "Select a display or window and start recording after the app's 3-second countdown. Returns as soon as the recording is live; the user sees a control bar and can pause, finish or cancel it. Optional capture settings apply to this recording only; with duration the app stops by itself once that many seconds are recorded (paused time does not count). Then reply to the user: call stop_recording when they say they are done, or, for a recording with a duration, wait_for_recording."
 
     /// How long the countdown plus capture start may take.
     var startTimeout: TimeInterval = 20
@@ -668,7 +704,7 @@ struct StartRecordingTool: AIAssistantTool {
                 "frame_rate": ["type": "integer", "enum": [30, 60]],
                 "duration": [
                     "type": "number", "minimum": AIRecordingOptions.durationRange.lowerBound, "maximum": AIRecordingOptions.durationRange.upperBound,
-                    "description": "Stop by itself this many seconds (1-600) after the recording actually started, after the countdown. Without it the recording runs until stop_recording or the user's Finish.",
+                    "description": "Stop by itself once this many seconds (1-600) are recorded, counted from the recording's actual start after the countdown; time the user spends paused does not count. Without it the recording runs until stop_recording or the user's Finish.",
                 ],
             ],
         ]
@@ -810,16 +846,16 @@ struct StartRecordingTool: AIAssistantTool {
             text += " \(phrase.prefix(1).uppercased() + phrase.dropFirst()) \(both ? "are" : "is") off for this recording, although you asked for \(both ? "them" : "it"): the person turned \(both ? "them" : "it") off in their recorder settings before the recording started. Do not turn \(both ? "them" : "it") on again unless the person asks for it."
         }
         if let duration = session.duration {
-            text += " It stops by itself \(AIToolSupport.seconds(duration)) s after it started (at \(Self.clockTime(startedAt.addingTimeInterval(duration))))."
+            text += " It stops by itself once \(AIToolSupport.seconds(duration)) s are recorded (at \(Self.clockTime(startedAt.addingTimeInterval(duration))) unless it is paused; paused time does not count)."
         }
         if context.isExternal {
             // An MCP client may drive the recorded app itself (computer use, browser automation).
-            text += " The person sees a control bar and can finish or cancel it at any time. Let them perform the demo, or operate the recorded app yourself with your own tools meanwhile; the control bar floats above every app at the top centre of each display, so keep your clicks off it (its x button deletes the recording) and stop with stop_recording. Then call wait_for_recording to get the saved project (or stop_recording to stop now)."
+            text += " The person sees a control bar and can pause, finish or cancel it at any time. Let them perform the demo, or operate the recorded app yourself with your own tools meanwhile; the control bar floats above every app at the bottom centre of each display, so keep your clicks off it (its x button discards the recording) and stop with stop_recording. Then call wait_for_recording to get the saved project (or stop_recording to stop now)."
         } else if session.duration != nil {
-            text += " The user sees a control bar and can finish or cancel it at any time, and performs the demo now; call wait_for_recording to get the saved project when it stops (or stop_recording if the user asks to stop early)."
+            text += " The user sees a control bar and can pause, finish or cancel it at any time, and performs the demo now; call wait_for_recording to get the saved project when it stops (or stop_recording if the user asks to stop early)."
         } else {
             // The in-app chat stays free while the user performs the demo.
-            text += " The user sees a control bar and can finish or cancel it at any time, and performs the demo now. Reply to the user now; when they say they are done, call stop_recording (it also reports the project if they already clicked Finish)."
+            text += " The user sees a control bar and can pause, finish or cancel it at any time, and performs the demo now. Reply to the user now; when they say they are done, call stop_recording (it also reports the project if they already clicked Finish)."
         }
         var optionData: [String: AIJSONValue] = [:]
         if let value = options.systemAudio { optionData["system_audio"] = AIJSONValue(value) }
@@ -979,7 +1015,7 @@ struct StartRecordingTool: AIAssistantTool {
 
 struct StopRecordingTool: AIAssistantTool {
     let name = "stop_recording"
-    let summary = "Finish the current recording now (also one with a duration still running). The app saves it as a new project and opens it in the editor; returns the project id, title and duration."
+    let summary = "Finish the current recording now (also one with a duration still running, or one the user paused). The app saves it as a new project and opens it in the editor; returns the project id, title and duration."
 
     var stopTimeout: TimeInterval = 60
 
@@ -1022,8 +1058,11 @@ struct StopRecordingTool: AIAssistantTool {
         let sessionID = await MainActor.run { app.recordingSession.flatMap { $0.outcome == nil ? $0.id : nil } }
         progress(context.tr("Preparing your editable recording…"))
         // A joined stop is only waited for: asking again could land after it
-        // finished and finalize a capture that no longer exists.
-        if !joining { Task { @MainActor in await app.stopRecording() } }
+        // finished and finalize a capture that no longer exists. An external
+        // AI tool's stop leaves the app where it is; the in-app assistant's
+        // brings the saved project forward, as Finish does.
+        let external = context.isExternal
+        if !joining { Task { @MainActor in await app.stopRecording(external: external) } }
         let outcome = try await AIToolSupport.waitOnMain(timeout: stopTimeout) {
             AIToolSupport.recordingEnd(app, sessionID: sessionID, previousProjectID: previousProjectID, idleMeansCancelled: false)
         }
@@ -1048,7 +1087,7 @@ struct StopRecordingTool: AIAssistantTool {
 /// well inside client tool timeouts, and cancelling it never touches the recording.
 struct WaitForRecordingTool: AIAssistantTool {
     let name = "wait_for_recording"
-    let summary = "Wait until the current recording ends — the user clicks Finish or Cancel, its duration runs out, or stop_recording is called — and its project is saved and open in the editor; returns the new project's id and duration, or that it was cancelled. Waits at most timeout_seconds (default 120, at most 240), then reports that it is still recording: call it again."
+    let summary = "Wait until the current recording ends — the user clicks Finish or Cancel, its duration runs out, or stop_recording is called — and its project is saved and open in the editor; returns the new project's id and duration, or that it was cancelled. Waits at most timeout_seconds (default 120, at most 240), then reports that it is still recording (and whether the user paused it): call it again."
 
     static let defaultTimeout: TimeInterval = 120
     /// Well inside Codex's 300-second tool timeout.
@@ -1156,16 +1195,21 @@ struct WaitForRecordingTool: AIAssistantTool {
         let phase = app.recordingPhase
         let elapsed = phase == .recording ? app.recordingElapsed : nil
         let remaining = phase == .recording ? app.recordingRemaining : nil
+        let paused = phase == .recording && app.isRecordingPaused
         var text: String
         switch phase {
         case .countdown: text = "The recording is still counting down"
         case .stopping: text = "The recording is still being saved"
-        default: text = "Still recording"
+        default: text = paused ? "Still recording, paused by the person," : "Still recording"
         }
         text += " after waiting \(AIToolSupport.seconds(waited)) s"
         var details: [String] = []
         if let elapsed { details.append("\(AIToolSupport.seconds(elapsed)) s recorded so far") }
-        if let remaining { details.append("it stops by itself in \(AIToolSupport.seconds(remaining)) s") }
+        if let remaining {
+            details.append(paused
+                ? "\(AIToolSupport.seconds(remaining)) s of recording remain once they resume; paused time does not count"
+                : "it stops by itself in \(AIToolSupport.seconds(remaining)) s")
+        }
         if !details.isEmpty { text += " (\(details.joined(separator: "; ")))" }
         text += ". Call wait_for_recording again, or stop_recording to stop it now."
         var data: [String: AIJSONValue] = [
@@ -1173,10 +1217,12 @@ struct WaitForRecordingTool: AIAssistantTool {
             "elapsed": elapsed.map { .rounded($0, places: 1) } ?? .null,
             "waited": .rounded(waited, places: 1),
         ]
+        if phase == .recording { data["paused"] = AIJSONValue(paused) }
         if let remaining { data["remaining"] = .rounded(remaining, places: 1) }
         if let session = app.recordingSession, session.outcome == nil {
             if let startedAt = session.startedAt { data["started_at"] = AIJSONValue(startedAt) }
-            if let autoStopAt = session.autoStopAt { data["auto_stop_at"] = AIJSONValue(autoStopAt) }
+            // Not known while paused: the pause moves it later.
+            if !paused, let autoStopAt = session.autoStopAt { data["auto_stop_at"] = AIJSONValue(autoStopAt) }
         }
         return AIToolResult(text: text, data: .object(data))
     }

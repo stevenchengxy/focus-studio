@@ -14,6 +14,8 @@ public enum MouseButton: String, Codable, Sendable {
 public enum CursorKind: String, Codable, Hashable, Sendable, CaseIterable {
     case arrow
     case iBeam
+    /// The pointing hand macOS shows over links and other clickable web controls.
+    case pointingHand
 }
 
 public struct CursorSample: Codable, Hashable, Sendable {
@@ -340,17 +342,58 @@ public enum CursorAnimationStyle: String, Codable, Sendable, CaseIterable {
 }
 
 /// A non-destructive visual treatment for cursor metadata during preview/export.
+///
+/// Cases are declared in the order the style gallery shows them. Raw values are
+/// stable, so projects written by earlier builds keep decoding.
 public enum CursorAppearance: String, Codable, Hashable, Sendable, CaseIterable {
     case system
+    case elevated
     case highContrast
+    case light
+    case accent
     case dot
 
     public var title: String {
         switch self {
         case .system: return "System"
+        case .elevated: return "Elevated"
         case .highContrast: return "High Contrast"
+        case .light: return "Light"
+        case .accent: return "Accent"
         case .dot: return "Dot"
         }
+    }
+
+    /// Whether the style takes its ink from the click colour instead of fixed ink.
+    public var usesAccentTint: Bool { self == .accent }
+
+    /// A style added by a later build decodes as the system pointer rather than
+    /// making the whole project unreadable.
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = CursorAppearance(rawValue: raw) ?? .system
+    }
+}
+
+/// How the pointer itself reacts at the moment of a click.
+public enum ClickPressStyle: String, Codable, Hashable, Sendable, CaseIterable {
+    /// Compress into the click, then settle. Matches builds before 1.10.
+    case press
+    /// Swell away from the click, then settle. Reads as a tap landing.
+    case pop
+    case none
+
+    public var title: String {
+        switch self {
+        case .press: return "Press in"
+        case .pop: return "Pop out"
+        case .none: return "None"
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = ClickPressStyle(rawValue: raw) ?? .press
     }
 }
 
@@ -366,6 +409,11 @@ public enum ClickAnimationStyle: String, Codable, Hashable, Sendable, CaseIterab
         case .pulse: return "Pulse"
         }
     }
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = ClickAnimationStyle(rawValue: raw) ?? .ripple
+    }
 }
 
 /// Editing click feedback does not modify the captured pointer or click events.
@@ -375,7 +423,14 @@ public struct ClickAnimationSettings: Codable, Hashable, Sendable {
     public var size: Double
     public var duration: Double
     public var intensity: Double
+    /// Kept for projects written before the press style existed, and used as the
+    /// on/off switch: turning it off is the same as ``ClickPressStyle/none``.
     public var pressCursor: Bool
+    /// Optional so projects saved before choosable press styles decode unchanged.
+    public var pressStyle: ClickPressStyle?
+    /// How far the pointer travels during the press, 0...1. Optional for the
+    /// same reason.
+    public var pressAmount: Double?
 
     public init(
         style: ClickAnimationStyle = .ripple,
@@ -383,7 +438,9 @@ public struct ClickAnimationSettings: Codable, Hashable, Sendable {
         size: Double = 1,
         duration: Double = 0.65,
         intensity: Double = 0.85,
-        pressCursor: Bool = true
+        pressCursor: Bool = true,
+        pressStyle: ClickPressStyle? = nil,
+        pressAmount: Double? = nil
     ) {
         self.style = style
         self.colorHex = colorHex
@@ -391,6 +448,22 @@ public struct ClickAnimationSettings: Codable, Hashable, Sendable {
         self.duration = duration
         self.intensity = intensity
         self.pressCursor = pressCursor
+        self.pressStyle = pressStyle
+        self.pressAmount = pressAmount
+    }
+
+    public static let defaultPressAmount = 1.0
+
+    /// `.none` whenever the pointer must not react, so callers never have to
+    /// check both the switch and the style.
+    public var resolvedPressStyle: ClickPressStyle {
+        guard pressCursor else { return .none }
+        return pressStyle ?? .press
+    }
+
+    public var resolvedPressAmount: Double {
+        guard let pressAmount, pressAmount.isFinite else { return Self.defaultPressAmount }
+        return pressAmount.clamped(to: 0...1)
     }
 
     public var sanitized: ClickAnimationSettings {
@@ -398,6 +471,11 @@ public struct ClickAnimationSettings: Codable, Hashable, Sendable {
         result.size = size.isFinite ? size.clamped(to: 0.4...2.5) : 1
         result.duration = duration.isFinite ? duration.clamped(to: 0.25...1.5) : 0.65
         result.intensity = intensity.isFinite ? intensity.clamped(to: 0...1) : 0.85
+        if let pressAmount {
+            result.pressAmount = pressAmount.isFinite
+                ? pressAmount.clamped(to: 0...1)
+                : Self.defaultPressAmount
+        }
         return result
     }
 }
@@ -606,11 +684,17 @@ public struct ProjectSettings: Codable, Hashable, Sendable {
     /// Optional so projects saved before cursor themes were introduced decode
     /// with the native system cursor instead of failing migration.
     public var cursorAppearance: CursorAppearance?
+    /// Non-destructive pointer visibility. Missing in older recordings means
+    /// visible; click feedback, cursor metadata and automatic zoom are separate.
+    public var showCursor: Bool?
     public var screenAnimation: ScreenAnimationStyle = .cinematic
     /// Seconds after an automatic zoom ends during which a nearby click keeps
     /// the camera zoomed in and pans instead of zooming out and back in.
     /// Optional so projects saved before click chaining decode unchanged.
     public var zoomChainGap: Double?
+    /// How strongly the camera drifts after the pointer while zoomed in (0 off,
+    /// 1 full). Optional so earlier projects decode unchanged.
+    public var zoomFollowsCursor: Double?
     public var hideIdleCursor = true
     public var showClickRing = true
     /// Optional to keep recordings saved before editable click feedback readable.
@@ -657,6 +741,10 @@ public struct ProjectSettings: Codable, Hashable, Sendable {
         cursorAppearance ?? .system
     }
 
+    public var resolvedShowCursor: Bool {
+        showCursor ?? true
+    }
+
     public var resolvedClickAnimation: ClickAnimationSettings {
         (clickAnimation ?? ClickAnimationSettings()).sanitized
     }
@@ -667,6 +755,13 @@ public struct ProjectSettings: Codable, Hashable, Sendable {
 
     public static let defaultZoomChainGap = 1.0
     public static let maximumZoomChainGap = 2.5
+
+    public static let defaultZoomFollowsCursor = 0.6
+
+    public var resolvedZoomFollowsCursor: Double {
+        guard let zoomFollowsCursor, zoomFollowsCursor.isFinite else { return Self.defaultZoomFollowsCursor }
+        return zoomFollowsCursor.clamped(to: 0...1)
+    }
 
     public var resolvedZoomChainGap: Double {
         guard let zoomChainGap, zoomChainGap.isFinite else { return Self.defaultZoomChainGap }

@@ -4,8 +4,8 @@ import FocusStudioAutomation
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The assistant conversation: an animated character above the transcript,
-/// the confirmation card for paid calls, follow-up chips and a composer with
+/// The assistant conversation: a compact chat header, the confirmation card
+/// for paid calls, follow-up chips and a composer with
 /// voice input. Sized for ~360 pt beside the editor and works as a sheet from
 /// the library.
 struct AIAssistantPanel: View {
@@ -13,40 +13,39 @@ struct AIAssistantPanel: View {
     let modelLabel: String
     let onClose: (() -> Void)?
     let openSettings: (() -> Void)?
+    let showsPlan: Bool
 
     @State private var draft = ""
     @State private var pendingAttachments: [URL] = []
+    @State private var confirmsNewConversation = false
     /// What was typed before the mic started; partial transcripts append to it.
     @State private var draftBeforeRecording = ""
-    /// Newest non-status message the avatar already reacted to.
-    @State private var lastReactedTimestamp = Date()
+    /// Prevent old messages from being spoken when reopening the chat.
+    @State private var lastSpokenTimestamp = Date()
     @StateObject private var speechInput = SpeechInputController()
     @StateObject private var speechOutput = SpeechOutputController()
-    @StateObject private var avatar = AssistantAvatarDirector()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Localizable keys; shown as chips and sent verbatim (translated) on click.
     static let exampleRequests = [
+        "Help me plan a product demo before recording",
         "Generate a background image for this recording",
         "Make a 5-second intro clip from the current look",
         "Create chapters and captions from my clicks",
     ]
 
-    static let expandedAvatarHeight: CGFloat = 150
-    static let compactAvatarHeight: CGFloat = 90
-    /// The avatar shrinks once the transcript has more rows than this.
-    static let compactTranscriptThreshold = 3
-
     init(
         session: AIAssistantSession,
         modelLabel: String,
         onClose: (() -> Void)? = nil,
-        openSettings: (() -> Void)? = nil
+        openSettings: (() -> Void)? = nil,
+        showsPlan: Bool = true
     ) {
         self.session = session
         self.modelLabel = modelLabel
         self.onClose = onClose
         self.openSettings = openSettings
+        self.showsPlan = showsPlan
     }
 
     private var canSend: Bool {
@@ -56,16 +55,6 @@ struct AIAssistantPanel: View {
 
     private var canRecord: Bool {
         session.hasModel && session.pendingConfirmation == nil
-    }
-
-    private var isCompact: Bool {
-        session.messages.count > Self.compactTranscriptThreshold
-    }
-
-    private var avatarAudioLevel: Double {
-        if speechInput.isRecording { return speechInput.audioLevel }
-        if speechOutput.isSpeaking { return speechOutput.activityLevel }
-        return 0
     }
 
     private var rowTransition: AnyTransition {
@@ -82,6 +71,19 @@ struct AIAssistantPanel: View {
             Divider().overlay(StudioTheme.line)
             if !session.hasModel { modelNotice }
             transcript
+            if let warning = session.historyWarning {
+                Text(verbatim: warning).font(.caption).foregroundStyle(StudioTheme.yellow).padding(10)
+            }
+            if showsPlan, session.recordingPlan != nil {
+                AssistantRecordingPlanView(session: session, compact: true)
+                    .frame(maxHeight: 200)
+            }
+            if session.canRetry, !session.isRunning {
+                Button("Retry reply") { session.retryLastTurn() }
+                    .disabled(!session.hasModel)
+                    .help("Continues the conversation without repeating completed actions.")
+                    .padding(8)
+            }
             if let pending = session.pendingConfirmation {
                 confirmationCard(pending)
                     .transition(rowTransition)
@@ -102,69 +104,50 @@ struct AIAssistantPanel: View {
         .animation(reduceMotion ? nil : StudioMotion.selection, value: session.pendingConfirmation?.id)
         .animation(reduceMotion ? nil : StudioMotion.selection, value: session.suggestions)
         .animation(reduceMotion ? nil : StudioMotion.fade, value: speechInput.issue)
-        .animation(reduceMotion ? nil : StudioMotion.selection, value: isCompact)
         .onAppear {
-            lastReactedTimestamp = Date()
-            updateAvatarBase()
+            lastSpokenTimestamp = Date()
         }
         .onDisappear {
             speechInput.cancel()
             speechOutput.stop()
         }
-        .onChange(of: session.isRunning) { _, _ in updateAvatarBase() }
         .onChange(of: session.pendingConfirmation?.id) { _, id in
             if id != nil, speechInput.isActive { speechInput.stop() }
-            updateAvatarBase()
         }
-        .onChange(of: speechInput.isRecording) { _, _ in updateAvatarBase() }
-        .onChange(of: speechInput.isPreparing) { _, _ in updateAvatarBase() }
         .onChange(of: speechInput.transcript) { _, transcript in
             draft = Self.join(draftBeforeRecording, transcript)
         }
-        .onChange(of: speechOutput.isSpeaking) { _, speaking in avatar.setSpeakingAloud(speaking) }
         .onChange(of: speechOutput.isEnabled) { _, enabled in
             if !enabled { speechOutput.stop() }
         }
-        .onChange(of: session.messages.last?.id) { _, _ in reactToNewMessages() }
-    }
-
-    // MARK: - Avatar
-
-    private func updateAvatarBase() {
-        let base: AvatarState
-        if speechInput.isActive || session.pendingConfirmation != nil {
-            base = .listening
-        } else if session.isRunning {
-            base = .thinking
-        } else {
-            base = .idle
+        .onChange(of: session.messages.last?.id) { _, _ in speakNewReplyIfEnabled() }
+        .onChange(of: session.conversationID) { _, _ in
+            speechInput.cancel()
+            speechOutput.stop()
+            draft = ""
+            pendingAttachments = []
         }
-        avatar.setBase(base)
+        .confirmationDialog("Start a new conversation?", isPresented: $confirmsNewConversation) {
+            Button("New conversation", role: .destructive) { session.clearTranscript() }
+        } message: {
+            Text("Clears the saved chat and draft plan. Your recordings and edits stay unchanged.")
+        }
     }
 
-    /// Reacts to the newest message the avatar has not seen. Status rows are
-    /// skipped so a tool result followed at once by "Thinking…" still counts.
-    private func reactToNewMessages() {
-        let fresh = session.messages.filter { $0.role != .status && $0.timestamp > lastReactedTimestamp }
+    // MARK: - Optional voice replies
+
+    private func speakNewReplyIfEnabled() {
+        let fresh = session.messages.filter { $0.role != .status && $0.timestamp > lastSpokenTimestamp }
         guard let latest = fresh.last else { return }
-        lastReactedTimestamp = latest.timestamp
+        lastSpokenTimestamp = latest.timestamp
         switch latest.role {
         case .assistant:
-            if speechOutput.isEnabled {
+            if speechOutput.isEnabled, session.claimSpeech(for: latest.id) {
                 speechOutput.speak(latest.text)
-            } else {
-                avatar.react(.speaking, for: .seconds(2))
             }
-        case .error:
+        case .error, .user:
             speechOutput.stop()
-            avatar.react(.error, for: .seconds(2.5))
-        case .tool:
-            if latest.text != L10n.tr("Cancelled — nothing was generated.") {
-                avatar.react(.happy, for: .seconds(1.4))
-            }
-        case .user:
-            speechOutput.stop()
-        case .status:
+        case .tool, .status:
             break
         }
     }
@@ -172,30 +155,25 @@ struct AIAssistantPanel: View {
     // MARK: - Header
 
     private var header: some View {
-        ZStack(alignment: .topTrailing) {
-            VStack(spacing: 2) {
-                AssistantAvatarView(state: avatar.state, audioLevel: avatarAudioLevel)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: isCompact ? Self.compactAvatarHeight : Self.expandedAvatarHeight)
-                    .accessibilityHidden(true)
-                HStack(spacing: 6) {
-                    Text("AI Assistant")
-                        .font(.system(size: 13, weight: .semibold))
-                    if !modelLabel.isEmpty {
-                        Text(verbatim: modelLabel)
-                            .font(.system(size: 11))
-                            .foregroundStyle(StudioTheme.secondaryText)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                }
-                .padding(.horizontal, 12)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.top, 6)
-            .padding(.bottom, 10)
-
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
+                Text("AI Assistant")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer(minLength: 4)
+                Button { confirmsNewConversation = true } label: {
+                    Label("New conversation", systemImage: "square.and.pencil").labelStyle(.iconOnly)
+                }
+                .buttonStyle(IconButtonStyle())
+                .help("New conversation")
+                .disabled(session.isRunning)
+                .accessibilityIdentifier("assistant.newConversation")
+                if let openSettings {
+                    Button(action: openSettings) {
+                        Label("Model settings", systemImage: "slider.horizontal.3").labelStyle(.iconOnly)
+                    }
+                    .buttonStyle(IconButtonStyle())
+                    .help("Model settings")
+                }
                 Toggle(isOn: $speechOutput.isEnabled) {
                     Label("Voice replies", systemImage: speechOutput.isEnabled ? "speaker.wave.2.fill" : "speaker.slash")
                 }
@@ -225,9 +203,16 @@ struct AIAssistantPanel: View {
                     .accessibilityIdentifier("assistant.close")
                 }
             }
-            .padding(8)
             .animation(reduceMotion ? nil : StudioMotion.fade, value: session.isRunning)
+            if !modelLabel.isEmpty {
+                Text(verbatim: modelLabel)
+                    .font(.system(size: 11))
+                    .foregroundStyle(StudioTheme.secondaryText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
         }
+        .padding(12)
     }
 
     private var modelNotice: some View {
@@ -452,13 +437,15 @@ struct AIAssistantPanel: View {
     private func confirmationCard(_ pending: AIAssistantSession.PendingToolCall) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Image(systemName: "yensign.circle.fill")
+                Image(systemName: pending.isPaid ? "yensign.circle.fill" : "record.circle")
                     .foregroundStyle(StudioTheme.yellow)
-                Text("Confirm generation")
+                Text(LocalizedStringKey(pending.isPaid ? "Confirm generation" : "Confirm recording action"))
                     .font(.system(size: 12, weight: .semibold))
                 Spacer(minLength: 0)
-                Text(verbatim: "≈ ¥" + String(format: "%.2f", pending.estimate.yuan))
-                    .font(.system(size: 13, weight: .semibold))
+                if pending.isPaid {
+                    Text(verbatim: "≈ ¥" + String(format: "%.2f", pending.estimate.yuan))
+                        .font(.system(size: 13, weight: .semibold))
+                }
             }
             Text(verbatim: pending.estimate.summary)
                 .font(.system(size: 11))

@@ -44,7 +44,8 @@ let package = Package(
         .executableTarget(
             name: "FocusStudioE2E",
             dependencies: ["FocusStudioCore", "FocusStudioCapture"],
-            path: "Sources/FocusStudioE2E"
+            path: "Sources/FocusStudioE2E",
+            swiftSettings: [.unsafeFlags(["-parse-as-library"])]
         ),
         .executableTarget(
             name: "FocusStudioPermissionTests",

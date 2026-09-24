@@ -32,6 +32,10 @@ public final class AutomationJobs {
     /// Detached jobs, running or finished, by id.
     private var detached: [String: Job] = [:]
 
+    /// Called when ``runningJobIDs`` may have changed: a call detached as a
+    /// job, or a detached job finished (the app republishes its busy state).
+    public var onChange: (@MainActor () -> Void)?
+
     public init(
         detachAfter: TimeInterval = defaultDetachAfter,
         retention: TimeInterval = defaultRetention,
@@ -84,7 +88,12 @@ public final class AutomationJobs {
                 outcome = .finished(.failure(error))
             }
             job.finish(outcome)
-            self?.prune()
+            guard let self else { return }
+            // Only a detached job was listed as running; one that finished in
+            // time never was.
+            let wasListed = self.detached[job.id] != nil
+            self.prune()
+            if wasListed { self.onChange?() }
         }
         let finished = await job.outcome(within: budget)
         relay.detach(listener)
@@ -95,6 +104,7 @@ public final class AutomationJobs {
             return .cancelled
         }
         detached[job.id] = job
+        onChange?()
         return .result(runningStatus(of: job))
     }
 

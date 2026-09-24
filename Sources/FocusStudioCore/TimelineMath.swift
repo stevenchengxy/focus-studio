@@ -10,58 +10,24 @@ public enum TimelineMath {
         guard settings.autoZoomEnabled, duration.isFinite, duration > 0 else { return [] }
         let crop = settings.sourceCropInsets ?? SourceCropInsets()
 
+        func bounded(_ value: Double, fallback: Double) -> Double {
+            min(duration, max(0, value.isFinite ? value : fallback))
+        }
+        let leadIn = bounded(settings.zoomLeadIn, fallback: 0.1)
+        let easeIn = bounded(settings.zoomEaseIn, fallback: 0.42)
+        let easeOut = bounded(settings.zoomEaseOut, fallback: 0.52)
+        let hold = bounded(settings.zoomHold, fallback: 0.9)
+        let scale = settings.zoomScale.isFinite ? max(1, settings.zoomScale) : 1.75
+        func distance(_ x: Double, _ y: Double, _ otherX: Double, _ otherY: Double) -> Double {
+            guard let a = crop.croppedPoint(x: x, y: y),
+                  let b = crop.croppedPoint(x: otherX, y: otherY) else { return .infinity }
+            return hypot(a.x - b.x, a.y - b.y)
+        }
         let sorted = clicks
             .filter { $0.time.isFinite && $0.x.isFinite && $0.y.isFinite && $0.time >= 0 && $0.time <= duration && crop.croppedPoint(x: $0.x, y: $0.y) != nil }
             .sorted { $0.time < $1.time }
-
-        var result: [ZoomSegment] = []
-        for click in sorted {
-            let start = max(0, click.time - settings.zoomLeadIn)
-            let end = min(duration, click.time + settings.zoomHold + settings.zoomEaseOut)
-            guard end > start else { continue }
-
-            if var previous = result.last,
-               start < previous.end,
-               click.time - previous.start < 0.72 {
-                previous.end = max(previous.end, end)
-                previous.targetX = click.x
-                previous.targetY = click.y
-                if !(previous.automaticSource?.clickIDs?.contains(click.id) ?? false) {
-                    previous.automaticSource?.clickIDs?.append(click.id)
-                }
-                previous.automaticSource?.originalEnd = previous.end
-                result[result.count - 1] = previous
-            } else {
-                if var previous = result.last,
-                   shouldChain(previous: previous, nextStart: start, nextX: click.x, nextY: click.y, settings: settings) {
-                    // Keep the camera committed and pan to the next click instead
-                    // of zooming out only to zoom straight back in. The previous
-                    // cue stays at full scale until the new cue has fully taken over.
-                    previous.end = min(
-                        duration,
-                        max(previous.end, start + max(0, settings.zoomEaseIn) + max(0, settings.zoomEaseOut))
-                    )
-                    previous.automaticSource?.originalEnd = previous.end
-                    result[result.count - 1] = previous
-                }
-                result.append(
-                    ZoomSegment(
-                        start: start,
-                        end: end,
-                        targetX: click.x.clamped(to: 0...1),
-                        targetY: click.y.clamped(to: 0...1),
-                        scale: settings.zoomScale,
-                        automaticSource: ZoomAutomaticSource(
-                            start: start, targetX: click.x, targetY: click.y, eventTime: click.time,
-                            clickIDs: [click.id], typingActivity: [], originalEnd: end
-                        )
-                    )
-                )
-            }
-        }
-        guard settings.resolvedTypingZoom.enabled else { return result }
         let idleDelay = settings.resolvedTypingZoom.idleDelay
-        let activity = typingActivity
+        let activity = (settings.resolvedTypingZoom.enabled ? typingActivity : [])
             .filter { $0.time.isFinite && $0.x.isFinite && $0.y.isFinite && $0.time >= 0 && $0.time <= duration && crop.croppedPoint(x: $0.x, y: $0.y) != nil }
             .sorted { $0.time < $1.time }
         struct Burst {
@@ -70,66 +36,112 @@ public enum TimelineMath {
             var events: [TypingActivity]
         }
         var bursts: [Burst] = []
+        var clickIndex = 0
         for event in activity {
-            if var burst = bursts.last,
-               event.time - burst.lastTime <= idleDelay,
-               hypot(event.x - burst.first.x, event.y - burst.first.y) <= 0.08 {
+            // A toolbar/other-field click is a new focus intent. If typing then
+            // returns to the original field, it needs a NEW cue after that click,
+            // not an extension of an older cue hidden behind the newer click.
+            var interrupted = false
+            while clickIndex < sorted.count, sorted[clickIndex].time <= event.time {
+                let click = sorted[clickIndex]
+                if let burst = bursts.last, click.time > burst.lastTime,
+                   distance(click.x, click.y, burst.first.x, burst.first.y) > 0.08 {
+                    interrupted = true
+                }
+                clickIndex += 1
+            }
+            if let index = bursts.indices.last,
+               !interrupted,
+               event.time - bursts[index].lastTime <= idleDelay,
+               distance(event.x, event.y, bursts[index].first.x, bursts[index].first.y) <= 0.08 {
                 // Keep the field's initial focus, rather than chasing the mouse
                 // (or a caret drifting horizontally as the text gets longer).
-                burst.lastTime = event.time
-                if burst.events.last != event { burst.events.append(event) }
-                bursts[bursts.count - 1] = burst
+                bursts[index].lastTime = event.time
+                if bursts[index].events.last != event { bursts[index].events.append(event) }
             } else {
                 bursts.append(Burst(first: event, lastTime: event.time, events: [event]))
             }
         }
-        for burst in bursts {
-            let start = max(0, burst.first.time - max(0, settings.zoomLeadIn))
-            let end = min(duration, burst.lastTime + idleDelay + max(0, settings.zoomEaseOut))
-            guard end > start else { continue }
-            let x = burst.first.x.clamped(to: 0...1)
-            let y = burst.first.y.clamped(to: 0...1)
-            let previousIndex = result.indices
-                .filter { result[$0].start <= start && result[$0].end >= start }
-                .max { result[$0].start < result[$1].start }
-            if let relatedIndex = previousIndex,
-               hypot(result[relatedIndex].targetX - x, result[relatedIndex].targetY - y) <= 0.12 {
-                // A click that entered the same input becomes one continuous
-                // camera hold, even when typing outlasts the normal click hold.
-                result[relatedIndex].end = max(result[relatedIndex].end, end)
-                let existingEvents = result[relatedIndex].automaticSource?.typingActivity ?? []
-                let existingSet = Set(existingEvents)
-                let updatedEnd = result[relatedIndex].end
-                result[relatedIndex].automaticSource?.typingActivity = existingEvents + burst.events.filter { !existingSet.contains($0) }
-                result[relatedIndex].automaticSource?.originalEnd = updatedEnd
+
+        struct Intent {
+            var time: Double
+            var x: Double
+            var y: Double
+            var end: Double
+            var clickIDs: [UUID]
+            var typing: [TypingActivity]
+        }
+        var intents = sorted.map {
+            Intent(time: $0.time, x: $0.x, y: $0.y, end: min(duration, $0.time + hold + easeOut), clickIDs: [$0.id], typing: [])
+        }
+        intents += bursts.map {
+            Intent(time: $0.first.time, x: $0.first.x, y: $0.first.y,
+                   end: min(duration, $0.lastTime + idleDelay + easeOut), clickIDs: [], typing: $0.events)
+        }
+        // Keep equal-time capture order stable, with verified typing taking over
+        // after a click at that timestamp. No cue target is rewritten by a future
+        // click at a different location.
+        let ordered = intents.enumerated().sorted {
+            $0.element.time == $1.element.time ? $0.offset < $1.offset : $0.element.time < $1.element.time
+        }.map(\.element)
+        var result: [ZoomSegment] = []
+        var previousIntentTime = -Double.infinity
+        for intent in ordered {
+            let start = max(0, intent.time - leadIn)
+            guard intent.end > start else { continue }
+            let isTyping = !intent.typing.isEmpty
+            if var previous = result.last,
+               start < previous.end,
+               distance(previous.targetX, previous.targetY, intent.x, intent.y) <= (isTyping ? 0.12 : (previous.automaticSource?.typingActivity?.isEmpty == false ? 0.08 : 0.04)),
+               isTyping || intent.time - previousIntentTime < 0.32
+                    || (previous.automaticSource?.typingActivity?.isEmpty == false && intent.time <= previous.end - easeOut) {
+                previous.end = max(previous.end, intent.end)
+                let sourceClicks = previous.automaticSource?.clickIDs ?? []
+                let sourceTyping = previous.automaticSource?.typingActivity ?? []
+                previous.automaticSource?.clickIDs = sourceClicks + intent.clickIDs.filter { !sourceClicks.contains($0) }
+                let recordedTyping = Set(sourceTyping)
+                previous.automaticSource?.typingActivity = sourceTyping + intent.typing.filter { !recordedTyping.contains($0) }
+                previous.automaticSource?.originalEnd = previous.end
+                result[result.count - 1] = previous
             } else {
-                // If focus moves to another input while already zoomed, keep the
-                // previous camera envelope alive until this handoff has settled.
-                if let previousIndex {
-                    result[previousIndex].end = max(
-                        result[previousIndex].end,
-                        min(duration, start + max(0, settings.zoomEaseIn) + max(0, settings.zoomEaseOut))
-                    )
+                if var previous = result.last {
+                    let overlaps = start < previous.end
+                    let nearby = distance(previous.targetX, previous.targetY, intent.x, intent.y) <= zoomChainMaximumDistance
+                    let bridgesGap = !isTyping && nearby && shouldChain(previous: previous, nextStart: start, nextX: intent.x, nextY: intent.y, settings: settings)
+                    let committedHandoff = overlaps && (isTyping || (nearby && settings.resolvedZoomChainGap > 0))
+                    let handoffEnd = min(intent.end, start + easeIn + easeOut)
+                    if committedHandoff || bridgesGap {
+                        previous.end = handoffEnd
+                    } else if overlaps {
+                        previous.end = min(previous.end, handoffEnd)
+                    }
+                    // A superseded automatic focus cannot reappear after the
+                    // newer cue leaves. This changes generated cues only; manual
+                    // intervals remain untouched by regeneration below.
+                    previous.automaticSource?.originalEnd = previous.end
+                    result[result.count - 1] = previous
                 }
                 result.append(ZoomSegment(
-                    start: start,
-                    end: end,
-                    targetX: x,
-                    targetY: y,
-                    scale: settings.zoomScale,
+                    start: start, end: intent.end,
+                    targetX: intent.x, targetY: intent.y, scale: scale,
                     automaticSource: ZoomAutomaticSource(
-                        start: start, targetX: x, targetY: y, eventTime: burst.first.time,
-                        clickIDs: [], typingActivity: burst.events, originalEnd: end
+                        start: start, targetX: intent.x, targetY: intent.y, eventTime: intent.time,
+                        clickIDs: intent.clickIDs, typingActivity: intent.typing, originalEnd: intent.end
                     )
                 ))
             }
+            previousIntentTime = intent.time
         }
-        return result.sorted { $0.start < $1.start }
+        return result
     }
 
     /// Camera moves between nearby clicks read as one deliberate pan. Distant
     /// targets still zoom out first so the pan never races across the frame.
     public static let zoomChainMaximumDistance = 0.5
+    /// Extra seconds a hand-off pan may take beyond the ease-in, and how much
+    /// of that is added per normalized unit of distance between the regions.
+    public static let handoffPanExtension = 0.25
+    public static let handoffPanSecondsPerUnit = 0.6
 
     static func shouldChain(
         previous: ZoomSegment,
@@ -197,7 +209,13 @@ public enum TimelineMath {
             // slider changes the cue's end time. A newly split/added cue receives
             // a fresh identity; manual blocks are preserved verbatim below.
             guard let previous = previousAutomatic.first(where: {
-                abs($0.start - generated.start) < 0.000_1
+                if let existingSource = $0.automaticSource, let generatedSource = generated.automaticSource,
+                   let existingTime = existingSource.eventTime, let generatedTime = generatedSource.eventTime {
+                    return abs(existingTime - generatedTime) < 0.000_1
+                        && abs(existingSource.targetX - generatedSource.targetX) < 0.000_1
+                        && abs(existingSource.targetY - generatedSource.targetY) < 0.000_1
+                }
+                return abs($0.start - generated.start) < 0.000_1
                     && abs($0.targetX - generated.targetX) < 0.000_1
                     && abs($0.targetY - generated.targetY) < 0.000_1
             }) else { return generated }
@@ -226,7 +244,12 @@ public enum TimelineMath {
                     && $0.end > max(0, $0.start) && time >= max(0, $0.start) && time <= $0.end
             }
             .sorted {
-                if $0.start == $1.start { return $0.id.uuidString < $1.id.uuidString }
+                if $0.start == $1.start {
+                    let lhsEvent = $0.automaticSource?.eventTime ?? $0.start
+                    let rhsEvent = $1.automaticSource?.eventTime ?? $1.start
+                    if lhsEvent != rhsEvent { return lhsEvent < rhsEvent }
+                    return $0.id.uuidString < $1.id.uuidString
+                }
                 return $0.start < $1.start
             }
             .map { segment in
@@ -256,19 +279,16 @@ public enum TimelineMath {
         // their envelopes as a smooth union (1 - Π(1 - amount)) keeps the camera
         // committed through a handoff and, unlike picking the strongest cue,
         // never introduces a velocity kink at the moment one cue overtakes
-        // another. Target scales are blended by envelope weight so cues with
-        // different magnitudes still cross-fade continuously.
+        // another. Composite scales in timeline order, like focus below: once
+        // the newer cue settles it owns its requested scale, rather than being
+        // averaged with an older overlapping cue for the rest of that cue's life.
         var union = 1.0
-        var weightSum = 0.0
-        var weightedScale = 0.0
+        var scale = 1.0
         for entry in active {
             union *= 1 - entry.amount
-            weightSum += entry.amount
-            weightedScale += entry.amount * max(1, entry.segment.scale)
+            scale += (max(1, entry.segment.scale) - scale) * entry.amount
         }
         let combinedAmount = 1 - union
-        let targetScale = weightSum > 0 ? weightedScale / weightSum : 1
-        let scale = 1 + (targetScale - 1) * combinedAmount
 
         // The pan is eased with the same envelope as the scale, starting from
         // the overview centre. Each cue moves toward the focus point it can
@@ -277,12 +297,40 @@ public enum TimelineMath {
         // Folding in timeline order lets a newer click finish at its own target.
         var focusX = 0.5
         var focusY = 0.5
+        var previousVisible: (x: Double, y: Double)?
         for entry in active {
             let fullScale = max(1, entry.segment.scale)
             let visibleX = clampedFocus(entry.segment.targetX, scale: fullScale)
             let visibleY = clampedFocus(entry.segment.targetY, scale: fullScale)
-            focusX += (visibleX - focusX) * entry.amount
-            focusY += (visibleY - focusY) * entry.amount
+            var weight = entry.amount
+            // Typing cues reclaim the input field at full speed: the viewer is
+            // reading what is being typed, so the camera must already be there.
+            let isTypingCue = entry.segment.automaticSource?.typingActivity?.isEmpty == false
+            if let previousVisible, !entry.segment.isInstant, !isTypingCue {
+                // A hand-off between two zoomed regions pans for longer when the
+                // regions are far apart, so the camera never whips across the
+                // frame. The scale keeps its own envelope; only the focus takes
+                // the extra time, capped so it settles inside the chained overlap.
+                let timing = ZoomTiming.resolve(entry.segment, settings: settings)
+                let distance = hypot(visibleX - previousVisible.x, visibleY - previousVisible.y)
+                let panDuration = timing.easeIn + min(handoffPanExtension, distance * handoffPanSecondsPerUnit)
+                if timing.easeIn > 0, panDuration > timing.easeIn {
+                    let incoming = zoomCurve(
+                        ((time - timing.start) / panDuration).clamped(to: 0...1),
+                        style: settings.screenAnimation,
+                        isEntering: true
+                    )
+                    let outgoing = zoomCurve(
+                        timing.easeOut > 0 ? ((timing.end - time) / timing.easeOut).clamped(to: 0...1) : 1,
+                        style: settings.screenAnimation,
+                        isEntering: false
+                    )
+                    weight = min(incoming, outgoing)
+                }
+            }
+            focusX += (visibleX - focusX) * weight
+            focusY += (visibleY - focusY) * weight
+            previousVisible = (visibleX, visibleY)
         }
         return ZoomState(
             scale: scale,

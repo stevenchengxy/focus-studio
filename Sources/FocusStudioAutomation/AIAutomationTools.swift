@@ -67,7 +67,7 @@ public struct GetProjectTool: AIAssistantTool {
 /// open project, the library size, permissions and the bundled music.
 public struct GetStatusTool: AIAssistantTool {
     public let name = "get_status"
-    public let summary = "Report Focus Studio's state: version, whether it is counting down or recording (for how long, and when it stops by itself), which project is open in the editor, how many projects the library has, which permissions are granted (Screen Recording, Accessibility, Input Monitoring) and the bundled music tracks."
+    public let summary = "Report Focus Studio's state: version, whether it is counting down or recording (for how long, whether the person paused it, and when it stops by itself), which project is open in the editor, how many projects the library has, which permissions are granted (Screen Recording, Accessibility, Input Monitoring) and the bundled music tracks."
 
     public init() {}
 
@@ -81,8 +81,9 @@ public struct GetStatusTool: AIAssistantTool {
         progress: @escaping @Sendable (String) -> Void
     ) async throws -> AIToolResult {
         let app = try AIToolSupport.requireApp(context)
-        let (phase, elapsed, remaining, openID, projectCount, permissions, tracks) = await MainActor.run {
-            (app.recordingPhase, app.recordingElapsed, app.recordingRemaining, app.openProjectID, app.projectSummaries.count, app.permissionStatus, app.bundledMusicTracks)
+        let (phase, elapsed, remaining, paused, openID, projectCount, permissions, tracks) = await MainActor.run {
+            (app.recordingPhase, app.recordingElapsed, app.recordingRemaining, app.recordingPhase == .recording && app.isRecordingPaused,
+             app.openProjectID, app.projectSummaries.count, app.permissionStatus, app.bundledMusicTracks)
         }
         let info = Bundle.main.infoDictionary
         let version = info?["CFBundleShortVersionString"] as? String
@@ -91,7 +92,13 @@ public struct GetStatusTool: AIAssistantTool {
         var lines = ["Focus Studio \(version ?? "(version unknown)")\(build.map { " (build \($0))" } ?? "")"]
         var recording = "Recording: \(phase.label)"
         if phase == .recording, let elapsed { recording += " for \(AIToolSupport.seconds(elapsed)) s" }
-        if phase == .recording, let remaining { recording += " (it stops by itself in \(AIToolSupport.seconds(remaining)) s)" }
+        if paused {
+            recording += ", paused by the person (paused time is not recorded"
+            if let remaining { recording += "; \(AIToolSupport.seconds(remaining)) s of recording remain once they resume" }
+            recording += ")"
+        } else if phase == .recording, let remaining {
+            recording += " (it stops by itself in \(AIToolSupport.seconds(remaining)) s)"
+        }
         lines.append(recording)
         lines.append(openID.map { "Editor: project \($0.uuidString) is open" } ?? "Editor: closed (library showing)")
         lines.append("Library: \(projectCount) projects")
@@ -115,9 +122,13 @@ public struct GetStatusTool: AIAssistantTool {
             ],
             "recording": [
                 "state": AIJSONValue(phase.code),
+                // Seconds recorded so far; paused time is left out.
                 "elapsed": phase == .recording ? elapsed.map { AIJSONValue.rounded($0, places: 1) } ?? .null : .null,
-                // Seconds until a recording with a duration stops by itself.
+                // Seconds of recording left before a duration stops it; it
+                // does not count down while paused.
                 "remaining": phase == .recording ? remaining.map { AIJSONValue.rounded($0, places: 1) } ?? .null : .null,
+                // The person paused the recording from its control bar.
+                "paused": AIJSONValue(paused),
                 "error": failure,
             ],
             "open_project_id": openID.map { AIJSONValue($0.uuidString) } ?? .null,

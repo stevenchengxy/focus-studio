@@ -1,3 +1,4 @@
+import Combine
 import CoreGraphics
 import FocusStudioAutomation
 import FocusStudioCore
@@ -29,7 +30,8 @@ enum AutomationBridgeRegression {
         try await englishUnderChineseUI()
         try await longCallsDetach()
         try windowPresenterSteps()
-        print("AutomationBridgeRegression: PASS (main window presenter: a hidden app is unhidden instead of opening another window, a minimized window is restored, a closed one is never reused, edits by project_id open the editor and save, switching saves the other project, parallel calls take turns, refusals while busy or recording, while the in-app assistant works (also after an Allow at the sound prompt) and during an editor export, unknown/withheld tools, project_id validation, read-only tools stay put, capture_frame inline JPEG, working-directory export with progress, import/screenshot/rename/Trash, English results and refusals under a Chinese UI, detached jobs with wait_for_job and cancellation, reads skip the queue, queued calls detach in time, a call whose time runs out waiting for its turn answers waiting_for_turn with heartbeats and runs when called again)")
+        try await installationBusyFollowsAutomation()
+        print("AutomationBridgeRegression: PASS (main window presenter: a hidden app is unhidden instead of opening another window, a minimized window is restored, a closed one is never reused, edits by project_id open the editor and save, switching saves the other project, parallel calls take turns, refusals while busy or recording, while the in-app assistant works (also after an Allow at the sound prompt) and during an editor export, unknown/withheld tools, project_id validation, read-only tools stay put, capture_frame inline JPEG, working-directory export with progress, import/screenshot/rename/Trash, English results and refusals under a Chinese UI, detached jobs with wait_for_job and cancellation, reads skip the queue, queued calls detach in time, a call whose time runs out waiting for its turn answers waiting_for_turn with heartbeats and runs when called again, the installer's busy state republished as AI calls and detached jobs begin and end)")
     }
 
     // MARK: - Main window
@@ -50,6 +52,49 @@ enum AutomationBridgeRegression {
         try expect(Presenter.step(appIsHidden: false, windows: [(false, true), (true, false)], canOpen: true) == .orderFront(1), "An open window wins over a minimized one")
         try expect(Presenter.step(appIsHidden: false, windows: [(false, false), (false, true)], canOpen: true) == .restore(1), "A minimized window is restored")
         try expect(Presenter.step(appIsHidden: false, windows: [], canOpen: false) == .nothing, "Nothing to do without a way to open one")
+    }
+
+    // MARK: - Installation
+
+    /// Settings › Installation and the outside-Applications notice pass
+    /// `isInstallationBusy` to the installer, and observe only the model. The
+    /// model counts the AI calls running and the detached jobs still running,
+    /// and republishes whenever either changes, so those views never keep a
+    /// stale value (an assemble_video job that changes nothing else, say).
+    private static func installationBusyFollowsAutomation() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("FocusStudio-InstallBusy-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = StudioModel(store: ProjectStore(projectsDirectory: root))
+        let activity = AutomationActivity()
+        let jobs = AutomationJobs(detachAfter: 0.05)
+        var published = 0
+        let counter = model.objectWillChange.sink { _ in published += 1 }
+        let observer = AppServices.reportAutomationWork(of: activity, jobs: jobs, to: model)
+        defer {
+            counter.cancel()
+            observer.cancel()
+        }
+        try expect(!model.isInstallationBusy, "Nothing works in the app yet")
+
+        var before = published
+        let call = activity.begin(clientName: "Claude Code", tool: "assemble_video")
+        try expect(published > before && model.isInstallationBusy, "A call beginning republishes the model, which is busy")
+        before = published
+        activity.end(call)
+        try expect(published > before && !model.isInstallationBusy, "The call ending republishes it, no longer busy")
+
+        let release = BridgeFlag()
+        before = published
+        let answer = await jobs.run(tool: "assemble_video", progress: nil) { _ in
+            while !release.isRaised { try await Task.sleep(for: .milliseconds(5)) }
+            return MCPToolCallResult(content: [.text("Assembled.")])
+        }
+        guard case let .result(running) = answer, running.structuredContent?["status"] == "running" else { throw BridgeFailure("The job must detach: \(answer)") }
+        try expect(published > before && model.isInstallationBusy, "A detached job republishes the model, which is busy")
+        before = published
+        release.raise()
+        try await waitUntil("The detached job did not finish") { jobs.runningJobIDs.isEmpty }
+        try expect(published > before && !model.isInstallationBusy, "The job finishing republishes it, no longer busy")
     }
 
     // MARK: - Editing

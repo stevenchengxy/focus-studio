@@ -267,7 +267,10 @@ public enum ProjectVideoRenderer {
 
         let geometry = geometry(for: project)
         let cursorGraphics = await MainActor.run {
-            CursorGraphicSet(appearance: project.settings.resolvedCursorAppearance)
+            CursorGraphicSet(
+                appearance: project.settings.resolvedCursorAppearance,
+                tintHex: project.settings.resolvedClickAnimation.colorHex
+            )
         }
         let frameRenderer = ProjectFrameRenderer(
             project: project,
@@ -705,6 +708,11 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
     private let sortedCursorSamples: [CursorSample]
     private let cursorSampleTimes: [Double]
     private let cursorMotionTimes: [Double]
+    /// Dense, smoothed and click-anchored path used for every style but `.none`.
+    private let renderCursorSamples: [CursorSample]
+    private let cursorKindChangeIndices: [Int]
+    /// Camera drift after the pointer while zoomed in; empty when disabled.
+    private let followOffsets: [CursorFollow.Sample]
     private let sortedClicks: [ClickEvent]
     private let clickTimes: [Double]
     private let effectiveZoomSegments: [ZoomSegment]
@@ -744,6 +752,12 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
             let rhs = cursorSamples[index]
             return abs(lhs.x - rhs.x) + abs(lhs.y - rhs.y) > 0.0005 ? rhs.time : nil
         }
+        let smoothingSigma = CursorMotion.smoothingSigma(for: project.settings.cursorAnimation)
+        let rawClicks = project.clickEvents.filter { $0.time.isFinite && $0.x.isFinite && $0.y.isFinite }
+        self.renderCursorSamples = smoothingSigma > 0
+            ? CursorMotion.smoothedPath(samples: cursorSamples, clicks: rawClicks, sigma: smoothingSigma)
+            : cursorSamples
+        self.cursorKindChangeIndices = CursorMotion.kindChangeIndices(cursorSamples)
         let clicks = project.clickEvents
             .filter { $0.time.isFinite && $0.x.isFinite && $0.y.isFinite }
             .compactMap { click -> ClickEvent? in
@@ -792,6 +806,21 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
         // Durations are literal seconds in both editor and rendered output.
         // Animation style changes the curve, never secretly rescales its timing.
         self.timelineSettings = project.settings
+        let croppedCursorPath = self.renderCursorSamples.compactMap { sample -> CursorSample? in
+            guard let point = sourceCropInsets.croppedPoint(x: sample.x, y: sample.y) else { return nil }
+            return CursorSample(time: sample.time, x: point.x, y: point.y, cursorKind: sample.cursorKind)
+        }
+        // A hidden pointer must render exactly like absent cursor metadata, so
+        // the camera only follows a pointer the viewer can see.
+        self.followOffsets = project.settings.resolvedShowCursor
+            ? CursorFollow.offsets(
+                duration: project.duration,
+                segments: zoomSegments,
+                settings: project.settings,
+                cursor: croppedCursorPath,
+                strength: project.settings.resolvedZoomFollowsCursor
+            )
+            : []
         self.primaryColor = CIColor(hex: project.settings.backgroundColor)
             ?? CIColor(red: 0.427, green: 0.365, blue: 0.984, alpha: 1)
         self.secondaryColor = CIColor(hex: project.settings.secondaryBackgroundColor)
@@ -1136,7 +1165,8 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
     }
 
     private func cursorLayer(at seconds: Double, zoom: ZoomState, canvasRect: CGRect) -> CIImage? {
-        guard let sourcePosition = cursorPosition(at: seconds),
+        guard project.settings.resolvedShowCursor,
+              let sourcePosition = cursorPosition(at: seconds),
               let croppedPosition = sourceCropInsets.croppedPoint(
                   x: sourcePosition.x,
                   y: sourcePosition.y
@@ -1154,23 +1184,53 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
             x: geometry.screenFrame.minX + point.x * geometry.screenFrame.width,
             y: geometry.screenFrame.maxY - point.y * geometry.screenFrame.height
         )
-        let cursorGraphic = cursorGraphics.graphic(for: sourcePosition.cursorKind)
         let sourceReferenceScale = geometry.screenFrame.width / CGFloat(visibleSourceReferenceWidth)
-        let scale = max(0.5, sourceReferenceScale) * max(0.1, project.settings.cursorScale)
+        let baseScale = max(0.5, sourceReferenceScale) * max(0.1, project.settings.cursorScale)
             * cursorPressScale(at: seconds)
-        let cursorImage = CIImage(cgImage: cursorGraphic.image)
-            .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        let offsetX = cursorGraphic.hotSpot.x * scale
-        let offsetYFromBottom = (CGFloat(cursorGraphic.image.height) - cursorGraphic.hotSpot.y) * scale
-        return cursorImage
-            .transformed(by: CGAffineTransform(
-                translationX: canvasPoint.x - offsetX,
-                y: canvasPoint.y - offsetYFromBottom
-            ))
-            .applyingFilter("CIColorMatrix", parameters: [
-                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: cursorOpacity(at: seconds))
-            ])
-            .cropped(to: canvasRect)
+        let opacity = cursorOpacity(at: seconds)
+        func placed(_ graphic: CursorArtwork.Graphic, scaleMultiplier: CGFloat, alpha: Double) -> CIImage {
+            // Artwork drawn finer than the reference grid renders at the same
+            // size, just with more detail; the hot spot is already in pixels, so
+            // the arrow tip lands exactly on the recorded point.
+            let scale = baseScale * scaleMultiplier / max(0.001, graphic.supersample)
+            let offsetX = graphic.hotSpot.x * scale
+            let offsetYFromBottom = (CGFloat(graphic.image.height) - graphic.hotSpot.y) * scale
+            return CIImage(cgImage: graphic.image)
+                .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+                .transformed(by: CGAffineTransform(
+                    translationX: canvasPoint.x - offsetX,
+                    y: canvasPoint.y - offsetYFromBottom
+                ))
+                .applyingFilter("CIColorMatrix", parameters: [
+                    "inputAVector": CIVector(x: 0, y: 0, z: 0, w: opacity * alpha)
+                ])
+                .cropped(to: canvasRect)
+        }
+        // A shape change (arrow ↔ I-beam over an input) cross-fades with a small
+        // scale pop instead of swapping on one frame, which also hides flicker
+        // from rapid focus changes.
+        let transition = CursorMotion.kindTransition(
+            at: seconds,
+            samples: sortedCursorSamples,
+            changeIndices: cursorKindChangeIndices
+        )
+        let current = cursorGraphics.graphic(for: transition.to)
+        let previous = cursorGraphics.graphic(for: transition.from)
+        // Styles that draw every shape the same way (the dot) would otherwise
+        // cross-fade an image against itself and visibly pulse.
+        guard transition.progress < 1,
+              transition.from != transition.to,
+              previous.image !== current.image
+        else {
+            return placed(current, scaleMultiplier: 1, alpha: 1)
+        }
+        // "None" means the pointer never changes size, shape swaps included.
+        let pop: CGFloat = project.settings.resolvedClickAnimation.resolvedPressStyle == .none
+            ? 1
+            : CGFloat(0.9 + 0.1 * transition.progress)
+        let incoming = placed(current, scaleMultiplier: pop, alpha: transition.progress)
+        let outgoing = placed(previous, scaleMultiplier: 1, alpha: 1 - transition.progress)
+        return incoming.composited(over: outgoing)
     }
 
     private func clickRingLayer(at seconds: Double, zoom: ZoomState, canvasRect: CGRect) -> CIImage? {
@@ -1191,9 +1251,9 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
             for layer in ClickAnimationMath.layers(age: age, settings: settings) where layer.opacity > 0.001 {
                 let graphic: CGImage
                 switch layer.kind {
-                case .ring: graphic = CursorGraphic.clickRing
-                case .fill: graphic = CursorGraphic.clickFill
-                case .halo: graphic = CursorGraphic.clickHalo
+                case .ring: graphic = ClickGraphic.clickRing
+                case .fill: graphic = ClickGraphic.clickFill
+                case .halo: graphic = ClickGraphic.clickHalo
                 }
                 let scale = layer.radius * 2 * outputScale / CGFloat(graphic.width)
                 let image = CIImage(cgImage: graphic)
@@ -1217,14 +1277,15 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
     }
 
     private func cursorPressScale(at seconds: Double) -> Double {
-        guard project.settings.showClickRing else { return 1 }
         let settings = project.settings.resolvedClickAnimation
+        guard settings.resolvedPressStyle != .none else { return 1 }
+        let pressDuration = ClickAnimationMath.pressDuration(settings: settings)
         var clickIndex = insertionIndex(atOrBefore: seconds, times: clickTimes)
         var compression: Double = 0
         var rebound: Double = 0
         while clickIndex >= 0 {
             let age = seconds - sortedClicks[clickIndex].time
-            if age > min(0.42, settings.duration * 0.72) { break }
+            if age > pressDuration { break }
             // Independent continuous envelopes preserve feedback when a second
             // click starts before the first press has settled.
             let candidate = ClickAnimationMath.cursorPressScale(age: age, settings: settings)
@@ -1237,40 +1298,15 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
 
     private func cursorPosition(at seconds: Double) -> CursorSample? {
         guard let first = sortedCursorSamples.first else { return nil }
-        if seconds <= first.time { return first }
-        guard let last = sortedCursorSamples.last, seconds < last.time else { return sortedCursorSamples.last }
-
-        if project.settings.cursorAnimation == .smooth {
-            return TimelineMath.cursorPosition(at: seconds, samples: sortedCursorSamples)
+        if project.settings.cursorAnimation == .none {
+            // Raw samples, held until the next one: the pointer teleports as recorded.
+            if seconds <= first.time { return first }
+            let lowerIndex = insertionIndex(atOrBefore: seconds, times: cursorSampleTimes)
+            return lowerIndex >= 0 ? sortedCursorSamples[lowerIndex] : first
         }
-
-        let lowerIndex = insertionIndex(
-            atOrBefore: seconds,
-            times: cursorSampleTimes
-        )
-        guard lowerIndex >= 0 else { return first }
-        let lhs = sortedCursorSamples[lowerIndex]
-        guard project.settings.cursorAnimation != .none,
-              lowerIndex + 1 < sortedCursorSamples.count else { return lhs }
-        let rhs = sortedCursorSamples[lowerIndex + 1]
-        let rawProgress = ((seconds - lhs.time) / max(0.000_001, rhs.time - lhs.time)).clamped(to: 0...1)
-        let progress: Double
-        switch project.settings.cursorAnimation {
-        case .rapid:
-            progress = 1 - pow(1 - rawProgress, 3)
-        case .medium:
-            progress = rawProgress
-        case .smooth:
-            progress = TimelineMath.smoothStep(rawProgress)
-        case .none:
-            progress = 0
-        }
-        return CursorSample(
-            time: seconds,
-            x: lhs.x + (rhs.x - lhs.x) * progress,
-            y: lhs.y + (rhs.y - lhs.y) * progress,
-            cursorKind: lhs.cursorKind
-        )
+        // Monotone Hermite interpolation over the dense smoothed path keeps
+        // velocity continuous between the 120 Hz samples.
+        return TimelineMath.cursorPosition(at: seconds, samples: renderCursorSamples)
     }
 
     private func cursorOpacity(at seconds: Double) -> Double {
@@ -1310,11 +1346,18 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
             }
             index -= 1
         }
-        return TimelineMath.zoomState(
+        var zoom = TimelineMath.zoomState(
             at: seconds,
             segments: activeSegments,
             settings: timelineSettings
         )
+        guard !followOffsets.isEmpty, zoom.scale > 1 else { return zoom }
+        // Drift after the pointer, then re-clamp so the source edge stays hidden.
+        let offset = CursorFollow.offset(at: seconds, samples: followOffsets)
+        let halfVisible = 0.5 / zoom.scale
+        zoom.centerX = (zoom.centerX + offset.dx).clamped(to: halfVisible...(1 - halfVisible))
+        zoom.centerY = (zoom.centerY + offset.dy).clamped(to: halfVisible...(1 - halfVisible))
+        return zoom
     }
 
     private func insertionIndex(atOrBefore value: Double, times: [Double]) -> Int {
@@ -1334,135 +1377,34 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
 }
 
 private struct CursorGraphicSet: @unchecked Sendable {
-    let arrow: CursorGraphic
-    let iBeam: CursorGraphic
+    private let graphics: [CursorKind: CursorArtwork.Graphic]
+    private let fallback: CursorArtwork.Graphic
 
     @MainActor
-    init(appearance: CursorAppearance) {
-        switch appearance {
-        case .system:
-            arrow = CursorGraphic.systemOrFallback(
-                NSCursor.arrow,
-                fallback: CursorGraphic.highContrastArrow,
-                fallbackHotSpot: CGPoint(x: 3, y: 2)
-            )
-            iBeam = CursorGraphic.systemOrFallback(
-                NSCursor.iBeam,
-                fallback: CursorGraphic.highContrastIBeam,
-                fallbackHotSpot: CGPoint(x: 14, y: 20)
-            )
-        case .highContrast:
-            arrow = CursorGraphic(
-                image: CursorGraphic.highContrastArrow,
-                hotSpot: CGPoint(x: 3, y: 2)
-            )
-            iBeam = CursorGraphic(
-                image: CursorGraphic.highContrastIBeam,
-                hotSpot: CGPoint(x: 14, y: 20)
-            )
-        case .dot:
-            let dot = CursorGraphic(
-                image: CursorGraphic.dot,
-                hotSpot: CGPoint(x: 14, y: 14)
-            )
-            arrow = dot
-            iBeam = dot
-        }
+    init(appearance: CursorAppearance, tintHex: String) {
+        let tint = CursorGraphicSet.tintColor(tintHex)
+        graphics = CursorArtwork.set(for: appearance, tint: tint)
+        fallback = CursorArtwork.graphic(for: .arrow, appearance: appearance, tint: tint)
     }
 
-    func graphic(for kind: CursorKind) -> CursorGraphic {
-        switch kind {
-        case .arrow: return arrow
-        case .iBeam: return iBeam
-        }
+    private static func tintColor(_ hex: String) -> NSColor {
+        guard let color = CIColor(hex: hex) else { return CursorArtwork.accentFallback }
+        return NSColor(
+            srgbRed: color.red,
+            green: color.green,
+            blue: color.blue,
+            alpha: 1
+        )
+    }
+
+    func graphic(for kind: CursorKind) -> CursorArtwork.Graphic {
+        graphics[kind] ?? fallback
     }
 }
 
-private struct CursorGraphic: @unchecked Sendable {
-    let image: CGImage
-    let hotSpot: CGPoint
-
-    @MainActor
-    static func systemOrFallback(
-        _ cursor: NSCursor,
-        fallback: CGImage,
-        fallbackHotSpot: CGPoint
-    ) -> CursorGraphic {
-        let image = cursor.image
-        var proposedRect = CGRect(origin: .zero, size: image.size)
-        if let cgImage = image.cgImage(
-            forProposedRect: &proposedRect,
-            context: nil,
-            hints: nil
-        ) {
-            return CursorGraphic(image: cgImage, hotSpot: cursor.hotSpot)
-        }
-        return CursorGraphic(image: fallback, hotSpot: fallbackHotSpot)
-    }
-
-    static let highContrastArrow: CGImage = drawImage(size: CGSize(width: 32, height: 40)) { context in
-        context.setAllowsAntialiasing(true)
-        context.setShouldAntialias(true)
-        context.translateBy(x: 0, y: 40)
-        context.scaleBy(x: 1, y: -1)
-        context.move(to: CGPoint(x: 3, y: 2))
-        context.addLine(to: CGPoint(x: 4, y: 31))
-        context.addLine(to: CGPoint(x: 11, y: 24))
-        context.addLine(to: CGPoint(x: 17, y: 37))
-        context.addLine(to: CGPoint(x: 23, y: 34))
-        context.addLine(to: CGPoint(x: 17, y: 21))
-        context.addLine(to: CGPoint(x: 27, y: 20))
-        context.closePath()
-        context.setLineJoin(.round)
-        context.setLineWidth(4)
-        context.setStrokeColor(NSColor.white.cgColor)
-        context.strokePath()
-        context.move(to: CGPoint(x: 3, y: 2))
-        context.addLine(to: CGPoint(x: 4, y: 31))
-        context.addLine(to: CGPoint(x: 11, y: 24))
-        context.addLine(to: CGPoint(x: 17, y: 37))
-        context.addLine(to: CGPoint(x: 23, y: 34))
-        context.addLine(to: CGPoint(x: 17, y: 21))
-        context.addLine(to: CGPoint(x: 27, y: 20))
-        context.closePath()
-        context.setFillColor(NSColor.black.cgColor)
-        context.fillPath()
-    }
-
-    static let highContrastIBeam: CGImage = drawImage(size: CGSize(width: 28, height: 40)) { context in
-        context.setAllowsAntialiasing(true)
-        context.setShouldAntialias(true)
-        context.setLineCap(.round)
-        context.setLineJoin(.round)
-
-        func addIBeamPath() {
-            context.move(to: CGPoint(x: 14, y: 4))
-            context.addLine(to: CGPoint(x: 14, y: 36))
-            context.move(to: CGPoint(x: 7, y: 4))
-            context.addLine(to: CGPoint(x: 21, y: 4))
-            context.move(to: CGPoint(x: 7, y: 36))
-            context.addLine(to: CGPoint(x: 21, y: 36))
-        }
-
-        addIBeamPath()
-        context.setLineWidth(7)
-        context.setStrokeColor(NSColor.white.cgColor)
-        context.strokePath()
-        addIBeamPath()
-        context.setLineWidth(3)
-        context.setStrokeColor(NSColor.black.cgColor)
-        context.strokePath()
-    }
-
-    static let dot: CGImage = drawImage(size: CGSize(width: 28, height: 28)) { context in
-        context.setAllowsAntialiasing(true)
-        context.setShouldAntialias(true)
-        context.setFillColor(NSColor.white.cgColor)
-        context.fillEllipse(in: CGRect(x: 2, y: 2, width: 24, height: 24))
-        context.setFillColor(NSColor.black.cgColor)
-        context.fillEllipse(in: CGRect(x: 6, y: 6, width: 16, height: 16))
-    }
-
+/// The white bitmaps the click feedback is tinted from. Pointer artwork lives
+/// in ``CursorArtwork``.
+private enum ClickGraphic {
     static let clickRing: CGImage = drawImage(size: CGSize(width: 256, height: 256)) { context in
         context.setAllowsAntialiasing(true)
         context.setShouldAntialias(true)

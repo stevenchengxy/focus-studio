@@ -9,9 +9,9 @@ enum MainWindow {
 struct FocusStudioApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     // One model for the app's lifetime, shared with the AppDelegate so the
-    // library loads and AI tools are served even when no window is open.
+    // library loads and AI tools are served even when no window is open
+    // (AppServices also gives it the assistant's saved conversation).
     @StateObject private var model = AppServices.shared.model
-    private let services = AppServices.shared
 
     var body: some Scene {
         WindowGroup(id: MainWindow.id) {
@@ -40,15 +40,7 @@ struct FocusStudioApp: App {
 
         Settings {
             AppLocalizedView {
-                TabView {
-                    AIGatewaySettingsView(store: model.aiGateway)
-                        .tabItem { Label("AI models", systemImage: "sparkles") }
-                    CodexConnectionSettingsView(director: model.codexDirector, showsDoneButton: false)
-                        .tabItem { Label("Codex", systemImage: "terminal") }
-                    AutomationSettingsView(access: services.accessStore, connector: services.connector, server: services.controlServer)
-                        .tabItem { Label("AI tools", systemImage: "point.3.connected.trianglepath.dotted") }
-                }
-                .preferredColorScheme(.dark)
+                StudioSettingsView(model: model)
             }
         }
     }
@@ -56,6 +48,7 @@ struct FocusStudioApp: App {
 
 struct StudioRootView: View {
     @EnvironmentObject private var model: StudioModel
+    @ObservedObject private var installation = AppInstallationCoordinator.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openWindow) private var openWindow
@@ -72,13 +65,13 @@ struct StudioRootView: View {
                     LibraryView()
                 case .director:
                     CodexDirectorView(
+                        session: model.assistantSession,
                         director: model.codexDirector,
+                        modelLabel: model.assistantModelLabel,
                         onClose: { model.closeDirector() },
-                        onCreatePlan: { prompt in
-                            Task { await model.createCodexPlan(from: prompt) }
-                        },
-                        onRunPlan: { plan in
-                            model.startCodexPlan(plan)
+                        openSettings: {
+                            AppSettingsNavigation.shared.selection = .aiModels
+                            openSettings()
                         }
                     )
                 case .recorder:
@@ -101,6 +94,7 @@ struct StudioRootView: View {
             }
             .id(model.destination)
             .transition(StudioMotion.page(reduceMotion: reduceMotion))
+            .disabled(installation.isWorking)
 
             if model.isBusy {
                 Color.black.opacity(0.32).ignoresSafeArea()
@@ -125,8 +119,17 @@ struct StudioRootView: View {
                 .allowsHitTesting(false)
                 .padding(.top, 72)
         }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if model.destination == .library || model.destination == .director {
+                InstallationNoticeView(isBusy: model.isInstallationBusy, isBusyNow: { model.isInstallationBusy })
+            }
+        }
         .animation(reduceMotion ? nil : StudioMotion.pageAnimation, value: model.destination)
         .animation(StudioMotion.fade, value: model.isBusy)
+        // The recording control bar follows the model, not this window
+        // (RecordingControlPanelCoordinator.follow, from AppServices), and so
+        // does a capture failure (StudioModel.handleCaptureStateChange): both
+        // work while no main window is open.
         .foregroundStyle(StudioTheme.text)
         .background(HostingWindowReader { MainWindowPresenter.shared.register($0) })
         .onAppear {
@@ -153,4 +156,5 @@ struct StudioRootView: View {
             Text(model.errorMessage)
         }
     }
+
 }

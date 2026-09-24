@@ -7,8 +7,13 @@ import ScreenCaptureKit
 private var failures: [String] = []
 failures.append(contentsOf: typingActivityCaptureFailures())
 failures.append(contentsOf: zoomMotionFailures())
+failures.append(contentsOf: cursorMotionFailures())
+failures.append(contentsOf: zoomBoundaryFailures())
+failures.append(contentsOf: cursorStyleFailures())
 failures.append(contentsOf: chapterFailures())
 failures.append(contentsOf: MainActor.assumeIsolated { accessibilityActivityTraceFailures() })
+failures.append(contentsOf: recordingPauseClockFailures())
+failures.append(contentsOf: MainActor.assumeIsolated { recordingPauseInteractionFailures() })
 
 private func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
     if !condition() {

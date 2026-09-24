@@ -12,6 +12,7 @@ struct EditorTimelineView: View {
 
     private let labelWidth = 76.0
     private let rowHeight = 31.0
+    @FocusState private var isTimelineFocused: Bool
 
     var body: some View {
         GeometryReader { proxy in
@@ -27,7 +28,19 @@ struct EditorTimelineView: View {
                 )
                 Divider().overlay(StudioTheme.line)
 
-                timelineRow(label: "Zoom", icon: "plus.magnifyingglass") {
+                timelineRow(label: "Zoom", icon: "plus.magnifyingglass", accessory: {
+                    Button {
+                        insertZoom(at: currentTime, duration: duration)
+                    } label: {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(StudioTheme.purple)
+                    .help("Add zoom at playhead")
+                    .accessibilityLabel("Add zoom at playhead")
+                    .accessibilityIdentifier("timeline.addZoom")
+                }) {
                     ZStack(alignment: .leading) {
                         RoundedRectangle(cornerRadius: 5, style: .continuous)
                             .fill(Color.white.opacity(0.025))
@@ -37,6 +50,13 @@ struct EditorTimelineView: View {
                                     addZoom(at: value.location.x, timelineWidth: timelineWidth, duration: duration)
                                 }
                             )
+                            .contextMenu {
+                                Button("Add zoom at playhead") { insertZoom(at: currentTime, duration: duration) }
+                                if selectedZoomID != nil {
+                                    Button("Duplicate zoom") { duplicateSelectedZoom(duration: duration) }
+                                    Button("Remove zoom", role: .destructive) { removeSelectedZoom() }
+                                }
+                            }
 
                         ForEach($project.zoomSegments) { $segment in
                             ZoomBlockView(
@@ -167,6 +187,14 @@ struct EditorTimelineView: View {
         .frame(height: 194)
         .padding(.vertical, 8)
         .background(StudioTheme.panel)
+        .focusable()
+        .focused($isTimelineFocused)
+        .focusEffectDisabled()
+        .onDeleteCommand { removeSelectedZoom() }
+        .onChange(of: selectedZoomID) { _, id in
+            // A freshly selected block should answer the Delete key right away.
+            if id != nil { isTimelineFocused = true }
+        }
     }
 
     /// Nil and empty chapter lists are equivalent; the lane edits a plain array.
@@ -199,7 +227,35 @@ struct EditorTimelineView: View {
 
     private func addZoom(at x: CGFloat, timelineWidth: Double, duration: Double) {
         guard duration > 0, timelineWidth > 0 else { return }
-        let time = (Double(x) / timelineWidth * duration).clamped(to: 0...duration)
+        insertZoom(at: (Double(x) / timelineWidth * duration).clamped(to: 0...duration), duration: duration)
+    }
+
+    private func removeSelectedZoom() {
+        guard let id = selectedZoomID else { return }
+        project.zoomSegments.removeAll { $0.id == id }
+        selectedZoomID = nil
+    }
+
+    /// Copies the selected block right after itself, keeping its look and timing.
+    private func duplicateSelectedZoom(duration: Double) {
+        guard let source = project.zoomSegments.first(where: { $0.id == selectedZoomID }) else { return }
+        var copy = source
+        copy.id = UUID()
+        copy.kind = .manual
+        copy.automaticSource = nil
+        let length = source.end - source.start
+        let start = min(source.end, max(0, duration - length))
+        copy.start = start
+        copy.end = min(duration, start + length)
+        guard copy.end > copy.start else { return }
+        project.zoomSegments.append(copy)
+        selectedZoomID = copy.id
+        selectedTool = .zoom
+    }
+
+    private func insertZoom(at time: Double, duration: Double) {
+        guard duration > 0 else { return }
+        let time = time.clamped(to: 0...duration)
         let length = min(duration, 1.25)
         let start = (time - 0.1).clamped(to: 0...max(0, duration - length))
         let segment = ZoomSegment(
@@ -221,10 +277,22 @@ struct EditorTimelineView: View {
         icon: String,
         @ViewBuilder content: () -> Content
     ) -> some View {
+        timelineRow(label: label, icon: icon, accessory: { EmptyView() }, content: content)
+    }
+
+    @ViewBuilder
+    private func timelineRow<Accessory: View, Content: View>(
+        label: String,
+        icon: String,
+        @ViewBuilder accessory: () -> Accessory,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
         HStack(spacing: 7) {
             HStack(spacing: 5) {
                 Image(systemName: icon).frame(width: 13)
                 Text(LocalizedStringKey(label))
+                Spacer(minLength: 0)
+                accessory()
             }
             .font(.system(size: 9, weight: .medium))
             .foregroundStyle(StudioTheme.secondaryText)
@@ -337,18 +405,38 @@ private struct ZoomBlockView: View {
     @State private var moveOrigin: ZoomSegment?
     @State private var leadingOrigin: ZoomSegment?
     @State private var trailingOrigin: ZoomSegment?
+    @State private var fullZoomOrigin: ZoomSegment?
+    @State private var zoomOutOrigin: ZoomSegment?
 
     private let handleWidth = 14.0
+    private let innerHandleWidth = 10.0
 
     var body: some View {
         let startX = segment.start / duration * timelineWidth
         let width = min(timelineWidth, max(40, (segment.end - segment.start) / duration * timelineWidth))
         let displayedStart = startX.clamped(to: 0...max(0, timelineWidth - width))
+        let timing = ZoomTiming.resolve(segment, settings: settings)
+        let pixelsPerSecond = width / max(0.001, segment.end - segment.start)
+        let easeInWidth = min(width, timing.easeIn * pixelsPerSecond)
+        let easeOutWidth = min(width, timing.easeOut * pixelsPerSecond)
+        let showsInnerHandles = isSelected && !segment.isInstant && width >= 96
 
         ZStack {
             RoundedRectangle(cornerRadius: 5, style: .continuous)
                 .fill(segment.isEnabled ? StudioTheme.purple : Color.gray.opacity(0.45))
                 .shadow(color: StudioTheme.purple.opacity(isSelected ? 0.55 : 0), radius: isSelected ? 6 : 0)
+            // The transitions are shaded so their length is visible at a glance.
+            if !segment.isInstant {
+                HStack(spacing: 0) {
+                    LinearGradient(colors: [Color.black.opacity(0.28), Color.clear], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: easeInWidth)
+                    Spacer(minLength: 0)
+                    LinearGradient(colors: [Color.clear, Color.black.opacity(0.28)], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: easeOutWidth)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .allowsHitTesting(false)
+            }
             RoundedRectangle(cornerRadius: 5, style: .continuous)
                 .stroke(Color.white.opacity(isSelected ? 0.9 : 0), lineWidth: 1.5)
             HStack(spacing: 0) {
@@ -356,6 +444,13 @@ private struct ZoomBlockView: View {
                 moveHandle(showDuration: width >= 84)
                     .frame(maxWidth: .infinity)
                 resizeHandle(isLeading: false)
+            }
+            if showsInnerHandles {
+                // Inner boundaries: when the zoom-in completes and the zoom-out begins.
+                innerHandle(isFullZoom: true)
+                    .offset(x: (easeInWidth - width / 2).clamped(to: (-width / 2 + handleWidth)...(width / 2 - handleWidth)))
+                innerHandle(isFullZoom: false)
+                    .offset(x: (width / 2 - easeOutWidth).clamped(to: (-width / 2 + handleWidth)...(width / 2 - handleWidth)))
             }
         }
         .frame(width: width, height: 24)
@@ -372,7 +467,7 @@ private struct ZoomBlockView: View {
                 onSelect()
                 segment.isEnabled.toggle()
             }
-            Button("Remove", role: .destructive, action: onDelete)
+            Button("Remove zoom", role: .destructive, action: onDelete)
         }
     }
 
@@ -415,6 +510,54 @@ private struct ZoomBlockView: View {
         .accessibilityAction { onSelect() }
         .accessibilityAdjustableAction { direction in
             adjust(direction) { .move(segment.start + $0) }
+        }
+    }
+
+    /// Drags the moment the zoom-in finishes (leading) or the zoom-out starts
+    /// (trailing) without moving the block's edges.
+    private func innerHandle(isFullZoom: Bool) -> some View {
+        ZStack {
+            Rectangle().fill(Color.white.opacity(0.001))
+            RoundedRectangle(cornerRadius: 1)
+                .fill(Color.white.opacity(0.85))
+                .frame(width: 2, height: 16)
+            Image(systemName: isFullZoom ? "arrowtriangle.right.fill" : "arrowtriangle.left.fill")
+                .font(.system(size: 6, weight: .bold))
+                .foregroundStyle(.white.opacity(0.95))
+                .offset(y: -9)
+        }
+        .frame(width: innerHandleWidth, height: 24)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 1, coordinateSpace: .named("zoom-timeline"))
+                .onChanged { value in
+                    onSelect()
+                    let origin = (isFullZoom ? fullZoomOrigin : zoomOutOrigin) ?? segment
+                    if isFullZoom { if fullZoomOrigin == nil { fullZoomOrigin = origin } }
+                    else if zoomOutOrigin == nil { zoomOutOrigin = origin }
+                    let originTiming = ZoomTiming.resolve(origin, settings: settings)
+                    let delta = timeDelta(value.translation.width)
+                    segment = ZoomTiming.applying(
+                        isFullZoom ? .fullZoomAt(originTiming.fullZoomStart + delta) : .zoomOutAt(originTiming.zoomOutStart + delta),
+                        to: origin,
+                        projectDuration: duration,
+                        settings: settings
+                    )
+                }
+                .onEnded { _ in
+                    if isFullZoom { fullZoomOrigin = nil } else { zoomOutOrigin = nil }
+                }
+        )
+        .help(LocalizedStringKey(isFullZoom ? "Drag to change when the zoom-in finishes" : "Drag to change when the zoom-out starts"))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(LocalizedStringKey(isFullZoom ? "Zoom in ends" : "Zoom out starts")))
+        .accessibilityValue("\(seconds(isFullZoom ? ZoomTiming.resolve(segment, settings: settings).fullZoomStart : ZoomTiming.resolve(segment, settings: settings).zoomOutStart)) seconds")
+        .accessibilityIdentifier("zoom.\(segment.id.uuidString).\(isFullZoom ? "fullZoom" : "zoomOut")")
+        .accessibilityAdjustableAction { direction in
+            adjust(direction) { delta in
+                let timing = ZoomTiming.resolve(segment, settings: settings)
+                return isFullZoom ? .fullZoomAt(timing.fullZoomStart + delta) : .zoomOutAt(timing.zoomOutStart + delta)
+            }
         }
     }
 

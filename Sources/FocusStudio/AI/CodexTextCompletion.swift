@@ -1,3 +1,4 @@
+import FocusStudioAutomation
 import FocusStudioCore
 import Foundation
 
@@ -6,8 +7,12 @@ import Foundation
 /// instructions and the user content is one turn. The dedicated
 /// `CodexDirectorService` connects on demand with the Settings › Codex
 /// executable and account, so no extra sign-in is needed.
-struct CodexTextCompletion: TextCompletionProviding {
+struct CodexTextCompletion: AssistantConversationResetting {
     let service: CodexDirectorService
+
+    func resetConversation() async {
+        await service.resetAssistantConversation()
+    }
 
     func complete(system: String, user: String, json: Bool) async throws -> String {
         try await service.completeText(developerInstructions: system, prompt: user, json: json)

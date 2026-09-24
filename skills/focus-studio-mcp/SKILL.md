@@ -126,11 +126,15 @@ Not available over MCP: `generate_image`, `generate_video` (paid), clicks, key p
 ## Etiquette
 
 * The person is watching and in control. Say what you will record, and whether with sound, before
-  `start_recording`; they see a countdown and a control bar and may cancel at any time. If they cancel, or
-  decline sound, ask before recording again.
-* The control bar floats at the top centre of each display (about 590 x 72 points) and is not in the video.
-  When you operate the recorded app yourself, keep its controls out of that area and stop with
-  `stop_recording`, never by clicking the bar (its x deletes the recording).
+  `start_recording`; they see a countdown (naming you) and a control bar and may pause, resume or cancel at
+  any time. If they cancel, or decline sound, ask before recording again.
+* A paused recording records nothing, and paused time does not count toward `duration`: the automatic stop
+  comes later by the time paused. `get_status` and `wait_for_recording` report `paused`; `stop_recording`
+  still saves a paused recording.
+* The control bar floats at the bottom centre of each display, just above the Dock (about 324 to 392 x 46
+  points while recording; the person can expand it), and is not in the video. When you operate the recorded app
+  yourself, keep its controls out of that area and stop with `stop_recording`, never by clicking the bar
+  (its x discards the recording to the Trash).
 * Clicks and typing sent over a browser's DevTools protocol (Playwright, Claude in Chrome) are not real input
   events and make no automatic zooms. Note when you acted and add zooms afterwards with `add_zoom`.
 * Never read-modify-write `project.json` or anything under `~/Library/Application Support/FocusStudio`;

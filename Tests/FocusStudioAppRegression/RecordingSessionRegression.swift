@@ -25,11 +25,25 @@ import UniformTypeIdentifiers
 /// - discarding an attempt (a cancelled start_recording) ends its countdown,
 ///   its capture start or the live recording, stops the capture and keeps
 ///   nothing;
-/// - the floating countdown opens while another app is active or as soon as
-///   the person switches to one, names the AI tool, and closes when the
-///   countdown ends however it ends;
+/// - the person's Pause: paused time is neither recorded nor counted toward a
+///   duration (the automatic stop waits for the resume, then stops once the
+///   rest is recorded), get_status and wait_for_recording report it (also
+///   while the capture is still flushing the pause), and stop_recording,
+///   Finish and Cancel work while paused;
+/// - the countdown names the AI tool whose call started it (the control
+///   bar shows it on every display), and the bar belongs on the recorder,
+///   the countdown and the recording, never on the other pages or while an
+///   area is drawn; only the countdown and the recording stay on screen
+///   when the app is hidden (⌘H);
 /// - calls during a countdown or a recording never bring the main window
 ///   over the recorded app;
+/// - a saved stop asked for inside Focus Studio (Finish, the in-app
+///   assistant's stop_recording, the duration of a recording it started)
+///   brings the editor forward; an external AI tool's stop, or the duration
+///   of a recording one started, never activates the app;
+/// - while the person draws a recording area, start_recording and calls
+///   that change what the window shows are refused, and nothing about the
+///   recorder's source changes;
 /// - a Codex Director plan saving its capture is stopping, not idle;
 /// - start_recording from an AI tool (through the bridge, with a scripted
 ///   sound prompt) records sound the recorder leaves off only as the person
@@ -53,12 +67,17 @@ enum RecordingSessionRegression {
         try await optionsForThisRecordingOnly()
         try await browserContentOnlyForThisRecording()
         try await discardEndsTheAttempt()
-        try await floatingCountdownFollowsTheCountdown()
+        try await pausedTimeIsNotRecorded()
+        try await pauseReadsPausedAtOnce()
+        try await stopOrCancelWhilePaused()
+        try await countdownNamesTheAITool()
         try await windowStaysBehindTheRecording()
+        try await stopsAskedInAppShowTheEditor()
+        try await drawingAnAreaRefusesAutomation()
         try codexPlanSaveIsStopping()
         try await soundConsent()
         try await soundPromptWithinTheCallsTime()
-        print("RecordingSessionRegression: PASS (countdown and automatic stop on a manual clock, the duration measured from the first frame, Finish/Cancel cancel the automatic stop and Cancel stops the capture, the automatic stop joined by stop_recording and wait_for_recording with one project, get_status and the call queue free while wait_for_recording waits and no job for it, a late wait_for_recording shortened to its maximum from the call's arrival, Cancel ignored and starts refused while saving, per-recording options (browser_content_only's crop, audio shown) with the recorder's choices unchanged, discarding a countdown, a capture start or a live recording, the floating countdown's lifecycle, no main window over a recording, a Codex plan's save is stopping, the sound prompt before the countdown for sound the recorder leaves off (60 s by default as the catalog says, naming the client and the program that started it; allow, record without sound with no sound at all even when the recorder records some, cancel, no answer closes it, turned off meanwhile, a recorder sound turned off while it is up stays off, cancelled call, heartbeats above the approval's and the turn's; none for no sound, the recorder's own sound or the in-app assistant; the recorder's choices unchanged; its wait detaching as a job from the call's arrival))")
+        print("RecordingSessionRegression: PASS (countdown and automatic stop on a manual clock, the duration measured from the first frame, Finish/Cancel cancel the automatic stop and Cancel stops the capture, the automatic stop joined by stop_recording and wait_for_recording with one project, get_status and the call queue free while wait_for_recording waits and no job for it, a late wait_for_recording shortened to its maximum from the call's arrival, Cancel ignored and starts refused while saving, per-recording options (browser_content_only's crop, audio shown) with the recorder's choices unchanged, discarding a countdown, a capture start or a live recording (moved to the Trash like Cancel), pause and resume (paused time left out of the duration, elapsed and remaining; reported by get_status and wait_for_recording, also while the pause flushes; stop and cancel while paused), the countdown naming the AI tool and the control bar's pages (only the countdown and the recording stay when the app is hidden), no main window over a recording, the editor brought forward after a stop asked for in the app (Finish, the in-app assistant, its recording's duration, a Finish joining an external stop) but never after an external AI tool's stop or its recording's duration, automation refused while an area is drawn with the recorder's source unchanged, a Codex plan's save is stopping, the sound prompt before the countdown for sound the recorder leaves off (60 s by default as the catalog says, naming the client and the program that started it; allow, record without sound with no sound at all even when the recorder records some, cancel, no answer closes it, turned off meanwhile, a recorder sound turned off while it is up stays off, cancelled call, heartbeats above the approval's and the turn's; none for no sound, the recorder's own sound or the in-app assistant; the recorder's choices unchanged; its wait detaching as a job from the call's arrival))")
     }
 
     // MARK: - Duration
@@ -331,75 +350,175 @@ enum RecordingSessionRegression {
         try expect(model.recordingSession?.outcome == .finished(projectID: model.projects[0].id) && model.destination == .editor, "Discarding an ended attempt changes nothing")
     }
 
-    // MARK: - Floating countdown
+    // MARK: - Pause
 
-    /// The floating countdown opens while another app is active, or when the
-    /// person switches to one during the countdown, names the AI tool that
-    /// asked, and closes when the countdown ends: cancelled, discarded,
-    /// failed or started. Nothing opens without an application.
-    private static func floatingCountdownFollowsTheCountdown() async throws {
+    /// A 5-second recording paused after 2 s: nothing counts while paused
+    /// (the automatic stop no longer waits, elapsed and remaining hold
+    /// still), get_status and wait_for_recording say so, and after the
+    /// resume's first frame it stops once 3 more seconds are recorded.
+    private static func pausedTimeIsNotRecorded() async throws {
         let fixture = try await SessionFixture()
         defer { fixture.cleanup() }
-        let (model, capture) = (fixture.model, fixture.capture)
-        let probe = PanelProbe()
-        let notifications = NotificationCenter()
-        let panels = RecordingCountdownPanelCoordinator(appIsActive: { probe.active }, notifications: notifications) { _, requester in
-            probe.open += 2
-            probe.requesters.append(requester)
-            return [{ probe.open -= 1 }, { probe.open -= 1 }]
-        }
-        panels.automationRequester = { "Claude Code" }
-        model.countdownPanels = panels
-
-        // Focus Studio in front: its window shows the countdown, until the
-        // person switches to another app during it.
-        _ = try model.startRecording(target: fixture.target, options: AIRecordingOptions())
-        try expect(probe.open == 0 && !panels.isShowing, "No floating countdown while Focus Studio is active")
-        notifications.post(name: NSApplication.didResignActiveNotification, object: nil)
-        try await waitUntil("Switching away did not show the floating countdown") { probe.open == 2 }
-        try expect(panels.isShowing && probe.requesters == ["Claude Code"], "The countdown floats on every display and names the AI tool: \(probe.requesters)")
-        model.cancelRecordingCountdown()
-        try expect(probe.open == 0 && !panels.isShowing, "Cancel closes the floating countdown")
-        notifications.post(name: NSApplication.didResignActiveNotification, object: nil)
-        notifications.post(name: NSApplication.didHideNotification, object: nil)
+        let (model, clock, capture) = (fixture.model, fixture.clock, fixture.capture)
+        let bridge = AutomationBridge(model: model)
+        await model.toggleRecordingPause()
+        try expect(capture.pauses == 0 && !model.isRecordingPaused, "Nothing to pause before a recording")
+        _ = try model.startRecording(target: fixture.target, options: AIRecordingOptions(duration: 5))
+        try await fixture.runCountdown()
+        try await waitUntil("The recording did not start") { model.recordingPhase == .recording && clock.sleeperCount == 1 }
+        clock.advance(by: 2)
         try await settle()
-        try expect(probe.open == 0, "Nothing opens once the countdown is over")
 
-        // Hiding Focus Studio during the countdown shows it too.
-        let hidden = try model.startRecording(target: fixture.target, options: AIRecordingOptions())
-        notifications.post(name: NSApplication.didHideNotification, object: nil)
-        try await waitUntil("Hiding Focus Studio did not show the floating countdown") { probe.open == 2 }
-        await model.discardRecording(id: hidden)
-        try expect(probe.open == 0, "A discarded countdown closes it")
+        await model.toggleRecordingPause()
+        try expect(capture.pauses == 1 && model.isRecordingPaused && model.recordingPhase == .recording, "Pause keeps the recording live and paused")
+        try await waitUntil("The automatic stop still waits while paused") { clock.sleeperCount == 0 && !model.hasPendingAutomaticStop }
+        clock.advance(by: 30)
+        try await settle()
+        try expect(capture.finishes == 0 && model.recordingElapsed == 2 && model.recordingRemaining == 3,
+                   "Paused time counts toward nothing: \(String(describing: model.recordingElapsed)) recorded, \(String(describing: model.recordingRemaining)) left")
+        let session = model.recordingSession
+        try expect(session?.isPaused == true && session?.autoStopAt == nil && session?.pausedDuration == 30, "The session is paused with no stop time yet: \(String(describing: session))")
+        let status = try await fixture.succeed(bridge, "get_status", [:])
+        try expect(status.structuredContent?["recording"]?["state"] == "recording" && status.structuredContent?["recording"]?["paused"] == true
+                   && status.structuredContent?["recording"]?["elapsed"] == 2 && status.structuredContent?["recording"]?["remaining"] == 3 && status.text.contains("paused"),
+                   "get_status reports the pause: \(status.json)")
+        let waited = try await fixture.succeed(bridge, "wait_for_recording", ["timeout_seconds": 0])
+        try expect(waited.structuredContent?["state"] == "recording" && waited.structuredContent?["paused"] == true && waited.structuredContent?["remaining"] == 3
+                   && waited.structuredContent?["auto_stop_at"] == nil && waited.text.contains("paused"),
+                   "wait_for_recording reports the pause: \(waited.json)")
 
-        // Another app in front from the start.
-        probe.active = false
-        _ = try model.startRecording(target: fixture.target, options: AIRecordingOptions())
-        try expect(probe.open == 2, "The countdown floats at once while another app is active")
-        model.cancelRecordingCountdown()
-        try expect(probe.open == 0, "Cancel closes it")
+        await model.toggleRecordingPause()
+        try expect(capture.resumes == 1 && !model.isRecordingPaused && model.recordingRemaining == 3, "Resume records again from its first frame, 3 s left")
+        try await waitUntil("The automatic stop did not wait again") { clock.sleeperCount == 1 && model.hasPendingAutomaticStop }
+        let resumed = model.recordingSession
+        let pausedFor = 30 + capture.resumeDelay
+        try expect(resumed?.isPaused == false && resumed?.pausedDuration == pausedFor
+                   && resumed?.autoStopAt.map { abs($0.timeIntervalSince(resumed!.startedAt!) - (5 + pausedFor)) < 0.001 } == true,
+                   "auto_stop_at moves later by the time paused: \(String(describing: resumed))")
+        clock.advance(by: 2.75)
+        try await settle()
+        try expect(capture.finishes == 0 && model.recordingPhase == .recording, "Still recording after 4.75 s of recording")
+        clock.advance(by: 0.25)
+        try await waitUntil("The rest of the duration did not stop the recording") { model.destination == .editor }
+        try expect(capture.finishes == 1 && model.projects.count == 1 && model.recordingSession?.outcome == .finished(projectID: model.projects[0].id),
+                   "One stop and one project after 5 s of recording")
+    }
 
-        capture.startError = SessionFailure("The stream could not start")
-        _ = try model.startRecording(target: fixture.target, options: AIRecordingOptions())
-        try expect(probe.open == 2, "The countdown floats for a start that will fail")
+    /// The engine stops counting the moment Pause is clicked and writes what
+    /// it recorded afterwards (up to seconds). Meanwhile the recording reads
+    /// as paused everywhere: nothing counts, no automatic stop is due, and
+    /// get_status and wait_for_recording say paused, with no auto_stop_at.
+    /// Once the flush ends the capture's own intervals say the same.
+    private static func pauseReadsPausedAtOnce() async throws {
+        let fixture = try await SessionFixture()
+        defer { fixture.cleanup() }
+        let (model, clock, capture) = (fixture.model, fixture.clock, fixture.capture)
+        let bridge = AutomationBridge(model: model)
+        _ = try model.startRecording(target: fixture.target, options: AIRecordingOptions(duration: 5))
         try await fixture.runCountdown()
-        try await waitUntil("A failed start left the floating countdown") { probe.open == 0 && model.destination == .recorder && model.recordingSession?.outcome != nil }
-        capture.startError = nil
+        try await waitUntil("The recording did not start") { model.recordingPhase == .recording && clock.sleeperCount == 1 }
+        clock.advance(by: 4.5)
+        try await settle()
+
+        capture.holdPause = true
+        let pausing = Task { @MainActor in await model.toggleRecordingPause() }
+        try await waitUntil("The pause did not reach the capture") { capture.pauses == 1 }
+        try expect(model.isChangingRecordingPause && model.isRecordingPaused && !model.hasPendingAutomaticStop
+                   && model.recordingElapsed == 4.5 && model.recordingRemaining == 0.5,
+                   "Paused from the click on: \(String(describing: model.recordingElapsed)) recorded, \(String(describing: model.recordingRemaining)) left")
+        try await waitUntil("The automatic stop still waits while the pause flushes") { clock.sleeperCount == 0 }
+        clock.advance(by: 1)
+        try await settle()
+        let session = model.recordingSession
+        try expect(capture.finishes == 0 && model.recordingElapsed == 4.5 && model.recordingRemaining == 0.5 && session?.isPaused == true && session?.autoStopAt == nil,
+                   "Nothing counts or stops while the pause flushes: \(String(describing: session))")
+        let status = try await fixture.succeed(bridge, "get_status", [:])
+        let recording = status.structuredContent?["recording"]
+        try expect(recording?["state"] == "recording" && recording?["paused"] == true && recording?["elapsed"]?.doubleValue == 4.5 && recording?["remaining"]?.doubleValue == 0.5,
+                   "get_status reports the pause while it flushes: \(status.json)")
+        let waited = try await fixture.succeed(bridge, "wait_for_recording", ["timeout_seconds": 0])
+        try expect(waited.structuredContent?["paused"] == true && waited.structuredContent?["remaining"]?.doubleValue == 0.5
+                   && waited.structuredContent?["auto_stop_at"] == nil && waited.text.contains("paused") && !waited.text.contains("stops by itself"),
+                   "wait_for_recording reports the pause while it flushes: \(waited.json)")
+
+        capture.holdPause = false
+        await pausing.value
+        try expect(!model.isChangingRecordingPause && model.isRecordingPaused && model.recordingElapsed == 4.5 && model.recordingRemaining == 0.5,
+                   "The capture's own intervals agree once the flush ends")
+        await model.toggleRecordingPause()
+        try await waitUntil("The automatic stop did not wait again") { clock.sleeperCount == 1 && model.hasPendingAutomaticStop }
+        clock.advance(by: 0.5)
+        try await waitUntil("The rest of the duration did not stop the recording") { model.destination == .editor }
+        try expect(capture.finishes == 1 && model.projects.count == 1, "One stop once 5 s are recorded")
+    }
+
+    /// stop_recording and Finish save a paused recording, and Cancel
+    /// discards one; a pause while the recording is being saved does nothing.
+    private static func stopOrCancelWhilePaused() async throws {
+        let fixture = try await SessionFixture()
+        defer { fixture.cleanup() }
+        let (model, clock, capture) = (fixture.model, fixture.clock, fixture.capture)
+        let bridge = AutomationBridge(model: model)
+        _ = try model.startRecording(target: fixture.target, options: AIRecordingOptions(duration: 5))
+        try await fixture.runCountdown()
+        try await waitUntil("The recording did not start") { model.recordingPhase == .recording && clock.sleeperCount == 1 }
+        await model.toggleRecordingPause()
+        let stopped = try await fixture.succeed(bridge, "stop_recording", [:])
+        try expect(stopped.structuredContent?["state"] == "finished" && capture.finishes == 1 && model.destination == .editor && !model.isRecordingPaused,
+                   "stop_recording saves a paused recording: \(stopped.json)")
 
         _ = try model.startRecording(target: fixture.target, options: AIRecordingOptions())
         try await fixture.runCountdown()
-        try await waitUntil("The capture did not start") { model.recordingPhase == .recording }
-        try expect(probe.open == 0, "The control bar takes the floating countdown's place")
+        try await waitUntil("The second recording did not start") { model.recordingPhase == .recording }
+        await model.toggleRecordingPause()
         await model.cancelRecording()
+        try expect(capture.cancels == 1 && model.recordingSession?.outcome == .cancelled && model.destination == .library && model.projects.count == 1,
+                   "Cancel discards a paused recording")
 
-        // No application (a command-line run): never a panel.
-        probe.active = nil
         _ = try model.startRecording(target: fixture.target, options: AIRecordingOptions())
-        notifications.post(name: NSApplication.didResignActiveNotification, object: nil)
-        try await settle()
-        try expect(probe.open == 0 && !panels.isShowing, "Nothing opens without an application")
+        try await fixture.runCountdown()
+        try await waitUntil("The third recording did not start") { model.recordingPhase == .recording }
+        capture.holdFinish = true
+        let finishing = Task { @MainActor in await model.stopRecording() }
+        try await waitUntil("The stop did not begin") { model.isFinishingRecording }
+        await model.toggleRecordingPause()
+        try expect(capture.pauses == 2 && !model.isRecordingPaused, "No pause while the recording is being saved")
+        capture.holdFinish = false
+        await finishing.value
+        try expect(model.projects.count == 2 && model.destination == .editor, "The save completes")
+    }
+
+    // MARK: - Countdown in the control bar
+
+    /// The countdown of a recording an AI tool starts names that tool (the
+    /// control bar shows it on every display, window or not); the person's
+    /// own countdown names none. The bar is on screen for the recorder, the
+    /// countdown and the recording only, and never while an area is drawn.
+    private static func countdownNamesTheAITool() async throws {
+        let fixture = try await SessionFixture()
+        defer { fixture.cleanup() }
+        let model = fixture.model
+        model.automationRequester = { "Claude Code" }
+        let asked = try model.startRecording(target: fixture.target, options: AIRecordingOptions())
+        try expect(model.currentRecording?.id == asked && model.currentRecording?.requester == "Claude Code", "The countdown names the AI tool that asked")
         model.cancelRecordingCountdown()
-        try expect(probe.requesters.count == 5, "One set of panels per countdown that needed one: \(probe.requesters.count)")
+        model.automationRequester = { nil }
+        try expect(model.beginRecordingCountdown(target: fixture.target, settings: model.recorderSettings, duration: nil) != nil
+                   && model.currentRecording?.requester == nil, "The person's own countdown names no AI tool")
+        model.cancelRecordingCountdown()
+
+        typealias Bar = RecordingControlPanelCoordinator
+        for destination in [StudioModel.Destination.recorder, .countdown, .recording] {
+            try expect(Bar.showsControls(destination: destination, isSelectingArea: false), "The bar shows on \(destination)")
+            try expect(!Bar.showsControls(destination: destination, isSelectingArea: true), "The bar hides while an area is drawn on \(destination)")
+        }
+        for destination in [StudioModel.Destination.library, .director, .editor] {
+            try expect(!Bar.showsControls(destination: destination, isSelectingArea: false), "No bar on \(destination)")
+        }
+        // ⌘H hides the recorder's ready console with the app, as upstream's
+        // did; a countdown or a recording stays so the person can cancel it.
+        try expect(!Bar.staysWhenAppHidden(.recorder) && Bar.staysWhenAppHidden(.countdown) && Bar.staysWhenAppHidden(.recording),
+                   "Only the countdown and the recording stay on screen when the app is hidden")
     }
 
     // MARK: - Main window
@@ -435,6 +554,134 @@ enum RecordingSessionRegression {
         try expect(windowRequests == 1, "An editing call afterwards shows the main window: \(windowRequests)")
     }
 
+    // MARK: - Bringing the app forward
+
+    /// A saved stop asked for inside Focus Studio shows the editor in front,
+    /// as upstream's stop always did: the person's Finish, the in-app
+    /// assistant's stop_recording (which the person confirmed), and the
+    /// duration of a recording the in-app assistant started. An external AI
+    /// tool's stop_recording, and the duration of a recording one started,
+    /// leave the app where it is (the person may be typing elsewhere). A
+    /// Finish that joins an external stop in flight still brings it forward.
+    private static func stopsAskedInAppShowTheEditor() async throws {
+        let fixture = try await SessionFixture()
+        defer { fixture.cleanup() }
+        let (model, clock, capture) = (fixture.model, fixture.clock, fixture.capture)
+        let activations = TestBox(0)
+        model.activateAfterStop = { activations.value += 1 }
+        let bridge = AutomationBridge(model: model)
+        func recordOnce(duration: TimeInterval? = nil) async throws {
+            _ = try model.startRecording(target: fixture.target, options: AIRecordingOptions(duration: duration))
+            try await fixture.runCountdown()
+            try await waitUntil("The recording did not start") { model.recordingPhase == .recording && (duration == nil || clock.sleeperCount == 1) }
+        }
+
+        try await recordOnce()
+        let external = try await fixture.succeed(bridge, "stop_recording", [:])
+        try await settle()
+        try expect(external.structuredContent?["state"] == "finished" && model.destination == .editor && activations.value == 0,
+                   "An external AI tool's stop leaves the app where it is: \(activations.value) activations")
+
+        try await recordOnce()
+        let inAppStop = try unwrap(AIAssistantToolCatalog.standard.first { $0.name == "stop_recording" }, "The in-app assistant has stop_recording")
+        let inApp = model.assistantSession.context
+        try expect(!inApp.isExternal, "The in-app assistant's context is not external")
+        let stopped = try await inAppStop.run(arguments: [:], context: inApp, progress: { _ in })
+        try await waitUntil("The in-app assistant's stop did not bring the editor forward") { activations.value == 1 }
+        try expect(stopped.data?["state"] == "finished" && model.destination == .editor && model.projects.count == 2, "The in-app assistant's stop saved its project")
+
+        try await recordOnce()
+        await model.stopRecording()
+        try expect(activations.value == 2 && model.destination == .editor && model.projects.count == 3, "The person's Finish brings the editor forward")
+
+        try await recordOnce(duration: 2)
+        try expect(model.currentRecording?.requester == nil, "The in-app assistant's recording names no AI tool")
+        clock.advance(by: 2)
+        try await waitUntil("The duration did not stop the in-app recording") { model.destination == .editor && !model.isFinishingRecording }
+        try await waitUntil("The in-app recording's duration did not bring the editor forward") { activations.value == 3 }
+
+        model.automationRequester = { "Claude Code" }
+        try await recordOnce(duration: 2)
+        model.automationRequester = nil
+        try expect(model.currentRecording?.requester == "Claude Code", "The external recording names its AI tool")
+        clock.advance(by: 2)
+        try await waitUntil("The duration did not stop the external recording") { model.destination == .editor && !model.isFinishingRecording }
+        try await settle()
+        try expect(activations.value == 3 && capture.finishes == 5 && model.projects.count == 5, "An external recording's duration leaves the app where it is: \(activations.value)")
+
+        try await recordOnce()
+        capture.holdFinish = true
+        let externalStop = Task { @MainActor in
+            await bridge.call(toolName: "stop_recording", arguments: [:], workingDirectory: nil, clientName: "test", progress: nil)
+        }
+        try await waitUntil("The external stop did not begin") { model.isFinishingRecording }
+        let finish = Task { @MainActor in await model.stopRecording() }
+        try await settle()
+        capture.holdFinish = false
+        await finish.value
+        guard case let .result(joined) = await externalStop.value, !joined.isError else { throw SessionFailure("The external stop must succeed") }
+        try await settle()
+        try expect(capture.finishes == 6 && model.projects.count == 6 && activations.value == 4,
+                   "A Finish joining an external stop brings the editor forward once: \(activations.value)")
+    }
+
+    // MARK: - Area drawing
+
+    /// While the person draws a recording area (the full-screen overlay),
+    /// start_recording and every call that changes what the window shows are
+    /// refused before anything changes: the recorder keeps their source
+    /// kind and selection, no countdown starts, the editor does not open
+    /// under the overlay. The in-app assistant's start is refused the same
+    /// way. Once the drawing ends, the area is theirs and calls work again.
+    private static func drawingAnAreaRefusesAutomation() async throws {
+        let fixture = try await SessionFixture()
+        defer { fixture.cleanup() }
+        let (model, capture) = (fixture.model, fixture.capture)
+        try model.captureEngine.registerAreaTarget(soundArea)
+        let project = RecordingProject(title: "Edited later", sourceVideoPath: "raw.mp4", duration: 3, sourceWidth: 64, sourceHeight: 64)
+        try await fixture.store.save(project)
+        model.projects = [project]
+        let bridge = AutomationBridge(model: model)
+        let windowRequests = TestBox(0)
+        bridge.presentWindow = { windowRequests.value += 1 }
+        let drawn = CaptureTargetInfo(id: "area-1-drawn", kind: .area, nativeID: fixture.target.nativeID, title: "Drawn area", frame: CaptureRect(x: 0, y: 0, width: 32, height: 32))
+        let drawing = TestBox<CheckedContinuation<CaptureTargetInfo?, Never>?>(nil)
+        model.drawRecordingArea = { _, _ in
+            await withCheckedContinuation { (continuation: CheckedContinuation<CaptureTargetInfo?, Never>) in drawing.value = continuation }
+        }
+
+        model.destination = .recorder
+        let selecting = Task { @MainActor in await model.beginAreaSelection(on: fixture.target) }
+        try await waitUntil("The area drawing did not begin") { model.isSelectingArea && drawing.value != nil }
+        let selectedBefore = model.selectedTargetID
+
+        let refusedStart = try await fixture.fail(bridge, "start_recording", ["source": soundArea.id])
+        try expect(refusedStart.contains("drawing a recording area"), "start_recording is refused while an area is drawn: \(refusedStart)")
+        try expect(model.selectedTargetID == selectedBefore && model.recordingSourceKind == .area && model.destination == .recorder
+                   && model.recordingSession == nil && capture.starts.isEmpty && windowRequests.value == 0,
+                   "Nothing changed: \(String(describing: model.selectedTargetID)), \(model.recordingSourceKind), \(model.destination)")
+        let zoom: [String: Any] = ["project_id": project.id.uuidString, "start": 0.1, "end": 0.8, "x": 0.5, "y": 0.5]
+        let refusedEdit = try await fixture.fail(bridge, "add_zoom", zoom)
+        try expect(refusedEdit.contains("drawing a recording area") && model.destination == .recorder && model.activeProject == nil,
+                   "An edit does not open the editor under the overlay: \(refusedEdit)")
+        do {
+            _ = try model.startRecording(target: soundArea, options: AIRecordingOptions())
+            throw SessionFailure("The in-app assistant's start must be refused while an area is drawn")
+        } catch let error as AIToolError {
+            try expect(error.localizedDescription.contains("drawing a recording area"), "The in-app start says why: \(error.localizedDescription)")
+        }
+        try expect(model.selectedTargetID == selectedBefore && model.recordingSourceKind == .area && model.recordingSession == nil,
+                   "The in-app start changed nothing either")
+
+        drawing.value?.resume(returning: drawn)
+        await selecting.value
+        try expect(!model.isSelectingArea && model.selectedTargetID == drawn.id && model.recordingSourceKind == .area, "The drawn area is selected")
+        let started = try result(try await record([:], fixture: fixture, bridge: bridge), "after the drawing")
+        try expect(!started.isError && model.recordingPhase == .recording, "start_recording works once the drawing ended: \(started.json)")
+        await model.stopRecording()
+        try expect(model.destination == .editor && model.projects.count == 2, "The recording saved")
+    }
+
     // MARK: - Codex Director
 
     /// A Codex Director plan has no recording attempt: between the engine's
@@ -457,9 +704,11 @@ enum RecordingSessionRegression {
 
     // MARK: - Sound consent
 
-    /// A selected area of the fixture's display: the only source the engine
-    /// lists (no ScreenCaptureKit), which start_recording can name by its id.
-    private static let soundArea = CaptureTargetInfo(id: "area-1-sound", kind: .area, nativeID: 1, title: "Test area", frame: CaptureRect(x: 0, y: 0, width: 64, height: 64))
+    /// A selected area of the main display: the only source the engine lists
+    /// (no ScreenCaptureKit), which start_recording can name by its id. Its
+    /// display must still be connected when the countdown ends, so it lives on
+    /// the Mac's main display (the capture itself is scripted).
+    private static let soundArea = CaptureTargetInfo(id: "area-1-sound", kind: .area, nativeID: CGMainDisplayID(), title: "Test area", frame: CaptureRect(x: 0, y: 0, width: 64, height: 64))
 
     /// start_recording through `bridge` for Claude Code; once its countdown
     /// starts, the countdown runs on the manual clock.
@@ -733,15 +982,6 @@ enum RecordingSessionRegression {
     }
 }
 
-/// Stands in for the floating countdown's panels: whether Focus Studio is
-/// active (nil: no application), how many are open and who asked for each set.
-@MainActor
-private final class PanelProbe {
-    var active: Bool? = true
-    var open = 0
-    var requesters: [String?] = []
-}
-
 /// Answers the sound prompt from the test: at once, or held until released
 /// (a held prompt whose task is cancelled closes unanswered).
 @MainActor
@@ -875,8 +1115,20 @@ private final class ScriptedCapture {
     private var startGate: CheckedContinuation<Void, Never>?
     private(set) var starts: [(target: CaptureTargetInfo, options: CaptureOptions)] = []
     private(set) var finishes = 0
-    /// Captures stopped and deleted by a cancel (Cancel, a discarded start).
+    /// Captures stopped and thrown away: a start that lost its race with a
+    /// cancel (deleted), or Cancel and a discarded live recording (Trash).
     private(set) var cancels = 0
+    /// The capture's active intervals on the manual clock, as the engine
+    /// keeps them: anchored at the first frame, closed by a pause, reopened
+    /// at a resume's first frame `resumeDelay` later.
+    private(set) var intervals = RecordingPauseClock()
+    let resumeDelay: TimeInterval = 0.25
+    private(set) var pauses = 0
+    private(set) var resumes = 0
+    /// Holds a pause's flush until cleared: like the engine, the pause closes
+    /// the capture's interval at once and returns once what was recorded
+    /// has been written.
+    var holdPause = false
 
     init(clock: ManualRecordingClock, clip: URL) {
         self.clock = clock
@@ -888,10 +1140,28 @@ private final class ScriptedCapture {
         starts.append((target, options))
         if holdStart { await withCheckedContinuation { startGate = $0 } }
         clock.advance(by: startupDelay)
+        intervals = RecordingPauseClock()
+        intervals.anchor(at: clock.now)
         return clock.now
     }
 
     func cancel() { cancels += 1 }
+
+    var pauseControl: CapturePauseControl {
+        CapturePauseControl(
+            pause: { _ in
+                self.pauses += 1
+                self.intervals.pause(at: self.clock.now)
+                while self.holdPause { try await Task.sleep(for: .milliseconds(5)) }
+            },
+            resume: { _ in
+                self.resumes += 1
+                self.clock.advance(by: self.resumeDelay)
+                self.intervals.anchor(at: self.clock.now)
+            },
+            intervals: { _ in self.intervals }
+        )
+    }
 
     func finish() async throws -> RecordingResult {
         finishes += 1
@@ -930,6 +1200,11 @@ private final class SessionFixture {
             finishCapture: { _ in try await capture.finish() },
             startCapture: { _, target, _, options in try await capture.start(target: target, options: options) },
             cancelCapture: { _ in capture.cancel() },
+            discardCapture: { _ in
+                capture.cancel()
+                return .trashed
+            },
+            pauseCapture: capture.pauseControl,
             recordingClock: clock.clock
         )
     }

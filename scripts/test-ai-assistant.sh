@@ -7,8 +7,11 @@
 # paths, per-export options with progress and cancellation, get_project,
 # get_status), the MCP layer (tool catalog, result shape and inline images,
 # long-call jobs, library tools), recording sessions (start returns once
-# live, duration auto-stop, wait_for_recording, cancellation, the sound
-# prompt for sound an external start adds), AVFoundation
+# live, duration auto-stop, wait_for_recording, a paused recording,
+# cancellation, the sound prompt for sound an external start adds), the shared
+# conversation (saved history, provider resets, recording-plan drafts that
+# run only from Run, the recording confirmation, Retry without replaying a
+# tool), AVFoundation
 # clip assembly and the Ark client against a local Python fixture server.
 set -euo pipefail
 SCRIPT_DIR="${0:A:h}"
@@ -27,6 +30,7 @@ swiftc -parse-as-library -g \
   Sources/FocusStudioAutomation/Localization.swift \
   Sources/FocusStudioAutomation/AIJSONValue.swift \
   Sources/FocusStudioAutomation/AIAssistantModels.swift \
+  Sources/FocusStudioAutomation/CodexRecordingPlan.swift \
   Sources/FocusStudioAutomation/ArkMediaClient.swift \
   Sources/FocusStudioAutomation/AIAssistantTools.swift \
   Sources/FocusStudioAutomation/AIAssistantAppControl.swift \

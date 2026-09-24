@@ -85,6 +85,8 @@ for line in sys.stdin:
         assert scenario not in ("existing", "stale-model")
         authenticated = False
     elif method == "thread/start":
+        if params.get("developerInstructions") == "Slow preparation.":
+            time.sleep(2)
         assert authenticated
         assert params["model"] == "model-default"
         assert params["sandbox"] == "read-only"

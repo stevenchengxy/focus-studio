@@ -39,6 +39,8 @@ struct EditorInspectorView: View {
     @State private var isGeneratingChapters = false
     @State private var captionsMessage: String?
     private let systemWallpapers = SystemWallpaperCatalog.installed
+    private let bundledBackgrounds = (try? BackgroundCatalog.loadBundled())?.assets ?? []
+    private let bundledBackgroundCatalog = try? BackgroundCatalog.loadBundled()
 
     private var selectedZoomIndex: Int? {
         guard let selectedZoomID else { return nil }
@@ -158,6 +160,8 @@ struct EditorInspectorView: View {
                 NumberField(title: "End", value: segmentTimingBinding(zoom, value: \.end, edit: ZoomTimingEdit.end), range: 0...max(0, project.duration), suffix: "s")
                 NumberField(title: "Total duration", value: segmentTimingBinding(zoom, value: \.duration, edit: ZoomTimingEdit.duration), range: 0...max(0, project.duration), suffix: "s")
                 NumberField(title: "Hold at full zoom", value: segmentTimingBinding(zoom, value: \.hold, edit: ZoomTimingEdit.hold), range: 0...max(0, project.duration), suffix: "s")
+                NumberField(title: "Zoom in ends", value: segmentTimingBinding(zoom, value: \.fullZoomStart, edit: ZoomTimingEdit.fullZoomAt), range: 0...max(0, project.duration), suffix: "s")
+                NumberField(title: "Zoom out starts", value: segmentTimingBinding(zoom, value: \.zoomOutStart, edit: ZoomTimingEdit.zoomOutAt), range: 0...max(0, project.duration), suffix: "s")
                 Toggle("Instant animation", isOn: zoom.isInstant)
                     .font(.system(size: 11))
                 Toggle("Enabled", isOn: zoom.isEnabled)
@@ -344,6 +348,31 @@ struct EditorInspectorView: View {
                     Text("Image").tag(BackgroundStyle.image)
                 }
                 if project.settings.backgroundStyle == .image {
+                    if let catalog = bundledBackgroundCatalog, !bundledBackgrounds.isEmpty {
+                        Text("FOCUS STUDIO BACKGROUNDS")
+                            .font(.system(size: 8, weight: .bold))
+                            .tracking(0.55)
+                            .foregroundStyle(StudioTheme.secondaryText)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(bundledBackgrounds) { asset in
+                                    let path = catalog.fileURL(for: asset).path
+                                    Button {
+                                        project.settings.backgroundStyle = .image
+                                        project.settings.backgroundImagePath = path
+                                    } label: {
+                                        BackgroundAssetSwatch(
+                                            url: catalog.fileURL(for: asset),
+                                            isSelected: project.settings.backgroundImagePath == path
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help(Text(verbatim: "\(asset.title) · \(asset.mood)"))
+                                    .accessibilityLabel(Text(verbatim: asset.title))
+                                }
+                            }
+                        }
+                    }
                     if systemWallpapers.isEmpty {
                         Text("No readable macOS wallpapers were found on this Mac.")
                             .font(.system(size: 9))
@@ -428,14 +457,37 @@ struct EditorInspectorView: View {
     private var cursorInspector: some View {
         Group {
             InspectorSection("Appearance") {
-                Picker("Style", selection: cursorAppearanceBinding) {
-                    ForEach(CursorAppearance.allCases, id: \.self) { appearance in
-                        Text(LocalizedStringKey(appearance.title)).tag(appearance)
-                    }
+                Toggle("Show cursor", isOn: Binding(
+                    get: { project.settings.resolvedShowCursor },
+                    set: { project.settings.showCursor = $0 }
+                ))
+                .font(.system(size: 11))
+                .accessibilityIdentifier("cursor.showCursor")
+                .help("Hiding the pointer keeps click effects and zooms. It does not erase a pointer already baked into an imported video or screenshot.")
+                cursorStyleGallery
+                if project.settings.resolvedCursorAppearance.usesAccentTint {
+                    // The Accent pointer inks itself from the click colour, whose
+                    // only other control lives behind the Animate clicks toggle.
+                    ColorPicker("Color", selection: hexColorBinding(clickAnimationBinding(\.colorHex)), supportsOpacity: false)
+                        .font(.system(size: 11))
+                        .disabled(!project.settings.resolvedShowCursor)
                 }
                 LabeledSlider(value: $project.settings.cursorScale, range: 0.5...3, label: "Size", suffix: "×", decimals: 2)
+                    .disabled(!project.settings.resolvedShowCursor)
+                Picker("Cursor press", selection: pressStyleBinding) {
+                    ForEach(ClickPressStyle.allCases, id: \.self) { style in
+                        Text(LocalizedStringKey(style.title)).tag(style)
+                    }
+                }
+                .accessibilityIdentifier("cursor.pressStyle")
+                .disabled(!project.settings.resolvedShowCursor)
+                if pressStyleBinding.wrappedValue != .none {
+                    LabeledSlider(value: pressAmountBinding, range: 0...1, label: "Press amount", suffix: "%", multiplier: 100, decimals: 0)
+                        .disabled(!project.settings.resolvedShowCursor)
+                }
                 Toggle("Hide cursor while idle", isOn: $project.settings.hideIdleCursor)
                     .font(.system(size: 11))
+                    .disabled(!project.settings.resolvedShowCursor)
             }
             InspectorSection("Click feedback") {
                 Toggle("Animate clicks", isOn: $project.settings.showClickRing)
@@ -453,8 +505,6 @@ struct EditorInspectorView: View {
                     LabeledSlider(value: clickAnimationBinding(\.size), range: 0.4...2.5, label: "Effect size", suffix: "×", decimals: 2)
                     LabeledSlider(value: clickAnimationBinding(\.duration), range: 0.25...1.5, label: "Duration", suffix: "s", decimals: 2)
                     LabeledSlider(value: clickAnimationBinding(\.intensity), range: 0...1, label: "Intensity", suffix: "%", multiplier: 100, decimals: 0)
-                    Toggle("Press and release cursor", isOn: clickAnimationBinding(\.pressCursor))
-                        .font(.system(size: 11))
                 }
                 Text(LocalizedStringKey(project.clickEvents.isEmpty
                      ? "This recording has no captured clicks. Enable Input Monitoring before recording to capture clicks in other apps."
@@ -469,6 +519,7 @@ struct EditorInspectorView: View {
                         Text(LocalizedStringKey(style.rawValue.capitalized)).tag(style)
                     }
                 }
+                .disabled(!project.settings.resolvedShowCursor)
             }
         }
     }
@@ -654,6 +705,7 @@ struct EditorInspectorView: View {
                 LabeledSlider(value: zoomHoldBinding, range: 0.2...3, label: "Click hold", suffix: "s", decimals: 2)
                 LabeledSlider(value: zoomTimingBinding(\.zoomEaseOut), range: 0.05...1.4, label: "Zoom out", suffix: "s", decimals: 2)
                 LabeledSlider(value: zoomChainGapBinding, range: 0...ProjectSettings.maximumZoomChainGap, label: "Link nearby clicks", suffix: "s", decimals: 1)
+                LabeledSlider(value: zoomFollowBinding, range: 0...1, label: "Follow cursor", suffix: "%", multiplier: 100, decimals: 0)
             }
             InspectorSection("Typing focus") {
                 Toggle("Hold zoom while typing", isOn: typingZoomBinding(\.enabled))
@@ -742,6 +794,63 @@ struct EditorInspectorView: View {
         )
     }
 
+    /// Choosing `None` switches the pointer reaction off through the original
+    /// flag, so projects written before press styles keep the same meaning.
+    private var pressStyleBinding: Binding<ClickPressStyle> {
+        Binding(
+            get: { project.settings.resolvedClickAnimation.resolvedPressStyle },
+            set: { style in
+                var settings = project.settings.resolvedClickAnimation
+                settings.pressCursor = style != .none
+                if style != .none { settings.pressStyle = style }
+                project.settings.clickAnimation = settings
+            }
+        )
+    }
+
+    private var pressAmountBinding: Binding<Double> {
+        Binding(
+            get: { project.settings.resolvedClickAnimation.resolvedPressAmount },
+            set: { value in
+                var settings = project.settings.resolvedClickAnimation
+                settings.pressAmount = value
+                project.settings.clickAnimation = settings
+            }
+        )
+    }
+
+    private var cursorStyleGallery: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            LazyVGrid(
+                columns: Array(repeating: GridItem(.flexible(), spacing: 7), count: 3),
+                spacing: 7
+            ) {
+                ForEach(CursorAppearance.allCases, id: \.self) { appearance in
+                    Button {
+                        cursorAppearanceBinding.wrappedValue = appearance
+                        // Choosing a pointer that is switched off would be a
+                        // control that visibly does nothing.
+                        if !project.settings.resolvedShowCursor { project.settings.showCursor = true }
+                    } label: {
+                        CursorStyleSwatch(
+                            appearance: appearance,
+                            tintHex: project.settings.resolvedClickAnimation.colorHex,
+                            isSelected: project.settings.resolvedCursorAppearance == appearance
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .help(LocalizedStringKey(appearance.title))
+                    .accessibilityLabel(Text(LocalizedStringKey(appearance.title)))
+                    .accessibilityIdentifier("cursor.style.\(appearance.rawValue)")
+                }
+            }
+            Text(LocalizedStringKey(project.settings.resolvedCursorAppearance.title))
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(StudioTheme.secondaryText)
+        }
+        .accessibilityIdentifier("cursor.styleGallery")
+    }
+
     private func clickAnimationBinding<Value>(
         _ keyPath: WritableKeyPath<ClickAnimationSettings, Value>
     ) -> Binding<Value> {
@@ -805,6 +914,13 @@ struct EditorInspectorView: View {
                 project.settings.zoomHold = newValue
                 TimelineMath.adjustAutomaticClickHold(in: &project, by: newValue - oldValue)
             }
+        )
+    }
+
+    private var zoomFollowBinding: Binding<Double> {
+        Binding(
+            get: { project.settings.resolvedZoomFollowsCursor },
+            set: { project.settings.zoomFollowsCursor = $0 }
         )
     }
 
@@ -1275,6 +1391,51 @@ private enum ContentCropPreset: String, CaseIterable, Identifiable {
     }
 }
 
+/// The same treatment as a system wallpaper swatch, for an image that ships
+/// with the app rather than one found on the Mac.
+private struct BackgroundAssetSwatch: View {
+    let url: URL
+    let isSelected: Bool
+    @State private var thumbnail: NSImage?
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+            if let thumbnail {
+                Image(nsImage: thumbnail)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Image(systemName: "photo")
+                    .foregroundStyle(StudioTheme.secondaryText)
+            }
+        }
+        .frame(width: 82, height: 48)
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(
+                    isSelected ? Color.white : Color.white.opacity(0.13),
+                    lineWidth: isSelected ? 2 : 1
+                )
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if isSelected {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.55), radius: 2, y: 1)
+                    .padding(4)
+            }
+        }
+        .task(id: url.path) {
+            guard thumbnail == nil else { return }
+            thumbnail = WallpaperSwatch.loadThumbnail(from: url)
+        }
+    }
+}
+
 private struct WallpaperSwatch: View {
     let wallpaper: SystemWallpaper
     let isSelected: Bool
@@ -1317,7 +1478,7 @@ private struct WallpaperSwatch: View {
         }
     }
 
-    private static func loadThumbnail(from url: URL) -> NSImage? {
+    static func loadThumbnail(from url: URL) -> NSImage? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -1331,6 +1492,68 @@ private struct WallpaperSwatch: View {
             options as CFDictionary
         ) else { return nil }
         return NSImage(cgImage: image, size: .zero)
+    }
+}
+
+/// The gallery draws the same artwork the renderer uses, so a swatch can never
+/// promise a pointer the export will not produce.
+private struct CursorStyleSwatch: View {
+    let appearance: CursorAppearance
+    let tintHex: String
+    let isSelected: Bool
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [Color(white: 0.9), Color(white: 0.17)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+            if let image = CursorSwatchCache.image(for: appearance, tintHex: tintHex) {
+                Image(decorative: image, scale: 2)
+                    .interpolation(.high)
+            }
+        }
+        .frame(height: 40)
+        .overlay {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(
+                    isSelected ? Color.white : Color.white.opacity(0.13),
+                    lineWidth: isSelected ? 2 : 1
+                )
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if isSelected {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.45), radius: 2, y: 1)
+                    .padding(3)
+            }
+        }
+    }
+}
+
+/// Swatches are bitmaps; redrawing them on every inspector layout pass would
+/// rasterize six cursors per keystroke elsewhere in the panel.
+@MainActor
+private enum CursorSwatchCache {
+    private static var images: [String: CGImage] = [:]
+
+    static func image(for appearance: CursorAppearance, tintHex: String) -> CGImage? {
+        let key = appearance.rawValue + (appearance.usesAccentTint ? "-\(tintHex)" : "")
+        if let cached = images[key] { return cached }
+        let tint = NSColor(Color(hex: tintHex))
+        guard let made = CursorArtwork.preview(
+            for: appearance,
+            tint: tint,
+            size: CGSize(width: 54, height: 66)
+        ) else { return nil }
+        images[key] = made
+        return made
     }
 }
 

@@ -4,13 +4,46 @@
 
 ## 安装
 
-1. 打开 `Focus-Studio-…-universal-….dmg`。
-2. 将 **Focus Studio.app** 拖到 **Applications（应用程序）**。
-3. 从“应用程序”打开 Focus Studio，然后退出磁盘映像。
+1. 打开最新的 `Focus-Studio-…-universal-….dmg`，运行其中的 **Focus Studio.app**；也可先解压 ZIP。
+2. 返回项目库的空闲状态，打开 **Settings → Installation / 设置 → 安装**。确认“当前副本”的版本、build 和路径，然后点击 **Install this copy to Applications / 将此副本安装到应用程序** 并确认。
+3. 安装验证完成后，点击 **Open installed copy / 打开已安装副本**。以后固定从 `/Applications/Focus Studio.app` 启动。
+4. 手动退出下载目录、磁盘映像或开发目录里的旧窗口，再退出磁盘映像。如果 Dock 固定了旧路径，请移除旧图标，再从“应用程序”把最新版拖入 Dock。
 
-也可解压 ZIP，将其中的 Focus Studio.app 移入“应用程序”。请勿直接在 DMG 内长期运行应用。包中的 `Release-Status.plist` 记录架构、最低系统版本及本次签名、公证状态。
+请勿直接在 DMG 或历史版本目录内长期运行应用。包中的 `Release-Status.plist` 记录架构、最低系统版本及本次签名、公证状态。Finder 手动拖入“应用程序”仍可用，但会绕过应用内的版本、防降级和回滚检查，更新时优先使用上述安装操作。
 
 文件名包含 `local` 的版本采用本地签名，**尚未通过 Apple 公证**。首次打开时可能被 Gatekeeper 拦截。确认文件来自可信发送者后，按 macOS 界面提示，在“系统设置 → 隐私与安全性”中选择“仍要打开”。请勿关闭 Gatekeeper 或批量清除隔离属性。正式对外分发版本应使用 Developer ID 签名并经 Apple 公证。Apple 的说明：https://support.apple.com/102445
+
+## 纯聊天助手（1.7.1）
+
+数字人、男女形象选择和 3D 动画已移除，安装包不再包含人物模型。Demo 导演与 AI 助手采用紧凑聊天界面，保留聊天记录、模型配置、附件、语音输入、可选语音回复和录制计划。此次更新不会删除录屏项目或现有对话。
+
+## 录前工具栏、暂停与鼠标显示（1.6.0）
+
+进入“新录制”后，浮动工具栏处于 **Ready to record / 准备录制** 状态，不会自动开始。可从工具栏选择屏幕、窗口或区域，并调整鼠标显示、自动缩放、麦克风和系统音频。选好来源后，手动点击 **Start recording / 开始录制**；倒计时期间可取消。录前也可截取所选来源的 PNG，不必先录一段视频。
+
+录制期间，工具栏提供 **Screenshot / 截图**、**Pause recording / 暂停录制**、**Resume recording / 继续录制** 和 **Finish / 完成**。暂停时不写入新的视频、音频或交互事件，显示时长不包含暂停时间；继续会重新验证同一来源，来源已关闭时不会自动改录其它窗口。可在暂停状态直接完成，保存已有片段。保存期间请等待完成，不要强制退出。连接的各显示器都有一个工具栏，录制时排除本应用的工具栏画面。
+
+录前的 **Show cursor / 显示鼠标** 控制录后项目的鼠标展示，编辑器中仍可更改。隐藏鼠标不会关闭自动缩放或点击效果，这些效果可单独编辑。该开关不能擦除已经烧录在导入视频或截图像素中的鼠标。它也不会补回未被权限或输入监听捕获的鼠标轨迹。
+
+## 固定安装位置与更新（1.5.0）
+
+设置页同时显示当前运行副本和 `/Applications/Focus Studio.app` 的版本、build 与完整路径；新版本从其它目录运行时会显示提示。如果正式安装位置已有更新版本，旧副本不能覆盖它，可以明确点击打开已安装副本。此提醒只能由支持该功能的 1.5.0 及后续版本显示，不能改写已经存在的旧版本程序。
+
+更新时下载并打开新的可信安装包，再用新版本自己的安装操作。应用按照数字比较版本和 build，拒绝降级，也拒绝“版本号和 build 相同但内容不同”的覆盖。录屏、倒计时、导出、编辑或助手任务未完成时请先完成操作并返回项目库。若安装位置的应用仍在运行，安装器会要求使用者自行退出，不会强制关闭或覆盖运行中的应用。
+
+安装先在目标目录暂存并验证副本，再替换正式安装位置；验证失败时尝试恢复旧版。更新成功后，旧版保留在设置页列出的隐藏恢复目录中的 `previous.bundle`，不作为另一个可启动的 `.app` 注册。恢复时请先退出正式应用，并由熟悉文件管理的使用者将该完整 bundle 恢复为 `/Applications/Focus Studio.app`；不要改动项目目录。
+
+安装不删除其它位置的旧 app、不更改项目和账号、不自动启动或退出应用，也不静默联网自更新。尚未配置经过签名验证的更新源。若 `/Applications` 无写入权限，请联系管理员正常安装；软件不会请求 sudo 或关闭系统安全机制。固定安装位置有助于避免误启动旧副本，但 ad-hoc 签名的应用移动或重新构建后，macOS 仍可能要求重新授权。
+
+## 统一聊天与 Demo 导演（1.5.0）
+
+项目库的 **Demo Director / Demo 导演** 和独立 **AI Assistant / AI 助手** 窗口共用一段对话，可使用已经配置的 AI 模型，或在 **设置 → AI 模型 → Assistant brain** 选择 Codex。聊天不会仅因打开导演页而访问网页、截屏或开始录制。
+
+先讨论目标、时长和演示步骤，再请助手生成录制计划。右侧显示草稿；继续在聊天中修改，检查后点击 **Run recording plan / 执行录制计划** 并确认。直接通过聊天开始或停止录制也需要确认。目前文本聊天没有实时网页视觉观察能力，因此不执行仅凭模型猜测坐标的实时点击计划；可规划跳转、滚动、等待。需要真实点击/输入交互时先使用手动录制，录后再让助手编辑。截图演示中的点击仅生成缩放，不操作桌面。
+
+聊天保存在本机 `~/Library/Application Support/FocusStudio/Assistant/conversation.json`；“新建对话”清除聊天与计划草稿，不清除录屏。可停止生成、重试失败回复；重试不会重复执行已经尝试过的同一工具。切换模型后重置隐藏的模型会话，仍以可见历史作为上下文。尚未配置模型时输入仍保留，配置后可重试。
+
+本地镜头算法按时间顺序处理点击与输入：近处重复点击去抖，远处点击交接镜头，继续输入重新聚焦，动态增高的输入框保持焦点稳定。手动修改过的缩放不会因算法更新被重置。
 
 ## 管理录屏库（1.1.3）
 
@@ -92,13 +125,13 @@ codex mcp add focus-studio -- "/Applications/Focus Studio.app/Contents/MacOS/foc
 ### 使用中会看到什么
 
 - 编辑和导出时，主窗口回到最前（不抢键盘焦点），编辑器打开 AI 工具指定的项目，顶栏下方显示 “Claude Code is working… / Claude Code 正在操作…”。开着别的项目时先保存再切换；录制中或应用正忙时，编辑工具会返回错误，不会丢掉修改。
-- 录制：先有 3 秒倒计时。Focus Studio 在后台时，倒计时浮在每个显示器顶部中央（“Focus Studio is about to record / Focus Studio 即将开始录制”，写明哪个 AI 工具请求录制什么，带取消）；之后是录制控制条；设置了时长时，控制条显示剩余时间（“Stops in 0:08 / 0:08 后停止”）。随时可以点 **Finish / 结束** 结束录制，或点 ✕ 取消（取消的录制会被删除）。倒计时和控制条都不会录进视频；结束的录制都会保存到项目库，没有静默录制。
+- 录制：每个显示器底部居中的录制控制条先显示 3 秒倒计时，Focus Studio 在后台或没有打开主窗口时也一样。✦ 旁是请求录制的 AI 工具名称（悬停或 VoiceOver 读出“哪个 AI 工具请求录制什么”），要录声音时有黄色的麦克风 / 扬声器图标，带 **Cancel / 取消**；展开控制条可看到完整说明。之后收起为录制条；设置了时长时，录制条在计时器图标旁显示剩余的录制时间。随时可以 **Pause recording / 暂停录制**、**Resume recording / 继续录制**：暂停时不录任何画面、声音和点击，暂停的时间不计入时长，剩余时间也不减少。点 **Finish / 结束** 结束录制（暂停中也可以），或点 ✕ 后确认 **Discard / 丢弃**（丢弃的录制移到废纸篓，可以恢复）。控制条不会录进视频；结束的录制都会保存到项目库，没有静默录制。
 - 录制时的声音：AI 工具要为某次录制打开麦克风或系统音频，而你在录制器里没有打开它们时，倒计时之前会弹出 **Record sound? / 录制声音？**，写明哪个 AI 工具想录哪种声音、要录制什么，以及实际启动这个 AI 工具的程序（**Started by / 启动它的程序**，与批准面板相同；AI 工具自报的名称可以随意填写）。三个按钮：**Allow for this recording / 仅本次允许**（按它的要求录制）、**Record without sound / 无声录制**（只录画面、不录任何声音，录制器里本来打开的声音这次也不录；AI 工具会在结果里看到你的选择）、**Cancel recording / 取消录制**（不录制；按 Esc 或关闭面板也一样）。询问期间你在录制器里关掉的声音，这次录制也不会录。没有默认按钮，在别的应用里按回车不会替你选择；60 秒内没有回答就不录制，面板自动关闭。每次这样的录制都会重新询问，不会记住，也不会改动录制器里的设置；回答后键盘焦点回到你原来使用的应用。AI 工具不额外要求声音时（或要的声音你本来就开着），录制直接开始、不会弹窗；应用内的 AI 助手由你自己操作，也不会询问。
 - 导出不会覆盖已有文件（除非 AI 工具明确要求覆盖），也不会写项目自己的原始录像。删除项目只移到废纸篓。
 
 ### 常见问题
 
-- **应用不在 /Applications**：helper 路径是 `<Focus Studio.app 所在位置>/Contents/MacOS/focus-studio-mcp`，例如 `~/Applications/Focus Studio.app/Contents/MacOS/focus-studio-mcp`。设置页 **Connect AI tools / 接入 AI 工具** 下方显示当前这份应用的 helper 路径和完整命令，一键接入也用这个路径。移动或替换应用后，回到设置页点 **Update / 更新**，或重新运行手动命令。
+- **应用不在 /Applications**：helper 路径是 `<Focus Studio.app 所在位置>/Contents/MacOS/focus-studio-mcp`，例如 `~/Applications/Focus Studio.app/Contents/MacOS/focus-studio-mcp`。设置页 **Connect AI tools / 接入 AI 工具** 下方显示当前这份应用的 helper 路径和完整命令，一键接入也用这个路径。移动或替换应用后，回到设置页点 **Update / 更新**，或重新运行手动命令。用 **Settings → Installation / 设置 → 安装** 把其他位置的副本装进“应用程序”后，从已安装的副本打开 **AI tools / AI 工具** 页；显示 **Connected to another copy / 已接入另一个副本** 时点 **Update / 更新**。AI 工具正在调用或后台任务（例如导出）还在进行时，安装页会要求先等它们完成。
 - **从 DMG 或解压位置直接运行**：在磁盘映像里（`/Volumes/…`）运行，或 macOS 把刚下载的应用放到临时位置运行（App Translocation）时，这个路径之后会失效，所以设置页会提示并禁用接入。请把 Focus Studio 移到“应用程序”，从那里重新打开再接入。如果 helper 启动的是一份从未打开过的副本，macOS 可能先询问是否打开；30 秒内没有确认，这次调用会返回说明，确认后再试一次即可。
 - **Codex 超时**：Codex 0.141.0（2026 年 6 月）起，MCP 工具调用默认最多等 300 秒，一般不需要修改配置：等待录制和等待后台任务的工具每次最多等 240 秒，导出或拼接超过约 200 秒会返回 `job_id` 转为后台任务；握手和列工具由 helper 立即回答，不等应用启动。更早的 Codex 默认只等 120 秒（更老的版本为 60 秒），长时间的导出或等待会先在 Codex 端超时：请更新 Codex（`codex --version` 查看版本），或在 `~/.codex/config.toml` 的 `[mcp_servers.focus-studio]` 下加一行 `tool_timeout_sec = 300`，再开始新的 Codex 会话。这约 200 秒从调用到达 Focus Studio 算起，并扣除 helper 在后台启动应用、建立连接已经用掉的时间；等待批准、排队和等你回答声音询问的时间也都算在内，所以新 AI 工具的第一次调用同样会在 300 秒之内得到回答。批准面板 2 分钟内没人处理时，调用返回“没人回答”的错误（极少数情况下先返回 `waiting_for_approval`）；排队等另一个调用时时间用完，返回 `waiting_for_turn`；这两种情况调用都没有执行，AI 工具再调用一次即可。还在等你回答声音询问时，调用返回 `job_id`，AI 工具用 `wait_for_job` 取得录制结果。
 - **“Focus Studio could not be reached”**：helper 连不上应用。先手动打开 Focus Studio，看 **AI tools / AI 工具** 页是否显示 **Ready for AI tools.**；显示 “AI tools cannot connect: … / AI 工具无法连接：…” 时按其中的原因处理（控制通道在 `~/Library/Application Support/FocusStudio/Control/`）。再确认 MCP 配置里没有给 helper 设置 `FOCUS_STUDIO_MCP_NO_LAUNCH=1`（设置后 helper 不会自动打开应用）或 `FOCUS_STUDIO_CONTROL_SOCKET`（只用于测试）。
@@ -106,13 +139,13 @@ codex mcp add focus-studio -- "/Applications/Focus Studio.app/Contents/MacOS/foc
 - **“Another copy of Focus Studio … is running but is not accepting AI tools”**：另一份不提供 AI 工具的 Focus Studio（例如 1.4.0 或更早版本）正在运行。两份应用会同时编辑同一个项目库，所以 helper 不会再打开第二份；退出那一份或更新它即可。
 - **查看 helper 日志**：helper 的日志只写到标准错误。Claude Code 连上 MCP server 之后不再保留它的标准错误，Codex 默认也不会把终端里 `export` 的变量传给 helper，所以在 AI 工具的会话里一般看不到这些日志。需要排查时，按源码仓库 `docs/MCP-QA.md` 中“一个可以手动发消息的 MCP 会话”，在终端里带 `FOCUS_STUDIO_MCP_LOG_LEVEL=debug` 直接运行 helper：日志包括连接、启动应用、hello 和每个调用。Codex 也可以先 `codex mcp remove focus-studio`，再 `codex mcp add --env FOCUS_STUDIO_MCP_LOG_LEVEL=debug focus-studio -- "<helper 路径>"` 重新登记，这些行会以 `MCP server stderr` 开头记进 Codex 自己的日志；排查完同样先 remove，再用不带 `--env` 的命令登记回来。
 
-## AI 助手操控应用、Codex 大脑、语音与数字人（1.4.0）
+## AI 助手操控应用、Codex 大脑与语音
 
 点击编辑器或项目库顶栏的 **AI** 打开独立的助手窗口。直接说需求，例如"录一段 Chrome 窗口的操作，停止后自动加缩放和章节字幕，导出 1080p"，助手会逐步执行并汇报；开始录制前有 3 秒倒计时，付费生成（Seedance）前会弹出费用确认。
 
 大脑二选一（设置 → AI 模型 → Assistant brain）：**默认文本模型**（已配置的 API Key 提供商）或 **Codex**（在"Codex"页登录 ChatGPT 后即可，无需 API Key）。首次启动时如果 `~/.config/focus-studio/ark.env` 存在火山方舟密钥，应用会自动导入并选定默认模型。
 
-语音：按下麦克风按钮说话，识别结果实时写入输入框，停顿约 1.5 秒自动结束；首次使用需要允许"语音识别"和"麦克风"权限。可在面板中开启"语音回复"让助手朗读答案。数字人会根据倾听、思考、说话、成功、出错切换动作；开启系统"减弱动态效果"后只做淡入淡出。
+语音：按下麦克风按钮说话，识别结果实时写入输入框，停顿约 1.5 秒自动结束；首次使用需要允许"语音识别"和"麦克风"权限。可在面板中开启"语音回复"让助手朗读答案。
 
 ## AI 模型、章节字幕与 AI 助手（1.3.0）
 
@@ -126,6 +159,8 @@ codex mcp add focus-studio -- "/Applications/Focus Studio.app/Contents/MacOS/foc
 
 进入 **New recording / 新建录制** 后，每张显示器或窗口卡片都会显示约每秒刷新一次的缩略图；当前选中的卡片以 12 fps 实时预览，并带有 **LIVE** 标记。区域模式会在所选显示器缩略图上标出已框选的矩形。预览只保存在内存中，返回项目库或开始倒计时时立即停止。缩略图需要录屏权限；未授权时卡片保留图标占位，不影响录制流程。
 
+编辑器 **Cursor → Smoothing** 决定自定义箭头的平滑程度：Smooth / Medium / Rapid 会把原始鼠标采样重采样到 120 Hz 并做零相位平滑，同时保证每次点击时箭头精确落在点击点；None 保持原始采样。箭头与输入框的 I-beam 之间会交叉淡入。**Animation → Follow cursor** 控制放大期间镜头跟随光标的强度（默认 60%）。
+
 编辑器 **Animation → Screen animation** 新增 **Cinematic / 电影感** 曲线并作为新项目默认：镜头先快速切入，再长时间平缓落定，起止两端没有速度突变。**Link nearby clicks / 链接相邻点击**（默认 1.0 秒，可调 0–2.5 秒）决定上一段缩放结束后多久内的下一次点击会让镜头保持放大并平移过去；设为 0 恢复逐段独立缩放。旧项目保留原有曲线设置，打开后不会被改写。
 
 ## 录制后逐段调整缩放（1.1.2）
@@ -133,7 +168,7 @@ codex mcp add focus-studio -- "/Applications/Focus Studio.app/Contents/MacOS/foc
 点击底部任一紫色 **Zoom / 缩放** 块，右侧会显示对应编号。片段重叠时，也可通过右侧 **Selected zoom / 当前缩放** 下拉框逐个选中。
 
 - 拖左侧把手改变开始时间；拖右侧把手延长或缩短结束时间；拖中间整体移动。
-- 右侧可输入 **Start / 开始**、**End / 结束**、**Total duration / 总时长**、**Hold at full zoom / 完全放大后停留**。按回车或离开输入框提交；时间自动限制在视频范围内。
+- 右侧可输入 **Start / 开始**、**End / 结束**、**Total duration / 总时长**、**Hold at full zoom / 完全放大后停留**，以及 1.8 新增的 **Zoom in ends / 放大完成于** 和 **Zoom out starts / 缩小开始于**（绝对时间）。选中的缩放块上还有两个内侧把手，可直接拖动这两个时刻，块的起止保持不变。按回车或离开输入框提交；时间自动限制在视频范围内。
 - **Speed for this zoom / 当前缩放的速度** 单独控制该片段放大、缩回的秒数。秒数越小越快；可选快速、自然、舒缓预设。过短的片段会等比例缩短两端过渡。
 - 手动编辑的片段会保留，不会被自动缩放或打字等待设置重新生成覆盖。保存并重新打开后仍保留；预览与 MP4 导出使用同一套计时。
 
@@ -145,12 +180,12 @@ codex mcp add focus-studio -- "/Applications/Focus Studio.app/Contents/MacOS/foc
 
 ## 在新电脑连接 Codex
 
-录屏和剪辑本身无需 Codex。要使用 AI Director，请在该 Mac 安装官方 Codex CLI，或准备已安装的 Codex.app / ChatGPT.app。
+录屏和剪辑本身无需 Codex，Demo 导演也可使用已配置的 AI 网关模型。若选择 Codex 作为聊天模型，请在该 Mac 安装官方 Codex CLI，或准备已安装的 Codex.app / ChatGPT.app。
 
-1. 进入 **Codex Director → Connection**，或点击 **Set up Codex**。
+1. 进入 **Demo Director → Connection**，或 **Settings → Codex**。
 2. 在 **Codex installation** 中使用自动检测，或通过 **Choose…** 选择 `codex` 可执行文件 / Codex.app / ChatGPT.app。
 3. 点击 **Save & test connection**，再选择 **Sign in with ChatGPT** 并完成浏览器登录；也可点击 **Use API key → Save key & sign in** 手动输入自己的密钥。
-4. 在 **Planning model** 选择账号支持的模型或保留 **Account default**，保存后即可发送任务。
+4. 在 **Planning model** 选择账号支持的模型或保留 **Account default**，保存后，在 **AI 模型 → Assistant brain** 选择 **Codex (ChatGPT sign-in)**，即可在聊天中使用。
 
 默认的 **Sign in for Focus Studio** 使用独立的应用登录，凭据由 macOS 钥匙串保存。已经在终端登录 Codex 的用户可选择 **Use existing Codex sign-in**。连接测试只读取账号和模型信息，不发起计费任务；使用 API Key 生成任务时按自己的 OpenAI API 账号计费。ChatGPT / Codex 账号和权限不会随安装包转移。官方安装与认证说明：https://developers.openai.com/codex/cli/
 

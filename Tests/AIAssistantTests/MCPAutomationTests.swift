@@ -116,7 +116,8 @@ extension AIAssistantTests {
         check(start.inputSchema["required"] == ["source"], "start_recording requires only its source")
         check(start.inputSchema["properties"]?["duration"]?["minimum"] == 1 && start.inputSchema["properties"]?["duration"]?["maximum"] == 600 && start.inputSchema["properties"]?["duration"]?["type"] == "number", "start_recording takes a bounded duration: \(start.inputSchema["properties"]?["duration"] ?? .null)")
         for phrase in ["returns as soon as the recording is live", "countdown", "control bar", "cancel", "wait_for_recording", "stop_recording", "duration", "this recording only", "DevTools", "Clicks and typing", "add_zoom", "your own tools",
-                       "top centre", "deletes the recording", "never with the bar's buttons", "asks the person before the countdown", "never remembered",
+                       "bottom centre", "discards the recording", "never with the bar's buttons", "asks the person before the countdown", "never remembered",
+                       "pause", "does not count", "names you",
                        "record without sound", "no sound at all", "audio_consent", "60 seconds", "isError", "add no sound start without asking"] {
             check(start.description.contains(phrase), "start_recording's description mentions \(phrase)")
         }
@@ -244,13 +245,19 @@ extension AIAssistantTests {
     static func automationJobs() async throws {
         // A call that finishes in time is answered directly and not stored.
         let quick = AutomationJobs(detachAfter: 5)
+        var quickChanges = 0
+        quick.onChange = { quickChanges += 1 }
         let direct = callResult(await quick.run(tool: "quick", progress: nil) { _ in MCPToolCallResult(content: [.text("done")], structuredContent: ["ok": true]) }, "quick")
         check(direct.text == "done" && direct.structuredContent == ["ok": true] && quick.runningJobIDs.isEmpty, "a quick call returns its own result")
         let failing = callResult(await quick.run(tool: "failing", progress: nil) { _ in throw AIToolError.failed("It broke.") }, "failing")
         check(failing.isError && failing.text == "It broke.", "a thrown error becomes an error result")
+        check(quickChanges == 0, "calls answered in time never change the running jobs: \(quickChanges)")
 
         // A slow call is detached with a running status; wait_for_job collects it.
         let jobs = AutomationJobs(detachAfter: 0.3)
+        // The app republishes its busy state (the installer's guard) on each change.
+        var changes = 0
+        jobs.onChange = { changes += 1 }
         let released = Flag()
         let firstReports = ProgressLog()
         let final = MCPToolCallResult(content: [.text("Exported demo.mp4")], structuredContent: ["path": "/tmp/demo.mp4", "duration": 12])
@@ -271,6 +278,7 @@ extension AIAssistantTests {
               "the running status: \(status ?? .null)")
         check(running.text.contains("wait_for_job") && running.text.contains(jobID) && running.text.contains("10% done"), "the text says how to collect it: \(running.text)")
         check(jobs.runningJobIDs == [jobID], "the job keeps running")
+        check(changes == 1, "detaching is reported as a change: \(changes)")
         check(firstReports.values.map(\.completed) == [0.1], "the first call saw progress until it returned: \(firstReports.values.map(\.completed))")
 
         let polled = callResult(await jobs.waitForJob(arguments: ["job_id": jobID, "timeout_seconds": 0.05], progress: nil), "short wait")
@@ -279,6 +287,7 @@ extension AIAssistantTests {
         released.raise()
         let collected = callResult(await jobs.waitForJob(arguments: ["job_id": jobID.uppercased(), "timeout_seconds": "5"], progress: { waitReports.record($0, $1, $2) }), "long wait")
         check(collected == final, "wait_for_job returns the original call's result: \(collected.json)")
+        check(changes == 2 && jobs.runningJobIDs.isEmpty, "the detached job finishing is reported as a change: \(changes)")
         let waited = waitReports.values.map(\.completed)
         check(waited.first == 0.1 && waited.last == 1 && zip(waited, waited.dropFirst()).allSatisfy { $0 < $1 } && !waited.contains(0.05), "the wait starts from the latest report and only moves forward: \(waited)")
         check(firstReports.values.count == 1, "nothing reaches the first call after it returned")

@@ -60,8 +60,8 @@ extension AIAssistantTests {
         check(app.recordingPhase == .recording && data["state"] == "recording" && data["source"]?["id"] == "display-1", "the call returns while recording: \(data)")
         guard let started = date(data["started_at"]), let stops = date(data["auto_stop_at"]) else { fatalError("FAIL: started_at and auto_stop_at are ISO 8601 dates: \(data)") }
         check(data["duration"] == 30 && abs(stops.timeIntervalSince(started) - 30) < 1 && abs(started.timeIntervalSinceNow) < 5, "the automatic stop is 30 s after the real start: \(data)")
-        check(result.text.contains("stops by itself 30.0 s after it started") && result.text.contains("wait_for_recording") && result.text.contains("cancel")
-              && result.text.contains("operate the recorded app yourself") && result.text.contains("top centre"), "the text says what happens next: \(result.text)")
+        check(result.text.contains("stops by itself once 30.0 s are recorded") && result.text.contains("paused time does not count") && result.text.contains("wait_for_recording") && result.text.contains("cancel")
+              && result.text.contains("operate the recorded app yourself") && result.text.contains("bottom centre"), "the text says what happens next: \(result.text)")
         check(app.attemptSettings.last == AIRecordingOptions(systemAudio: true, microphone: true, automaticZooms: false, browserContentOnly: false, frameRate: 30, duration: 30),
               "the recording uses the call's options: \(app.attemptSettings)")
         check(app.recorderPreferences == preferences, "the recorder's own choices are untouched: \(app.recorderPreferences)")
@@ -486,5 +486,52 @@ extension AIAssistantTests {
         app.recordingPhase = .idle
         let data = try structured(try await waiting.value, "wait_for_recording on a recording without an attempt")
         check(data["state"] == "finished" && data["project_id"]?.stringValue == project.id.uuidString, "its saved project, not a cancel: \(data)")
+    }
+}
+
+// MARK: - Paused recordings
+
+extension AIAssistantTests {
+    /// The person paused the recording from its control bar: it is still
+    /// recording (stop_recording works), wait_for_recording and the in-app
+    /// assistant's summary say it is paused with the recorded time left, and
+    /// wait_for_recording, which answers "call it again", is never stopped by
+    /// the in-app replay guard, unlike an action already attempted.
+    @MainActor
+    static func pausedRecording(root: URL) async throws {
+        let (context, app, _) = makeFakeApp(root: root)
+        _ = try await StartRecordingTool(startTimeout: 5).run(arguments: ["source": "display", "duration": 10], context: context, progress: { _ in })
+        check(app.recordingPhase == .recording, "the recording is live")
+        app.elapsed = 4
+        app.isRecordingPaused = true
+        app.pausedRemaining = 6
+        let waited = try await WaitForRecordingTool(pollInterval: 0.01).run(arguments: ["timeout_seconds": 0], context: context, progress: { _ in })
+        let data = try structured(waited, "wait_for_recording while paused")
+        check(data["state"] == "recording" && data["paused"] == true && data["elapsed"] == 4 && data["remaining"] == 6
+              && waited.text.contains("paused by the person") && waited.text.contains("6.0 s of recording remain once they resume") && data["auto_stop_at"] == nil,
+              "a wait reports the pause: \(waited.text) \(data)")
+        let summary = AIAssistantSession(context: context, completion: nil, tools: []).appSummary() ?? ""
+        check(summary.contains("Recording: recording (paused by the user"), "the in-app summary names the pause: \(summary)")
+        app.isRecordingPaused = false
+        let running = try structured(try await WaitForRecordingTool(pollInterval: 0.01).run(arguments: ["timeout_seconds": 0], context: context, progress: { _ in }), "wait_for_recording resumed")
+        check(running["paused"] == false, "a resumed recording is not paused: \(running)")
+        app.isRecordingPaused = true
+        let stopped = try structured(try await StopRecordingTool(stopTimeout: 5).run(arguments: [:], context: context, progress: { _ in }), "stop_recording while paused")
+        check(stopped["state"] == "finished", "stop_recording saves a paused recording: \(stopped)")
+        app.isRecordingPaused = false
+
+        let log = ToolLog()
+        let waiter = RecordingTool(name: "wait_for_recording", summary: "wait fixture", cost: nil, log: log)
+        let lister = RecordingTool(name: "list_projects", summary: "list fixture", cost: nil, log: log)
+        let provider = ScriptedCompletion([
+            action("wait_for_recording", "{\"timeout_seconds\": 0}"), action("wait_for_recording", "{\"timeout_seconds\": 0}"),
+            action("list_projects"), action("list_projects"), reply("Done."),
+        ])
+        let session = AIAssistantSession(context: context, completion: provider, tools: [waiter, lister])
+        session.send("Wait for the recording, then list the projects")
+        try await waitUntil("the scripted turn") { !session.isRunning }
+        check(log.runs.filter { $0.hasPrefix("wait_for_recording") }.count == 2 && log.runs.filter { $0.hasPrefix("list_projects") }.count == 1
+              && session.messages.last?.text == "Done.",
+              "wait_for_recording may wait again in one request; other repeated calls are still refused: \(log.runs)")
     }
 }

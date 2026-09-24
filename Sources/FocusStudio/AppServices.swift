@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import FocusStudioAutomation
 import Foundation
 
@@ -17,7 +18,11 @@ final class AppServices {
     let connector: MCPClientConnector
 
     private init() {
-        let model = StudioModel()
+        // The assistant's conversation and plan draft survive relaunches.
+        let model = StudioModel(
+            assistantHistoryURL: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+                .first?.appendingPathComponent("FocusStudio/Assistant/conversation.json")
+        )
         self.model = model
         accessStore = AutomationAccessStore(defaults: .standard)
         bridge = AutomationBridge(model: model)
@@ -46,12 +51,37 @@ final class AppServices {
             readiness: { await model.bootstrap() }
         )
         connector = MCPClientConnector(helperPath: MCPClientConnector.bundledHelperPath(), search: .current())
-        // The floating countdown names the AI tool whose start_recording call
-        // is starting the recording.
+        // The countdown and the control bar name the AI tool whose
+        // start_recording call is starting the recording.
         let activity = activity
-        RecordingCountdownPanelCoordinator.shared.automationRequester = {
+        model.automationRequester = {
             activity.running.last(where: { $0.tool == "start_recording" })?.clientName
         }
+        // Installing or opening another copy is refused while AI tools work
+        // in the app (a call running, or a detached export or other job).
+        automationObserver = Self.reportAutomationWork(of: activity, jobs: bridge.jobs, to: model)
+        // A person's Finish with no main window open opens one for the editor.
+        model.presentMainWindow = { MainWindowPresenter.shared.present() }
+        // The recording control bar follows the model, window or not.
+        RecordingControlPanelCoordinator.shared.follow(model)
+    }
+
+    /// Republishes the model when AI work begins or ends.
+    private var automationObserver: AnyCancellable?
+
+    /// Makes `model.isInstallationBusy` count the AI calls running in the
+    /// app and the detached jobs still running, and republishes the model
+    /// whenever either changes: a call begins or ends, a call detaches as a
+    /// job, a detached job finishes. The views that pass the busy state to
+    /// the installer (Settings › Installation, the outside-Applications
+    /// notice) observe only the model, so without this they would keep a
+    /// stale value. Returns the subscription to keep.
+    static func reportAutomationWork(of activity: AutomationActivity, jobs: AutomationJobs, to model: StudioModel) -> AnyCancellable {
+        model.automationIsWorking = { [weak activity, weak jobs] in
+            !(activity?.running.isEmpty ?? true) || !(jobs?.runningJobIDs.isEmpty ?? true)
+        }
+        jobs.onChange = { [weak model] in model?.objectWillChange.send() }
+        return activity.objectWillChange.sink { [weak model] _ in model?.objectWillChange.send() }
     }
 }
 

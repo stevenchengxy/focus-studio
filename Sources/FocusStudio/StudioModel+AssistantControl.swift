@@ -48,7 +48,7 @@ extension StudioModel: AppControlling {
     func refreshRecordingSources() async throws -> [AIRecordingSource] {
         if captureEngine.isRecording || destination == .countdown {
             // Never leave a live recording; just refresh the list.
-            return try await captureEngine.refreshAvailableTargets().map(AIRecordingSource.init)
+            return try await refreshListedSources().map(AIRecordingSource.init)
         }
         guard !isManagingProjects else {
             throw AILocalizedFailure("Finish the current library operation before starting another.")
@@ -56,7 +56,7 @@ extension StudioModel: AppControlling {
         if destination == .editor { closeEditor() }
         if destination == .recorder {
             do {
-                _ = try await captureEngine.refreshAvailableTargets()
+                try await refreshListedSources()
                 capturePermissionDenied = false
                 captureFailureDetails = nil
             } catch {
@@ -134,6 +134,8 @@ extension StudioModel: AppControlling {
         }
     }
 
+    // isRecordingPaused: StudioModel.swift (the control bar's Pause).
+
     var lastReportedError: String? {
         if isShowingError, !errorMessage.isEmpty { return errorMessage }
         // A refused Screen Recording permission is shown on the recorder screen
@@ -171,8 +173,13 @@ extension StudioModel: AppControlling {
         guard !isFinishingRecording else {
             throw AIToolError.failed("The last recording is still being saved. Try again when the editor shows it.")
         }
+        // Checked before anything changes: the person's area and source
+        // choice stay as they are (the in-app assistant comes here without
+        // the bridge's navigation check).
+        guard !isSelectingArea else { throw AIToolError.failed(Self.drawingAreaRefusal) }
         if destination == .editor { closeEditor() }
         selectedTargetID = target.id
+        recordingSourceKind = target.kind
         destination = .recorder
         // Errors from earlier attempts must not be read as this attempt's outcome.
         isShowingError = false
@@ -204,21 +211,26 @@ extension StudioModel: AppControlling {
         }
     }
 
+    /// Seconds recorded so far, paused time left out (as in the video and
+    /// the control bar's clock).
     var recordingElapsed: TimeInterval? {
         guard recordingPhase == .recording else { return nil }
-        let live = currentRecording.flatMap { $0.isLive ? $0.startUptime : nil }
-        guard let start = live ?? captureEngine.recordingStartUptime else { return nil }
-        return max(0, recordingClock.now() - start)
+        if let attempt = currentRecording, attempt.isLive {
+            return attempt.recordedDuration(at: recordingClock.now())
+        }
+        // A capture without an attempt (a Codex Director plan): the engine's clock.
+        return captureEngine.isRecording ? max(0, captureEngine.duration) : nil
     }
 
+    /// Seconds of recording left before the duration stops it; it does not
+    /// count down while paused.
     var recordingRemaining: TimeInterval? {
-        guard recordingPhase == .recording, let attempt = currentRecording, attempt.isLive,
-              let deadline = attempt.automaticStopUptime else { return nil }
-        return max(0, deadline - recordingClock.now())
+        guard recordingPhase == .recording, let attempt = currentRecording, attempt.isLive else { return nil }
+        return attempt.remaining(at: recordingClock.now())
     }
 
     var recordingSession: AIRecordingSession? {
-        currentRecording?.session
+        currentRecording?.session(at: recordingClock.now())
     }
 
     var projectSummaries: [AIProjectSummary] {

@@ -75,6 +75,9 @@ func typingActivityCaptureFailures() -> [String] {
            "keyboard activity before the first video frame must be discarded")
 
     let unavailable = TypingFocusContext(processID: 42, windowID: 7)
+    expect(resolver.activity(uptime: 101.1, startUptime: 100, context: unavailable) == nil,
+           "a known non-editable focus or different window must invalidate stale fallback input anchors")
+    resolver.noteClick(x: 260, y: 240, context: focused)
     expect(resolver.activity(uptime: 101.2, startUptime: 100, context: unavailable)?.x == 0.4,
            "missing app accessibility semantics should reuse a same-app/window clicked anchor")
     resolver.noteClick(x: 800, y: 240, context: unavailable)
@@ -98,6 +101,29 @@ func typingActivityCaptureFailures() -> [String] {
     var display = TypingActivityResolver(captureRect: captured, excludedProcessID: 42)
     expect(display.activity(uptime: 101, startUptime: 100, context: focused) == nil,
            "the recorder's own excluded overlay must not create typing activity")
+
+    var expandingInput = TypingActivityResolver(captureRect: captured, targetProcessID: 42, targetWindowID: 7)
+    let initialField = expandingInput.activity(uptime: 100.2, startUptime: 100, context: focused)
+    let grown = expandingInput.activity(uptime: 100.5, startUptime: 100, context: .init(
+        processID: 42, windowID: 7, semantics: .editable(CaptureRect(x: 200, y: 225, width: 180, height: 140))))
+    expect(initialField != nil && grown?.x == initialField?.x && grown?.y == initialField?.y,
+           "a keyboard-focused auto-growing message box must retain a stable visible anchor without a mouse click")
+    let shifted = expandingInput.activity(uptime: 100.53, startUptime: 100, context: .init(
+        processID: 42, windowID: 7, semantics: .editable(CaptureRect(x: 410, y: 240, width: 80, height: 60))))
+    expect(shifted.map { abs($0.x - 0.875) < 1e-9 } ?? false,
+           "the first keystroke in a newly focused input must bypass the previous field's repeat throttle")
+    expect(expandingInput.activity(uptime: 100.54, startUptime: 100, context: .init(
+        processID: 42, windowID: 7, semantics: .notEditable)) == nil,
+           "non-editable focus should clear cached input even inside the throttle interval")
+    expect(expandingInput.activity(uptime: 100.9, startUptime: 100, context: unavailable) == nil,
+           "unknown semantics after leaving an input must not resurrect its old anchor")
+
+    var bottomGrowingInput = TypingActivityResolver(captureRect: captured)
+    let initialBottom = bottomGrowingInput.activity(uptime: 100.2, startUptime: 100, context: focused)
+    let grownUp = bottomGrowingInput.activity(uptime: 100.5, startUptime: 100, context: .init(
+        processID: 42, windowID: 7, semantics: .editable(CaptureRect(x: 200, y: 165, width: 180, height: 140))))
+    expect(initialBottom != nil && grownUp?.y == initialBottom?.y,
+           "bottom-anchored message boxes expanding upward must not make the camera drift")
 
     if let initial, let encoded = try? JSONEncoder().encode(initial),
        let object = try? JSONSerialization.jsonObject(with: encoded) as? [String: Any] {

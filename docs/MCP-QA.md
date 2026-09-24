@@ -111,26 +111,27 @@ send '{"jsonrpc":"2.0","method":"notifications/initialized"}'
 
 ## 9. 通过 MCP 录制
 
-`zsh scripts/test.sh` 用脚本化的采集和手动时钟覆盖了录制流程（`Tests/FocusStudioAppRegression/RecordingSessionRegression.swift`）：倒计时、从第一帧算起的 `duration`、自动停止与“结束”/`stop_recording`/`wait_for_recording` 共用一次停止、选项只对本次录制有效、等待期间 `get_status` 照常返回、取消，以及用脚本化的声音询问走完仅本次允许、无声录制（录制器本来打开的声音也不录）、取消录制、60 秒无回答、期间关闭 AI 工具或应用内助手开始工作、询问期间在录制器里关掉声音、调用被取消、不需要询问的情况和询问超过调用时间时转为后台任务。真实的 ScreenCaptureKit 时序、声音询问面板和悬浮面板的外观只能手动验证。这一节会真的录屏，并在项目库里新建项目，验证完后可以删掉；需要已授予屏幕录制权限。
+`zsh scripts/test.sh` 用脚本化的采集和手动时钟覆盖了录制流程（`Tests/FocusStudioAppRegression/RecordingSessionRegression.swift`）：倒计时、从第一帧算起的 `duration`、暂停（暂停的时间不计入 `duration`，`get_status` / `wait_for_recording` 报告 `paused`，暂停中也能停止和丢弃）、自动停止与“结束”/`stop_recording`/`wait_for_recording` 共用一次停止、选项只对本次录制有效、等待期间 `get_status` 照常返回、取消，以及用脚本化的声音询问走完仅本次允许、无声录制（录制器本来打开的声音也不录）、取消录制、60 秒无回答、期间关闭 AI 工具或应用内助手开始工作、询问期间在录制器里关掉声音、调用被取消、不需要询问的情况和询问超过调用时间时转为后台任务。真实的 ScreenCaptureKit 时序（包括暂停和继续的分段）、声音询问面板和录制控制条的外观只能手动验证。这一节会真的录屏，并在项目库里新建项目，验证完后可以删掉；需要已授予屏幕录制权限。
 
 1. 让终端保持前台（Focus Studio 在后台，或被其他窗口挡住）。确认录制器里“系统音频”和“麦克风”都是关闭的（默认如此）。
 2. `send '{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"start_recording","arguments":{"source":"display","duration":8,"system_audio":true},"_meta":{"progressToken":"rec"}}}'`
 
    期望：
    - 倒计时之前先弹出声音询问 **Record sound? / 录制声音？**（Focus Studio 这时被切到前台）：扬声器图标，标题 ““Claude Code” wants to record system audio / “Claude Code”想录制系统音频”，下面一行 “Started by zsh / 启动它的程序：zsh”（与批准面板上的程序相同），写明要录制的来源、“Record without sound” 只录画面不录任何声音，以及“60 秒内没有回答就不会录制”；按钮 **Cancel recording / 取消录制**、**Record without sound / 无声录制**、**Allow for this recording / 仅本次允许**，没有蓝色的默认按钮。等待期间 `$QA/out` 里每 5 秒左右有一条递增的 `notifications/progress`（数值 0.01 以上，消息 “Waiting for the person to answer Focus Studio's sound prompt…”）。点 **仅本次允许**：面板关闭，键盘焦点回到终端，然后才开始倒计时。
-   - 每个显示器顶部中央出现悬浮倒计时条（3、2、1，样式与录制控制条相同，带“取消”），写着“Focus Studio is about to record”、“<客户端名> asked to record <来源>”和“Recording system audio”；键盘焦点仍在终端，菜单栏仍是终端的，主窗口没有被提到前面。倒计时结束后它被录制控制条取代，控制条在计时旁显示剩余时间（“Stops in 0:08”），逐秒减少，并有扬声器图标（悬停提示“Recording system audio”），“结束”和 ✕ 仍可用。
+   - 每个显示器底部居中的录制控制条显示倒计时（3、2、1，带“取消”）：✦ 旁是客户端名，悬停提示 “<客户端名> asked to record <来源>”，黄色扬声器图标的悬停提示是 “Recording system audio”；展开控制条（⌃）可以看到整句说明。键盘焦点仍在终端，菜单栏仍是终端的，主窗口没有被提到前面。倒计时结束后控制条保持收起的录制条，计时旁的计时器图标显示剩余录制时间（0:08），逐秒减少，并有扬声器图标；“暂停”、“结束”和 ✕ 可用。
    - 调用在倒计时结束、录制真正开始后就返回（点允许之后约 3–4 秒，而不是 11 秒），`structuredContent` 为 `state: "recording"`，带 `started_at`、`duration: 8`、比 `started_at` 晚 8 秒的 `auto_stop_at`，以及 `audio_consent: {asked: ["system_audio"], answer: "allowed"}`。
    - 录下的视频里看不到倒计时条和控制条（显示器录制排除 Focus Studio 的所有窗口，包括之后新开的）。
    - 录制器里的“系统音频”开关没有被打开：调用的选项只对这一次录制有效。
 3. 立即 `send` 一个 `wait_for_recording`（`"arguments":{"timeout_seconds":60}`，带 `_meta.progressToken`）。等待期间 `send` 一个 `get_status`：它马上返回，`recording.state` 为 `recording`，`remaining` 递减。再 `send` 一个 `list_recording_sources`：它返回来源列表，Focus Studio 的主窗口不会被提到终端前面。
 
-   期望：从录制真正开始算起约 8 秒后自动停止，和点“结束”一样保存项目并打开编辑器；`wait_for_recording` 返回 `state: "finished"` 和 `project_id`，等待期间有递增的 `notifications/progress`；项目时长约 8 秒，不含倒计时。
-4. 再 `start_recording`（不带 `duration`），录制中点控制条上的 ✕，然后 `send` 一个 `wait_for_recording`。期望：返回 `state: "idle"`，`last_recording.state` 为 `cancelled`；项目库里没有新项目。录制中先发 `wait_for_recording` 再点 ✕ 时，它返回 `state: "cancelled"`。
-5. 再 `start_recording`，倒计时期间点悬浮倒计时条上的“取消”。期望：调用返回 `isError`，说明倒计时被取消；没有开始录制。
+   期望：从录制真正开始算起录满约 8 秒后自动停止，和点“结束”一样保存项目并打开编辑器；`wait_for_recording` 返回 `state: "finished"` 和 `project_id`，等待期间有递增的 `notifications/progress`；项目时长约 8 秒，不含倒计时。
+4. 再 `start_recording`（不带 `duration`），录制中点控制条上的 ✕，再点 **Discard / 丢弃** 确认，然后 `send` 一个 `wait_for_recording`。期望：返回 `state: "idle"`，`last_recording.state` 为 `cancelled`；项目库里没有新项目，录下的文件在废纸篓里。录制中先发 `wait_for_recording` 再丢弃时，它返回 `state: "cancelled"`。
+   - 暂停：`start_recording` 带 `"duration":8`，录制约 3 秒后点控制条的“暂停”，等 10 秒。期间 `get_status` 返回 `recording.paused: true`，`elapsed` 和 `remaining` 不变；`wait_for_recording`（`timeout_seconds` 为 1）返回 `state: "recording"`、`paused: true`，没有 `auto_stop_at`。点“继续”后再录约 5 秒自动停止；项目时长约 8 秒，不含暂停的 10 秒。再录一次，暂停中 `stop_recording`，返回 `state: "finished"`。
+5. 再 `start_recording`，倒计时期间点控制条上的“取消”。期望：调用返回 `isError`，说明倒计时被取消；没有开始录制。
 6. 再 `start_recording`，倒计时结束前 `send '{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":<这次调用的 id>}}'`。期望：倒计时消失，没有开始录制，录制器显示出来。
-7. 把 Focus Studio 切到前台，再 `start_recording` 一次：只有主窗口里的倒计时，没有悬浮倒计时条；倒计时期间用 ⌘Tab 切回终端，悬浮倒计时条立刻出现。然后 `stop_recording`，返回 `state: "finished"`，主窗口不会在停止前被提到前面。
+7. 关闭 Focus Studio 的主窗口（应用继续运行），再 `start_recording` 一次：控制条照样在每个显示器底部显示倒计时和录制条。然后 `stop_recording`，返回 `state: "finished"`；主窗口不会在停止前被提到前面，停止后应用也不会被激活（键盘焦点仍在终端）。在控制条上自己点“结束”时，Focus Studio 才会被带到前面并显示编辑器；应用内 AI 助手的 `stop_recording`（确认之后）和它开始的录制到时自动停止，也会这样把编辑器带到前面。
 8. 声音询问的其他回答（每次都用 `"microphone":true`，第一次会出现 macOS 的麦克风授权，按需允许）：
-   - 点 **无声录制**：照常倒计时并录制，悬浮倒计时条和控制条上没有“正在录制麦克风”；结果里 `options.microphone` 为 `false`，`audio_consent.answer` 为 `"without_sound"`，文字说明对方选择了无声录制。录下的视频没有音轨（或只有静音）。之后 `stop_recording`。
+   - 点 **无声录制**：照常倒计时并录制，控制条上没有麦克风图标；结果里 `options.microphone` 为 `false`，`audio_consent.answer` 为 `"without_sound"`，文字说明对方选择了无声录制。录下的视频没有音轨（或只有静音）。之后 `stop_recording`。
    - 按 **Esc**（或点 **取消录制**、关闭面板）：没有倒计时，调用返回 `isError`，文字以 “The person did not allow sound” 开头，写明对方选了 Cancel recording。
    - 不理会面板 60 秒：面板自动关闭，调用返回 `isError`，说明 60 秒内没人回答；之后再点任何地方都不会开始录制。
    - 面板开着时在另一个应用里按回车：面板没有反应（没有默认按钮）。
@@ -155,4 +156,4 @@ send '{"jsonrpc":"2.0","method":"notifications/initialized"}'
 | 6 多副本 | | |
 | 7 Gatekeeper | | |
 | 8 Claude Code / Codex | | |
-| 9 MCP 录制：声音询问（写明启动它的程序；仅本次允许/无声录制（不录任何声音）/取消录制/Esc/60 秒无回答/无默认按钮/不需要时不问，询问期间关掉的声音不录，录制器设置不变，回答后焦点回到原应用）、悬浮倒计时不抢焦点、说明谁请求录制和录哪些声音、倒计时中切走也出现、录制中主窗口不被提前、录制开始即返回、剩余时间、duration 自动停止、wait_for_recording、各种取消、不进视频 | | |
+| 9 MCP 录制：声音询问（写明启动它的程序；仅本次允许/无声录制（不录任何声音）/取消录制/Esc/60 秒无回答/无默认按钮/不需要时不问，询问期间关掉的声音不录，录制器设置不变，回答后焦点回到原应用）、控制条倒计时不抢焦点、说明谁请求录制和录哪些声音、没有主窗口时也出现、录制中主窗口不被提前、录制开始即返回、剩余时间、暂停不计入 duration、duration 自动停止、wait_for_recording、各种取消、不进视频 | | |

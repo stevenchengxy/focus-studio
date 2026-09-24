@@ -157,13 +157,17 @@ enum AssistantControlRegression {
         defer { fixture.cleanup() }
         let clip = try await fixture.makeClip()
         let finisher = ScriptedFinisher(clip: clip)
+        // A scripted capture that starts at once, with no countdown wait: a
+        // stop needs a live recording (an idle Finish does nothing).
         let model = StudioModel(
             store: fixture.store,
             interactionTrackingAccess: { true },
             inputMonitoringAccess: { true },
-            finishCapture: { _ in try await finisher.finish() }
+            finishCapture: { _ in try await finisher.finish() },
+            startCapture: { _, _, _, _ in ProcessInfo.processInfo.systemUptime },
+            recordingClock: RecordingClock(now: { ProcessInfo.processInfo.systemUptime }, sleep: { _ in await Task.yield() })
         )
-        model.destination = .recording
+        try await startScriptedRecording(model)
         var returned: [String] = []
         let first = Task { await model.stopRecording(); returned.append("first") }
         try await waitUntil("The first stop did not reach the capture") { finisher.calls == 1 }
@@ -188,11 +192,24 @@ enum AssistantControlRegression {
         try expect(finisher.calls == 1 && !model.isShowingError && model.destination == .editor,
                    "A stop with nothing recording must change nothing")
 
-        // With a recording showing again, a stop runs afresh (and here fails cleanly).
+        // An idle Finish (the recording page left, no capture) does nothing.
         model.destination = .recording
+        await model.stopRecording()
+        try expect(finisher.calls == 1 && !model.isShowingError, "A stop with no live capture must do nothing")
+
+        // With a recording live again, a stop runs afresh (and here fails cleanly).
+        try await startScriptedRecording(model)
         await model.stopRecording()
         try expect(finisher.calls == 2 && model.isShowingError && model.destination == .recorder && model.projects.count == 1,
                    "A later stop must not be swallowed by the finished one")
+    }
+
+    /// Starts a recording of a test display through the model's seams: no
+    /// ScreenCaptureKit, and a countdown that does not wait.
+    private static func startScriptedRecording(_ model: StudioModel) async throws {
+        let target = CaptureTargetInfo(id: "display-1", kind: .display, nativeID: 1, title: "Test display", frame: CaptureRect(x: 0, y: 0, width: 64, height: 64))
+        try expect(model.beginRecordingCountdown(target: target, settings: model.recorderSettings, duration: nil) != nil, "The scripted countdown must start")
+        try await waitUntil("The scripted recording did not start") { model.recordingPhase == .recording }
     }
 
     private static func permissionFailureIsReported() async throws {
