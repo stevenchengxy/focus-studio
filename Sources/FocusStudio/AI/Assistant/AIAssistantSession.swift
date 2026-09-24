@@ -425,6 +425,7 @@ final class AIAssistantSession: ObservableObject {
         let music = audio.backgroundMusicPath.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent } ?? "none"
         lines.append("Zoom style: automatic zooms \(settings.autoZoomEnabled ? "on" : "off") | hold \(Self.seconds(settings.zoomHold)) s | ease in \(Self.seconds(settings.zoomEaseIn)) s | ease out \(Self.seconds(settings.zoomEaseOut)) s | chain gap \(Self.seconds(settings.resolvedZoomChainGap)) s")
         lines.append("Audio: music \(music) (volume \(Self.seconds(audio.backgroundMusicVolume))) | click sound \(audio.clickSoundEnabled ? "on" : "off") | zoom whoosh \(audio.zoomTransitionSoundEnabled ? "on" : "off")")
+        lines.append("Export: \(settings.exportWidth) px wide | \(settings.frameRate) fps")
         let zooms = AIToolSupport.orderedZooms(project)
         if !zooms.isEmpty {
             let listed = zooms.prefix(Self.maximumListedZooms).map { "#\($0.index) \(AIToolSupport.zoomLine($0.segment))" }

@@ -1,7 +1,8 @@
 #!/bin/zsh
 # Offline coverage for the AI assistant: protocol parsing, the agent loop with
-# a scripted model, the confirmation gate, tool validation, the app-control
-# tools against a fake app (record/stop/library/zooms/music/export paths),
+# a scripted model, the confirmation gate, tool validation, dropped and
+# interleaved edits, the app-control tools against a fake app
+# (record/stop/library/zooms/music/export paths and the export guard),
 # AVFoundation clip assembly and the Ark client against a local Python fixture server.
 set -euo pipefail
 SCRIPT_DIR="${0:A:h}"

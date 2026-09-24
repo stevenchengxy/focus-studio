@@ -5,8 +5,9 @@ import Foundation
 
 /// Offline coverage for the AI assistant module: the strict JSON protocol,
 /// the agent loop driven by a scripted model, the confirmation gate for paid
-/// tools, tool argument validation, the app-control tools against a fake app
-/// (record → stop → library → zooms → music → export paths), AVFoundation clip
+/// tools, tool argument validation, write safety (dropped and interleaved
+/// edits), the app-control tools against a fake app (record → stop → library →
+/// zooms → music → export paths and the export guard), AVFoundation clip
 /// assembly and the Ark client (request bodies plus a generate → poll →
 /// download round trip against the local Python fixture in fake-ark.py).
 @main
@@ -25,15 +26,19 @@ struct AIAssistantTests {
         step("model resolver"); try await modelResolver(root: root)
         step("update_settings"); try await updateSettingsValidation(root: root)
         step("set_chapters"); try await setChaptersSanitization(root: root)
+        step("dropped writes"); try await droppedWrites(root: root)
+        step("interleaved edits"); try await interleavedEdits(root: root)
         step("app control: recording"); try await recordingControl(root: root)
+        step("app control: permission, main display, joined stops"); try await recordingEdgeCases(root: root)
         step("app control: library"); try await libraryControl(root: root)
         step("zoom tools"); try await zoomTools(root: root)
         step("audio tools"); try await audioTools(root: root)
         step("export paths"); try exportPaths(root: root)
+        step("export guard"); try await exportGuard(root: root)
         step("assemble_video"); try await assembleVideo(root: root)
         step("Ark request bodies"); try arkRequestBodies()
         step("Ark fixture round trip"); try await arkFixtureRoundTrip(root: root)
-        print("AIAssistantTests: PASS (protocol parsing, scripted agent loop, confirmation gate, stop, model resolver, update_settings, set_chapters, app control (sources/start/stop/library), zoom tools, audio tools, export paths, assemble_video, Ark request bodies, Ark fixture round trip incl. tools)")
+        print("AIAssistantTests: PASS (protocol parsing, scripted agent loop, confirmation gate, stop, model resolver, update_settings incl. export width/frame rate, set_chapters, dropped writes, interleaved edits, app control (sources/start/stop/library, permission errors, main display, joined stops), zoom tools, audio tools, export paths, export guard, assemble_video, Ark request bodies, Ark fixture round trip incl. tools)")
     }
 
     // MARK: - Helpers
@@ -70,6 +75,11 @@ struct AIAssistantTests {
     @MainActor
     final class ProjectBox {
         var project: RecordingProject?
+        /// Edits that reached the project; an atomic tool call makes exactly one.
+        var writeCount = 0
+        /// Runs once, right after the next read and before the tool writes: an
+        /// edit from a parallel call or the user, or the editor closing.
+        var afterNextRead: (() -> Void)?
         init(_ project: RecordingProject?) { self.project = project }
     }
 
@@ -78,11 +88,20 @@ struct AIAssistantTests {
         AIAssistantContext(
             assetsDirectory: root.appendingPathComponent("assets", isDirectory: true),
             uiLanguage: "en",
-            readProject: { box.project },
+            readProject: {
+                let snapshot = box.project
+                if let interleaved = box.afterNextRead {
+                    box.afterNextRead = nil
+                    interleaved()
+                }
+                return snapshot
+            },
             updateProject: { change in
-                guard var project = box.project else { return }
-                change(&project)
+                // Like the app: with no project open the edit is refused, never dropped.
+                guard var project = box.project else { throw AIToolError.noProject }
+                try change(&project)
                 box.project = project
+                box.writeCount += 1
             },
             arkAPIKey: { key },
             arkBaseURL: arkBaseURL
@@ -353,6 +372,37 @@ struct AIAssistantTests {
         _ = try await tool.run(arguments: ["backgroundColor": "6d5dfb", "backgroundStyle": "solid", "productDescription": "  A budgeting app  "], context: context, progress: { _ in })
         check(box.project!.settings.backgroundColor == "#6D5DFB" && box.project!.settings.backgroundStyle == .solid && box.project!.settings.productDescription == "A budgeting app", "hex normalisation, solid style and trimmed description")
 
+        // Export width and frame rate take exactly the editor's choices.
+        let properties = tool.parametersSchema["properties"] as? [String: Any]
+        check((properties?["exportWidth"] as? [String: Any])?["enum"] as? [Int] == [1_280, 1_920, 2_560, 3_840] && (properties?["frameRate"] as? [String: Any])?["enum"] as? [Int] == [24, 30, 60], "the schema lists the export choices")
+        let exportResult = try await tool.run(arguments: ["exportWidth": 3_840, "frameRate": "60 fps"], context: context, progress: { _ in })
+        check(box.project!.settings.exportWidth == 3_840 && box.project!.settings.frameRate == 60 && exportResult.text.contains("exportWidth = 3840") && exportResult.text.contains("frameRate = 60"), "export width and frame rate apply: \(exportResult.text)")
+        _ = try await tool.run(arguments: ["exportWidth": "1920", "frameRate": 24], context: context, progress: { _ in })
+        check(box.project!.settings.exportWidth == 1_920 && box.project!.settings.frameRate == 24, "numeric strings are accepted")
+        let exportBefore = box.project!.settings
+        for (name, arguments) in [
+            ("width not offered", ["exportWidth": 1_080] as [String: Any]),
+            ("fractional width", ["exportWidth": 1_920.5]),
+            ("width word", ["exportWidth": "4k"]),
+            ("frame rate not offered", ["frameRate": 25]),
+            ("frame rate word", ["frameRate": "fast"]),
+            ("valid key with a bad one", ["padding": 20, "frameRate": 120]),
+            // Beyond Int's range: rejected, not a crash converting it.
+            ("huge width", ["exportWidth": 1e19]),
+            ("huge frame rate text", ["frameRate": "1e19"]),
+            ("huge negative width", ["exportWidth": -1e300]),
+        ] {
+            await expectToolError(name, { _ = try await tool.run(arguments: arguments, context: context, progress: { _ in }) }) {
+                if case let .invalidArgument(message) = $0 { return message.contains("must be one of") } else { return false }
+            }
+        }
+        check(box.project!.settings == exportBefore, "rejected export values change nothing")
+
+        // Every integer argument (frame_rate, zoom index, durations) goes through int(); huge values are unparsable, not a crash.
+        check(AIToolArguments(["n": 1e19]).int("n") == nil && AIToolArguments(["n": "-1e300"]).int("n") == nil, "out-of-range integers are unparsable")
+        check(AIToolArguments(["n": 41.6]).int("n") == 42 && AIToolArguments(["n": "30 fps"]).int("n") == 30, "in-range integers still round and parse text")
+        check(UpdateSettingsTool.number(1e19) == "10000000000000000000.00" && UpdateSettingsTool.number(12) == "12", "change notes format huge whole numbers without trapping")
+
         box.project = nil
         await expectThrows("no project") { _ = try await tool.run(arguments: ["padding": 10], context: context, progress: { _ in }) }
     }
@@ -381,6 +431,113 @@ struct AIAssistantTests {
         await expectThrows("nothing valid") { _ = try await tool.run(arguments: ["chapters": [["start": 3, "end": 3.1, "title": "Blink"]]], context: context, progress: { _ in }) }
         await expectThrows("missing array") { _ = try await tool.run(arguments: ["chapters": "nope"], context: context, progress: { _ in }) }
         check(box.project!.chapters?.count == 3, "failed calls change nothing")
+    }
+
+    // MARK: - Write safety
+
+    /// Every editing tool, with arguments that succeed on `makeProject`.
+    static func editingCalls(root: URL) throws -> [(name: String, tool: any AIAssistantTool, arguments: [String: Any])] {
+        let image = root.appendingPathComponent("dropped-background.jpg")
+        try Pixels.writeJPEG(width: 32, height: 18, color: (0.2, 0.6, 0.4), to: image)
+        let music = root.appendingPathComponent("dropped-music.mp3")
+        try Data([0]).write(to: music)
+        return [
+            ("add_zoom", AddZoomTool(), ["start": 1, "end": 2, "x": 0.5, "y": 0.5]),
+            ("remove_zoom", RemoveZoomTool(), ["index": 1]),
+            ("remove_zoom all", RemoveZoomTool(), ["index": "all"]),
+            ("set_zoom_style", SetZoomStyleTool(), ["zoomHold": 1.5, "zoomScale": 2]),
+            ("update_settings", UpdateSettingsTool(), ["padding": 10]),
+            ("set_chapters", SetChaptersTool(), ["chapters": [["start": 0, "end": 2, "title": "Intro"]]]),
+            ("set_background_image", SetBackgroundImageTool(), ["path": image.path]),
+            ("set_background_music", SetBackgroundMusicTool(), ["track": music.path]),
+            ("set_background_music none", SetBackgroundMusicTool(), ["track": "none"]),
+            ("set_sound_effects", SetSoundEffectsTool(), ["click": true]),
+        ]
+    }
+
+    /// An edit the app does not take must come back as an error, never as success.
+    @MainActor
+    static func droppedWrites(root: URL) async throws {
+        let calls = try editingCalls(root: root)
+        let box = ProjectBox(nil)
+        let context = makeContext(root: root, box: box)
+        for call in calls {
+            // The editor closes between the tool's read and its write.
+            box.project = makeProject(sourceVideoPath: "/nonexistent.mp4", duration: 12)
+            box.writeCount = 0
+            box.afterNextRead = { box.project = nil }
+            await expectToolError("\(call.name) after the editor closed", { _ = try await call.tool.run(arguments: call.arguments, context: context, progress: { _ in }) }) { $0 == .noProject }
+            check(box.writeCount == 0, "\(call.name): nothing was written")
+
+            // Another project was opened in between: the edit must not land in it.
+            let original = makeProject(sourceVideoPath: "/nonexistent.mp4", duration: 12)
+            let other = makeProject(sourceVideoPath: "/other.mp4", duration: 12)
+            box.project = original
+            box.afterNextRead = { box.project = other }
+            await expectToolError("\(call.name) after another project opened", { _ = try await call.tool.run(arguments: call.arguments, context: context, progress: { _ in }) }) {
+                if case let .failed(message) = $0 { return message.contains("Another project was opened") } else { return false }
+            }
+            check(box.project == other && box.writeCount == 0, "\(call.name): the other project is untouched")
+        }
+
+        // An integrator that silently skips the write is caught as well.
+        let project = makeProject(sourceVideoPath: "/nonexistent.mp4", duration: 12)
+        let skipping = AIAssistantContext(
+            assetsDirectory: root.appendingPathComponent("assets", isDirectory: true),
+            uiLanguage: "en",
+            readProject: { project },
+            updateProject: { _ in },
+            arkAPIKey: { nil }
+        )
+        for call in calls {
+            await expectToolError("\(call.name) with a skipped write", { _ = try await call.tool.run(arguments: call.arguments, context: skipping, progress: { _ in }) }) {
+                if case let .failed(message) = $0 { return message.contains("did not apply") } else { return false }
+            }
+        }
+    }
+
+    /// Parallel calls and the user's own edits land between a tool's read and
+    /// its write; each tool writes once and only the keys it was asked to change.
+    @MainActor
+    static func interleavedEdits(root: URL) async throws {
+        let box = ProjectBox(makeProject(sourceVideoPath: "/nonexistent.mp4", duration: 12))
+        let context = makeContext(root: root, box: box)
+
+        // update_settings(padding) while another edit sets zoomHold.
+        box.writeCount = 0
+        box.afterNextRead = { box.project!.settings.zoomHold = 1.7 }
+        _ = try await UpdateSettingsTool().run(arguments: ["padding": 100, "captionPosition": "top"], context: context, progress: { _ in })
+        check(box.project!.settings.padding == 100 && box.project!.settings.resolvedCaptionStyle.position == .top && box.project!.settings.zoomHold == 1.7, "both interleaved edits survive update_settings: \(box.project!.settings)")
+        check(box.writeCount == 1, "update_settings writes once")
+
+        // set_zoom_style(zoomScale + zoomHold) while another edit sets padding: one write, both survive.
+        box.writeCount = 0
+        box.afterNextRead = { box.project!.settings.padding = 40 }
+        _ = try await SetZoomStyleTool().run(arguments: ["zoomScale": 2.4, "zoomHold": 1.2], context: context, progress: { _ in })
+        check(box.project!.settings.zoomScale == 2.4 && box.project!.settings.zoomHold == 1.2 && box.project!.settings.padding == 40, "both interleaved edits survive set_zoom_style: \(box.project!.settings)")
+        check(box.writeCount == 1, "set_zoom_style writes its keys in one step (was two)")
+
+        // set_chapters(append) while another call appends a chapter.
+        box.project!.chapters = [DemoChapter(start: 0, end: 3, title: "First")]
+        box.afterNextRead = { box.project!.chapters!.append(DemoChapter(start: 4, end: 6, title: "Parallel")) }
+        let appended = try await SetChaptersTool().run(arguments: ["chapters": [["start": 8, "end": 11, "title": "Mine"]], "append": true], context: context, progress: { _ in })
+        check(box.project!.chapters?.map(\.title) == ["First", "Parallel", "Mine"] && !appended.text.contains("dropped"), "append merges with the chapters present at write time: \(box.project!.chapters?.map(\.title) ?? [])")
+
+        // add_zoom while another zoom is added.
+        let zoomsBefore = box.project!.zoomSegments.count
+        box.afterNextRead = { box.project!.zoomSegments.append(ZoomSegment(start: 5, end: 6, targetX: 0.3, targetY: 0.3, scale: 1.5, kind: .manual)) }
+        let added = try await AddZoomTool().run(arguments: ["start": 9, "end": 10, "x": 0.5, "y": 0.5], context: context, progress: { _ in })
+        check(box.project!.zoomSegments.count == zoomsBefore + 2 && added.text.contains("now has \(zoomsBefore + 2) zooms"), "both zooms are kept: \(added.text)")
+
+        // Two real tool calls at once, on different keys, many times over.
+        for round in 0..<12 {
+            async let padding = UpdateSettingsTool().run(arguments: ["padding": 20 + round], context: context, progress: { _ in })
+            async let hold = SetZoomStyleTool().run(arguments: ["zoomHold": 0.5 + Double(round) * 0.1], context: context, progress: { _ in })
+            async let music = SetSoundEffectsTool().run(arguments: ["click_volume": Double(round) / 20], context: context, progress: { _ in })
+            _ = try await (padding, hold, music)
+            let settings = box.project!.settings
+            check(settings.padding == Double(20 + round) && abs(settings.zoomHold - (0.5 + Double(round) * 0.1)) < 0.000_1 && abs(settings.resolvedProductDemoAudio.clickSoundVolume - Double(round) / 20) < 0.000_1, "round \(round): concurrent edits to different keys all survive: \(settings)")
+        }
     }
 
     // MARK: - Model resolver
@@ -443,6 +600,9 @@ struct AIAssistantTests {
             case succeed(after: TimeInterval)
             case fail(String, after: TimeInterval)
             case cancel(after: TimeInterval)
+            /// Like StudioModel when ScreenCaptureKit refuses: back on the recorder
+            /// (`.idle`) with the permission notice as the reported error.
+            case permissionDenied(String, after: TimeInterval)
             case hang
         }
 
@@ -462,6 +622,11 @@ struct AIAssistantTests {
         var startedOptions: [AIRecordingOptions] = []
         var startBehaviour: StartBehaviour = .succeed(after: 0.05)
         var stopBehaviour: StopBehaviour = .succeed(after: 0.05)
+        /// Times the capture was actually finalized (joined stops do not count).
+        var finalizeCount = 0
+        /// Times anything asked the app to stop, joined or not.
+        var stopRequests = 0
+        private var stopInFlight: Task<Void, Never>?
         var projects: [RecordingProject] = []
         var openID: UUID?
         var closeCount = 0
@@ -495,12 +660,37 @@ struct AIAssistantTests {
                     self.lastReportedError = "The selected screen or window is no longer available."
                     self.recordingPhase = .idle
                 }
+            case let .permissionDenied(message, delay):
+                Task {
+                    try? await Task.sleep(for: .seconds(delay))
+                    self.lastReportedError = message
+                    self.recordingPhase = .idle
+                }
             case .hang:
                 break
             }
         }
 
+        var isFinishingRecording: Bool { stopInFlight != nil }
+
+        /// Joins a stop in flight, and ignores one with nothing recording, like StudioModel does.
         func stopRecording() async {
+            stopRequests += 1
+            if let stopInFlight {
+                await stopInFlight.value
+                return
+            }
+            guard recordingPhase == .recording else { return }
+            let task = Task {
+                await self.finalize()
+                self.stopInFlight = nil
+            }
+            stopInFlight = task
+            await task.value
+        }
+
+        private func finalize() async {
+            finalizeCount += 1
             recordingPhase = .stopping
             switch stopBehaviour {
             case let .succeed(delay):
@@ -516,7 +706,8 @@ struct AIAssistantTests {
                 lastReportedError = message
                 recordingPhase = .idle
             case .hang:
-                try? await Task.sleep(for: .seconds(1_000))
+                // Until the test gives up on it and resets the phase.
+                while recordingPhase == .stopping { try? await Task.sleep(for: .milliseconds(10)) }
             }
         }
 
@@ -666,6 +857,78 @@ struct AIAssistantTests {
         await expectToolError("refresh failure surfaces", { _ = try await ListRecordingSourcesTool().run(arguments: [:], context: context, progress: { _ in }) }) {
             if case let .failed(message) = $0 { return message.contains("Screen Recording") } else { return false }
         }
+    }
+
+    @MainActor
+    static func recordingEdgeCases(root: URL) async throws {
+        let (context, app, _) = makeFakeApp(root: root)
+        let start = StartRecordingTool(startTimeout: 2)
+        let stop = StopRecordingTool(stopTimeout: 3)
+
+        // A refused Screen Recording permission is reported as such, not as a cancelled countdown.
+        let permission = "Screen Recording access is not active for this copy of Focus Studio. Enable it in System Settings › Privacy & Security › Screen Recording."
+        app.startBehaviour = .permissionDenied(permission, after: 0.05)
+        await expectToolError("permission refused", { _ = try await start.run(arguments: ["source": "display"], context: context, progress: { _ in }) }) {
+            if case let .failed(message) = $0 { return message.contains("could not start") && message.contains("Screen Recording access is not active") && !message.contains("cancelled") } else { return false }
+        }
+        app.startBehaviour = .succeed(after: 0.02)
+
+        // "display" is the main display wherever the system lists it; numbers count from it.
+        let displays = [
+            AIRecordingSource(id: "display-5", kind: .display, title: "Studio Display", width: 5_120, height: 2_880),
+            AIRecordingSource(id: "display-1", kind: .display, title: "Built-in Retina Display", width: 1_512, height: 982, isMainDisplay: true),
+            AIRecordingSource(id: "display-9", kind: .display, title: "Sidecar", width: 1_366, height: 1_024),
+            AIRecordingSource(id: "win-1", kind: .window, appName: "Safari", title: "Docs", width: 1_440, height: 900),
+        ]
+        func resolved(_ query: String) -> String {
+            do { return try StartRecordingTool.resolveSource(query, in: displays).id } catch { return "error: \(error)" }
+        }
+        for query in ["display", "main display", "screen", "屏幕", "display 1"] {
+            check(resolved(query) == "display-1", "\"\(query)\" is the main display: \(resolved(query))")
+        }
+        check(resolved("display 2") == "display-5" && resolved("screen 3") == "display-9", "other displays keep the system order after the main one")
+        check(resolved("display 4").contains("3 displays"), "a missing number names the count: \(resolved("display 4"))")
+        app.sources = displays
+        let listed = try await ListRecordingSourcesTool().run(arguments: [:], context: context, progress: { _ in })
+        let lines = listed.text.split(separator: "\n").map(String.init)
+        check(lines.count > 1 && lines[1] == "- id display-1 · display · Built-in Retina Display · 1512×982 · main" && lines[2].contains("display-5"), "the main display is listed first and marked: \(listed.text)")
+        _ = try await start.run(arguments: ["source": "display"], context: context, progress: { _ in })
+        check(app.startedSourceIDs.last == "display-1", "start_recording records the main display: \(app.startedSourceIDs)")
+
+        // Only a display with the main display's id is the main one; a window number can collide.
+        let frame = CaptureRect(x: 0, y: 0, width: 1_440, height: 900)
+        check(AIRecordingSource(target: CaptureTargetInfo(id: "display-7", kind: .display, nativeID: 7, title: "Main", frame: frame), mainDisplayID: 7).isMainDisplay, "the main display is flagged")
+        check(!AIRecordingSource(target: CaptureTargetInfo(id: "display-8", kind: .display, nativeID: 8, title: "Other", frame: frame), mainDisplayID: 7).isMainDisplay, "another display is not")
+        check(!AIRecordingSource(target: CaptureTargetInfo(id: "window-7", kind: .window, nativeID: 7, title: "Window", frame: frame), mainDisplayID: 7).isMainDisplay, "a window with the same number is not")
+
+        // The Finish button and two stop_recording calls at once: one finalization, one project, the same answer.
+        app.stopBehaviour = .succeed(after: 0.3)
+        let finalized = app.finalizeCount
+        let projectCount = app.projects.count
+        let requests = app.stopRequests
+        let finishButton = Task { await app.stopRecording() }
+        try await waitUntil("the button's stop to begin") { app.recordingPhase == .stopping }
+        async let first = stop.run(arguments: [:], context: context, progress: { _ in })
+        async let second = stop.run(arguments: [:], context: context, progress: { _ in })
+        let (a, b) = try await (first, second)
+        await finishButton.value
+        check(app.finalizeCount == finalized + 1 && app.projects.count == projectCount + 1, "the capture was finalized once: \(app.finalizeCount - finalized) finalizations, \(app.projects.count - projectCount) projects")
+        check(a.text == b.text && a.text.contains(app.projects[0].id.uuidString), "both calls report the one new project: \(a.text) / \(b.text)")
+        // Joined calls only wait: a request landing after the stop finished
+        // would otherwise finalize a capture that no longer exists.
+        check(app.stopRequests == requests + 1, "joined calls never ask the app to stop again: \(app.stopRequests - requests) requests")
+        await expectToolError("nothing left to stop", { _ = try await stop.run(arguments: [:], context: context, progress: { _ in }) }) {
+            if case let .failed(message) = $0 { return message.contains("No recording is in progress") } else { return false }
+        }
+
+        // `.stopping` without a stop of the app's own is a cancel winding down: refused, nothing finalized.
+        app.recordingPhase = .stopping
+        let beforeCancel = (app.finalizeCount, app.stopRequests, app.projects.count)
+        await expectToolError("stop during a cancel", { _ = try await stop.run(arguments: [:], context: context, progress: { _ in }) }) {
+            if case let .failed(message) = $0 { return message.contains("No recording is in progress (state: stopping)") } else { return false }
+        }
+        check((app.finalizeCount, app.stopRequests, app.projects.count) == beforeCancel, "a cancel in progress is never finalized as a recording")
+        app.recordingPhase = .idle
     }
 
     @MainActor
@@ -842,6 +1105,115 @@ struct AIAssistantTests {
         try "taken".write(to: assets.appendingPathComponent("export-" + Self.stampString(stamp) + ".mp4"), atomically: true, encoding: .utf8)
         check(resolvedPath(nil).hasSuffix("-2.mp4"), "an existing file is never clobbered")
         check(ExportDemoTool().name == "export_demo" && ExportProjectTool().name == "export_project" && ExportDemoTool().parametersSchema.keys == ExportProjectTool().parametersSchema.keys, "export_demo stays as an alias")
+    }
+
+    /// export_project never writes over the project's own files or into the
+    /// library, and replaces an existing file only when asked to.
+    @MainActor
+    static func exportGuard(root: URL) async throws {
+        let fileManager = FileManager.default
+        let library = root.appendingPathComponent("guard-library", isDirectory: true)
+        var project = makeProject(sourceVideoPath: "", duration: 5)
+        let folder = library.appendingPathComponent(project.id.uuidString, isDirectory: true)
+        let otherFolder = library.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let outside = root.appendingPathComponent("guard-outside", isDirectory: true)
+        for directory in [folder, otherFolder.appendingPathComponent("ai", isDirectory: true), outside] {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        let source = folder.appendingPathComponent("raw.mp4")
+        let theme = outside.appendingPathComponent("theme.mp4")
+        for file in [source, theme, folder.appendingPathComponent("project.json")] {
+            try Data("keep \(file.lastPathComponent)".utf8).write(to: file)
+        }
+        project.sourceVideoPath = source.path
+        project.settings.productDemoAudio = ProductDemoAudioSettings(backgroundMusicPath: theme.path)
+        var context = makeContext(root: root, box: ProjectBox(project))
+        context.projectsDirectory = library
+        context.assetsDirectory = folder.appendingPathComponent("ai", isDirectory: true)
+        let stamp = Date(timeIntervalSince1970: 1_800_000_000)
+        func resolve(_ path: String?, overwrite: Bool = false) throws -> URL {
+            try ExportProjectTool.resolveOutputURL(path: path, context: context, date: stamp, project: project, overwrite: overwrite)
+        }
+        func refusal(_ path: String?, overwrite: Bool = false) -> String {
+            do { return "accepted \(try resolve(path, overwrite: overwrite).path)" } catch let error as AIToolError {
+                if case let .invalidArgument(message) = error { return message }
+                return "\(error)"
+            } catch { return "\(error)" }
+        }
+
+        // The recording and the media it uses, under any spelling, even with overwrite.
+        let link = root.appendingPathComponent("guard-link")
+        try fileManager.createSymbolicLink(at: link, withDestinationURL: folder)
+        var sourceSpellings = [source.path, link.appendingPathComponent("raw.mp4").path, folder.path + "/./ai/../raw.mp4", folder.appendingPathComponent("raw").path]
+        if source.path.hasPrefix("/var/") { sourceSpellings.append("/private" + source.path) }
+        // The same file through the Data volume's firmlink, which realpath leaves as it is.
+        func onDataVolume(_ url: URL) -> String {
+            "/System/Volumes/Data" + (url.path.hasPrefix("/var/") ? "/private" + url.path : url.path)
+        }
+        let dataVolume = fileManager.fileExists(atPath: onDataVolume(source))
+        if dataVolume { sourceSpellings.append(onDataVolume(source)) }
+        // On a case-insensitive volume (the APFS default) RAW.MP4 is the same file.
+        let shouted = folder.appendingPathComponent("RAW.MP4").path
+        if fileManager.fileExists(atPath: shouted) { sourceSpellings.append(shouted) }
+        for path in sourceSpellings {
+            let message = refusal(path, overwrite: true)
+            check(message.lowercased().contains("raw.mp4") && message.contains("this project uses"), "the source recording is refused as \(path): \(message)")
+        }
+        for path in [theme.path] + (dataVolume ? [onDataVolume(theme)] : []) {
+            check(refusal(path, overwrite: true).contains("this project uses"), "a referenced media file outside the library is refused as \(path): \(refusal(path, overwrite: true))")
+        }
+        let sourceBytes = try Data(contentsOf: source)
+        check(sourceBytes == Data("keep raw.mp4".utf8), "the source is untouched")
+
+        // Nothing else inside the library, except this project's ai folder.
+        var libraryPaths = [folder.appendingPathComponent("demo.mp4").path, folder.appendingPathComponent("project").path,
+                            otherFolder.appendingPathComponent("ai/demo.mp4").path, library.appendingPathComponent("Incoming/demo.mp4").path,
+                            library.appendingPathComponent("demo.mp4").path, link.appendingPathComponent("demo.mp4").path]
+        if dataVolume {
+            libraryPaths += [onDataVolume(folder.appendingPathComponent("demo.mp4")), onDataVolume(otherFolder.appendingPathComponent("ai/demo.mp4"))]
+        }
+        for path in libraryPaths {
+            let message = refusal(path)
+            check(message.contains("inside the Focus Studio library") && message.contains(context.assetsDirectory.path), "\(path) is refused with a way out: \(message)")
+        }
+        // Another project's recording is library content too, even with overwrite.
+        let otherSource = otherFolder.appendingPathComponent("raw.mp4")
+        try Data("keep other raw.mp4".utf8).write(to: otherSource)
+        for path in [otherSource.path] + (dataVolume ? [onDataVolume(otherSource)] : []) {
+            check(refusal(path, overwrite: true).contains("inside the Focus Studio library"), "another project's recording is refused as \(path): \(refusal(path, overwrite: true))")
+        }
+        let otherBytes = try Data(contentsOf: otherSource)
+        check(otherBytes == Data("keep other raw.mp4".utf8), "the other recording is untouched")
+        for folderPath in [folder.path, library.appendingPathComponent("new-folder").path + "/"] {
+            check(refusal(folderPath).contains("inside the Focus Studio library"), "folder \(folderPath) is refused")
+        }
+        check(!fileManager.fileExists(atPath: library.appendingPathComponent("new-folder").path), "a refused folder is not created")
+        let inAIFolder = try resolve(folder.appendingPathComponent("ai/final.mp4").path)
+        check(inAIFolder.path == folder.appendingPathComponent("ai/final.mp4").path, "the project's ai folder is allowed")
+        let bareName = try resolve("final")
+        check(bareName.path == folder.appendingPathComponent("ai/final.mp4").path, "a bare name lands in the ai folder")
+        let fresh = try resolve(nil)
+        check(fresh.deletingLastPathComponent().path == context.assetsDirectory.path && fresh.lastPathComponent.hasPrefix("export-"), "the default path still works: \(fresh.path)")
+
+        // An existing file is replaced only with overwrite: true.
+        let existing = outside.appendingPathComponent("existing.mp4")
+        try Data("old export".utf8).write(to: existing)
+        let message = refusal(existing.path)
+        check(message.contains("already exists") && message.contains("overwrite: true"), "an existing file needs overwrite: \(message)")
+        let overwritten = try resolve(existing.path, overwrite: true)
+        check(overwritten.path == existing.path, "overwrite: true allows it")
+        let newOutside = try resolve(outside.appendingPathComponent("new.mp4").path)
+        check(newOutside.path == outside.appendingPathComponent("new.mp4").path, "a new file outside the library is fine")
+        await expectToolError("bad overwrite", { _ = try await ExportProjectTool().run(arguments: ["overwrite": "maybe"], context: context, progress: { _ in }) }) {
+            if case let .invalidArgument(message) = $0 { return message.contains("overwrite") } else { return false }
+        }
+        check(ExportProjectTool().parametersSchema.description.contains("overwrite") && ExportDemoTool().parametersSchema.keys == ExportProjectTool().parametersSchema.keys, "the schema offers overwrite on both names")
+
+        // Without a known library root the project's own files are still protected.
+        context.projectsDirectory = nil
+        check(refusal(source.path, overwrite: true).contains("this project uses"), "the source is refused without a library root")
+        let unguarded = try resolve(folder.appendingPathComponent("demo.mp4").path)
+        check(unguarded.lastPathComponent == "demo.mp4", "without a library root other paths are allowed")
     }
 
     static func stampString(_ date: Date) -> String {
@@ -1093,8 +1465,22 @@ struct AIAssistantTests {
         let exported = try await ExportDemoTool().run(arguments: [:], context: context, progress: { _ in })
         let exportDuration = try await AVURLAsset(url: exported.attachments[0]).load(.duration).seconds
         check(exported.attachments[0].lastPathComponent.hasPrefix("export-") && abs(exportDuration - 1.5) < 0.15, "export_demo (alias) renders the recording into export-<ts>.mp4: \(exported.text)")
+        _ = try await UpdateSettingsTool().run(arguments: ["exportWidth": 1_280, "frameRate": 24], context: context, progress: { _ in })
         let customExport = try await ExportProjectTool().run(arguments: ["path": fixtures.appendingPathComponent("final/demo").path], context: context, progress: { _ in })
         check(customExport.attachments[0].path == fixtures.appendingPathComponent("final/demo.mp4").path && FileManager.default.fileExists(atPath: customExport.attachments[0].path), "export_project writes to the requested path with .mp4: \(customExport.text)")
+        let exportedTrack = try await AVURLAsset(url: customExport.attachments[0]).loadTracks(withMediaType: .video).first!
+        let (exportedSize, exportedFrameRate) = try await exportedTrack.load(.naturalSize, .nominalFrameRate)
+        check(exportedSize.width == 1_280 && abs(Double(exportedFrameRate) - 24) < 1, "update_settings export width and frame rate reach the export: \(exportedSize), \(exportedFrameRate) fps")
+        await expectToolError("existing export without overwrite", { _ = try await ExportProjectTool().run(arguments: ["path": customExport.attachments[0].path], context: context, progress: { _ in }) }) {
+            if case let .invalidArgument(message) = $0 { return message.contains("overwrite: true") } else { return false }
+        }
+        let replaced = try await ExportProjectTool().run(arguments: ["path": customExport.attachments[0].path, "overwrite": true], context: context, progress: { _ in })
+        check(replaced.attachments == customExport.attachments, "overwrite: true replaces the export: \(replaced.text)")
+        await expectToolError("export over the recording", { _ = try await ExportProjectTool().run(arguments: ["path": recording.path, "overwrite": true], context: context, progress: { _ in }) }) {
+            if case let .invalidArgument(message) = $0 { return message.contains("this project uses") } else { return false }
+        }
+        let recordingDuration = try await AVURLAsset(url: recording).load(.duration).seconds
+        check(abs(recordingDuration - 1.5) < 0.1, "the recording survives an export aimed at it: \(recordingDuration)")
 
         // The session drives a real paid tool through the confirmation card.
         let provider = ScriptedCompletion([

@@ -75,7 +75,14 @@ final class StudioModel: ObservableObject {
     private let store: ProjectStore
     private let interactionTrackingAccess: @MainActor () -> Bool
     private let inputMonitoringAccess: @MainActor () -> Bool
-    private var didBootstrap = false
+    /// Finalizes the capture when a recording is stopped. The engine by default;
+    /// regression tests substitute a scripted result to drive a stop without
+    /// ScreenCaptureKit.
+    private let finishCapture: @MainActor (CaptureEngine) async throws -> RecordingResult
+    /// The one launch pass; every `bootstrap()` caller awaits it.
+    private var bootstrapTask: Task<Void, Never>?
+    /// The stop in flight, which a second Finish request joins.
+    private var stopRecordingTask: Task<Void, Never>?
     private var screenshotNoticeTask: Task<Void, Never>?
     private var recordingCountdownTask: Task<Void, Never>?
     /// Identifies the task stored in `recordingCountdownTask`. This is kept
@@ -94,11 +101,13 @@ final class StudioModel: ObservableObject {
     init(
         store: ProjectStore = ProjectStore(),
         interactionTrackingAccess: @escaping @MainActor () -> Bool = { AXIsProcessTrusted() },
-        inputMonitoringAccess: @escaping @MainActor () -> Bool = { CGPreflightListenEventAccess() }
+        inputMonitoringAccess: @escaping @MainActor () -> Bool = { CGPreflightListenEventAccess() },
+        finishCapture: @escaping @MainActor (CaptureEngine) async throws -> RecordingResult = { try await $0.stopRecording() }
     ) {
         self.store = store
         self.interactionTrackingAccess = interactionTrackingAccess
         self.inputMonitoringAccess = inputMonitoringAccess
+        self.finishCapture = finishCapture
         refreshInteractionTrackingPermission()
     }
 
@@ -113,18 +122,30 @@ final class StudioModel: ObservableObject {
         defaultBrowserCrop(for: selectedTarget) != nil
     }
 
+    /// Loads the library and runs the launch hooks once. Every caller,
+    /// concurrent ones included, waits for that same pass, so nobody sees the
+    /// library before it has loaded.
     func bootstrap() async {
-        guard !didBootstrap else { return }
-        didBootstrap = true
+        if let bootstrapTask {
+            await bootstrapTask.value
+            return
+        }
+        let task = Task { await self.performBootstrap() }
+        bootstrapTask = task
+        await task.value
+    }
+
+    private func performBootstrap() async {
         await reloadProjects()
         // A key in ~/.config/focus-studio/ark.env (the file the Claude Code
         // skills use) is imported silently whenever the Keychain has none, so
         // the assistant works on a fresh Mac without a visit to Settings. The QA
-        // hook FOCUS_STUDIO_IMPORT_ARK_ENV=1 forces a re-import.
+        // hook FOCUS_STUDIO_IMPORT_ARK_ENV=1 forces a re-import; 0 skips it
+        // (regression tests, which must not touch the real key or the network).
+        let arkImportMode = ProcessInfo.processInfo.environment["FOCUS_STUDIO_IMPORT_ARK_ENV"]
         let arkImport = Task { [weak self] in
-            await self?.importArkEnvironmentKeyIfNeeded(
-                force: ProcessInfo.processInfo.environment["FOCUS_STUDIO_IMPORT_ARK_ENV"] == "1"
-            )
+            guard arkImportMode != "0" else { return }
+            await self?.importArkEnvironmentKeyIfNeeded(force: arkImportMode == "1")
         }
         // QA hook: `open -n "Focus Studio.app" --env FOCUS_STUDIO_START_DESTINATION=recorder`
         // lands on the recording picker so screenshots of live previews can be
@@ -188,13 +209,13 @@ final class StudioModel: ObservableObject {
             uiLanguageProvider: { Self.assistantLanguage() },
             readProject: { [weak self] in self?.activeProject },
             updateProject: { [weak self] mutate in
-                guard let self, var project = self.activeProject else { return }
-                mutate(&project)
-                self.updateActiveProject(project)
+                guard let self else { throw AIToolError.noProject }
+                try self.applyAssistantEdit(mutate)
             },
             // The env file is a fallback so the skills' key works in-app without re-entering it.
             arkAPIKey: { [weak self] in self?.aiGateway.apiKey(for: .volcengineArk) ?? Self.arkEnvironmentKey() },
             arkBaseURL: arkBase,
+            projectsDirectory: store.projectsDirectory,
             app: self
         )
         let session = AIAssistantSession(
@@ -591,6 +612,31 @@ final class StudioModel: ObservableObject {
             codexPlanTask?.cancel()
             return
         }
+        // The Finish button and the assistant can both ask to stop. A second
+        // request waits for the stop in flight instead of finalizing the
+        // capture again, and sees the same outcome.
+        if let stopRecordingTask {
+            await stopRecordingTask.value
+            return
+        }
+        // Only a live recording is finalized. A late request after a stop has
+        // finished (the editor or the recorder is showing), or one while a
+        // cancel is stopping the engine, must not finalize the capture again.
+        guard destination == .recording, captureEngine.state != .stopping else { return }
+        let task = Task {
+            await self.finishRecording()
+            // Cleared in the same main-actor turn that finishes the stop, so a
+            // later stop starts fresh and `isFinishingRecording` never lags.
+            self.stopRecordingTask = nil
+        }
+        stopRecordingTask = task
+        await task.value
+    }
+
+    /// Whether a stop is finalizing the capture or saving its project.
+    var isFinishingRecording: Bool { stopRecordingTask != nil }
+
+    private func finishRecording() async {
         busy("Preparing your editable recording…")
         defer {
             isBusy = false
@@ -598,7 +644,7 @@ final class StudioModel: ObservableObject {
         }
 
         do {
-            let result = try await captureEngine.stopRecording()
+            let result = try await finishCapture(captureEngine)
             var settings = ProjectSettings()
             settings.autoZoomEnabled = automaticZooms
             settings.frameRate = min(frameRate, 60)
@@ -1260,10 +1306,12 @@ final class StudioModel: ObservableObject {
         )
     }
 
-    func updateActiveProject(_ project: RecordingProject) {
+    /// Returns false, changing nothing, when the write is dropped.
+    @discardableResult
+    func updateActiveProject(_ project: RecordingProject) -> Bool {
         // Ignore callbacks from a disappearing editor, including late preview
         // updates and text-field commits after another project has opened.
-        guard destination == .editor, activeProject?.id == project.id, !isManagingProjects else { return }
+        guard destination == .editor, activeProject?.id == project.id, !isManagingProjects else { return false }
         activeProject = project
         if let index = projects.firstIndex(where: { $0.id == project.id }) {
             projects[index] = project
@@ -1274,6 +1322,7 @@ final class StudioModel: ObservableObject {
             do { try await store.save(project) }
             catch { await MainActor.run { self.show(error) } }
         }
+        return true
     }
 
     func flushProjectEdits() async {

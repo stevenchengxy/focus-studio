@@ -80,11 +80,18 @@ struct AIAssistantContext: Sendable {
         set { let fixed = newValue; uiLanguageProvider = { fixed } }
     }
     var readProject: @MainActor @Sendable () -> RecordingProject?
-    var updateProject: @MainActor @Sendable ((inout RecordingProject) -> Void) -> Void
+    /// Applies a change to the open project. Throws, writing nothing, when the
+    /// app cannot take the edit (the editor closed, a library operation is
+    /// running) or when the change itself throws, so a tool never reports an
+    /// edit that did not happen. Tools call it through `AIToolSupport.edit`.
+    var updateProject: @MainActor @Sendable ((inout RecordingProject) throws -> Void) throws -> Void
     /// Read on the main actor when a paid tool runs, so a key added in Settings
     /// after the session was created is picked up.
     var arkAPIKey: @MainActor @Sendable () -> String?
     var arkBaseURL: URL
+    /// The projects library root. Exports never write inside it except into
+    /// the open project's `ai/` folder. Nil when unknown (unit tests).
+    var projectsDirectory: URL?
     /// The app itself (recording, library, editor). Nil in unit tests that only
     /// exercise project tools; app tools then report that control is unavailable.
     var app: (any AppControlling)?
@@ -96,9 +103,10 @@ struct AIAssistantContext: Sendable {
         assetsDirectory: URL,
         uiLanguage: String,
         readProject: @escaping @MainActor @Sendable () -> RecordingProject?,
-        updateProject: @escaping @MainActor @Sendable ((inout RecordingProject) -> Void) -> Void,
+        updateProject: @escaping @MainActor @Sendable ((inout RecordingProject) throws -> Void) throws -> Void,
         arkAPIKey: @escaping @MainActor @Sendable () -> String?,
         arkBaseURL: URL = URL(string: "https://ark.cn-beijing.volces.com/api/v3")!,
+        projectsDirectory: URL? = nil,
         app: (any AppControlling)? = nil
     ) {
         self.init(
@@ -108,6 +116,7 @@ struct AIAssistantContext: Sendable {
             updateProject: updateProject,
             arkAPIKey: arkAPIKey,
             arkBaseURL: arkBaseURL,
+            projectsDirectory: projectsDirectory,
             app: app
         )
     }
@@ -116,9 +125,10 @@ struct AIAssistantContext: Sendable {
         assetsDirectoryProvider: @escaping @Sendable () -> URL,
         uiLanguageProvider: @escaping @Sendable () -> String,
         readProject: @escaping @MainActor @Sendable () -> RecordingProject?,
-        updateProject: @escaping @MainActor @Sendable ((inout RecordingProject) -> Void) -> Void,
+        updateProject: @escaping @MainActor @Sendable ((inout RecordingProject) throws -> Void) throws -> Void,
         arkAPIKey: @escaping @MainActor @Sendable () -> String?,
         arkBaseURL: URL = URL(string: "https://ark.cn-beijing.volces.com/api/v3")!,
+        projectsDirectory: URL? = nil,
         app: (any AppControlling)? = nil
     ) {
         self.assetsDirectoryProvider = assetsDirectoryProvider
@@ -127,6 +137,7 @@ struct AIAssistantContext: Sendable {
         self.updateProject = updateProject
         self.arkAPIKey = arkAPIKey
         self.arkBaseURL = arkBaseURL
+        self.projectsDirectory = projectsDirectory
         self.app = app
     }
 

@@ -77,6 +77,9 @@ extension StudioModel: AppControlling {
 
     var recordingPhase: AIRecordingPhase {
         if destination == .countdown { return .countdown }
+        // Saving the project follows the engine's own stop; the phase stays
+        // `.stopping` until the editor shows the result.
+        if isFinishingRecording { return .stopping }
         switch captureEngine.state {
         case .preparing:
             return .countdown
@@ -95,6 +98,10 @@ extension StudioModel: AppControlling {
 
     var lastReportedError: String? {
         if isShowingError, !errorMessage.isEmpty { return errorMessage }
+        // A refused Screen Recording permission is shown on the recorder screen
+        // rather than as an alert; without this the assistant would read the
+        // failed start as a cancelled countdown.
+        if capturePermissionDenied { return captureFailureDetails ?? L10n.tr("Screen Recording permission is required.") }
         return nil
     }
 
@@ -108,6 +115,13 @@ extension StudioModel: AppControlling {
         guard let target = captureEngine.availableTargets.first(where: { $0.id == sourceID }) else {
             throw AIToolError.invalidArgument("Source \(sourceID) is no longer available; call list_recording_sources again.")
         }
+        try startRecording(target: target, options: options)
+    }
+
+    /// Applies the options and starts the countdown for a target the engine
+    /// listed. Kept apart from the lookup so regression tests, which cannot
+    /// fill the engine's list without ScreenCaptureKit, can drive it.
+    func startRecording(target: CaptureTargetInfo, options: AIRecordingOptions) throws {
         if destination == .editor { closeEditor() }
         if let value = options.systemAudio { recordSystemAudio = value }
         if let value = options.microphone { recordMicrophone = value }
@@ -116,10 +130,27 @@ extension StudioModel: AppControlling {
         if let value = options.frameRate { frameRate = value }
         selectedTargetID = target.id
         destination = .recorder
+        // Errors from earlier attempts must not be read as this attempt's outcome.
         isShowingError = false
+        capturePermissionDenied = false
+        captureFailureDetails = nil
         startRecordingCountdown(allowUnavailableTracking: true)
         guard destination == .countdown else {
             throw AIToolError.failed(lastReportedError ?? "The countdown could not start.")
+        }
+    }
+
+    /// Applies an assistant edit to the project open in the editor through the
+    /// same path as an inspector change. Throws instead of dropping the edit
+    /// when no editor is showing or a library operation is running.
+    func applyAssistantEdit(_ mutate: (inout RecordingProject) throws -> Void) throws {
+        guard destination == .editor, var project = activeProject else { throw AIToolError.noProject }
+        guard !isManagingProjects else {
+            throw AIToolError.failed(L10n.tr("Finish the current library operation before starting another."))
+        }
+        try mutate(&project)
+        guard updateActiveProject(project) else {
+            throw AIToolError.failed("The editor changed before the edit was saved; nothing was changed.")
         }
     }
 

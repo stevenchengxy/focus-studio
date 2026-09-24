@@ -70,7 +70,7 @@ struct AIToolArguments {
         if let number = raw[key] as? NSNumber { return number.doubleValue.isFinite ? number.doubleValue : nil }
         if let text = string(key) {
             var cleaned = text.lowercased()
-            for suffix in ["px", "s", "sec", "×", "x"] where cleaned.hasSuffix(suffix) { cleaned.removeLast(suffix.count) }
+            for suffix in ["fps", "px", "s", "sec", "×", "x"] where cleaned.hasSuffix(suffix) { cleaned.removeLast(suffix.count) }
             if let value = Double(cleaned.trimmingCharacters(in: .whitespaces)), value.isFinite { return value }
         }
         return nil
@@ -78,7 +78,8 @@ struct AIToolArguments {
 
     func int(_ key: String) -> Int? {
         guard let value = double(key) else { return nil }
-        return Int(value.rounded())
+        // Out-of-range numbers (1e19) would trap in Int(_:); treat them as unparsable.
+        return Int(exactly: value.rounded())
     }
 
     func bool(_ key: String) -> Bool? {
@@ -180,6 +181,40 @@ enum AIToolPaths {
         }
     }
 
+    /// The absolute path with symlinks resolved as far as it exists (`/var` →
+    /// `/private/var`) and the Data volume's firmlinks folded back
+    /// (`/System/Volumes/Data/Users` → `/Users`), so two spellings of one
+    /// location compare equal.
+    static func canonicalPath(_ url: URL) -> String {
+        var existing = url.standardizedFileURL
+        var missing: [String] = []
+        while !FileManager.default.fileExists(atPath: existing.path), existing.pathComponents.count > 1 {
+            missing.insert(existing.lastPathComponent, at: 0)
+            existing = existing.deletingLastPathComponent()
+        }
+        var resolved = existing
+        if let real = realpath(existing.path, nil) {
+            let path = String(cString: real)
+            free(real)
+            // realpath keeps the firmlinked spelling; the canonical path key
+            // folds it but leaves a final symlink (`/tmp`) alone, so both run.
+            let folded = try? URL(fileURLWithPath: path).resourceValues(forKeys: [.canonicalPathKey]).canonicalPath
+            resolved = URL(fileURLWithPath: folded ?? path)
+        }
+        for component in missing { resolved.appendPathComponent(component) }
+        // Not standardized again: that drops `/private` only where the path
+        // exists, so an existing folder and a new file inside it would disagree.
+        return resolved.path
+    }
+
+    /// Whether `path` is `folder` or lies inside it. Both are canonical paths;
+    /// the comparison ignores case like the default APFS volume does.
+    static func path(_ path: String, isInside folder: String) -> Bool {
+        let path = path.lowercased()
+        let folder = folder.lowercased()
+        return path == folder || path.hasPrefix(folder.hasSuffix("/") ? folder : folder + "/")
+    }
+
     static func mimeType(for url: URL) -> String? {
         UTType(filenameExtension: url.pathExtension.lowercased())?.preferredMIMEType
     }
@@ -207,6 +242,31 @@ enum AIToolSupport {
     static func requireProject(_ context: AIAssistantContext) async throws -> RecordingProject {
         guard let project = await MainActor.run(body: { context.readProject() }) else { throw AIToolError.noProject }
         return project
+    }
+
+    /// Applies `change` to the open project in one main-actor step and returns
+    /// what it computed from the project as written. The change works on the
+    /// project as it is now, not on the snapshot the tool read, so parallel
+    /// calls and the user's own edits to other keys survive. Throws, changing
+    /// nothing, when the app drops the write, when `change` throws, or when a
+    /// different project was opened since the tool read `projectID`.
+    static func edit<Value: Sendable>(
+        _ context: AIAssistantContext,
+        projectID: UUID,
+        _ change: @escaping @Sendable (inout RecordingProject) throws -> Value
+    ) async throws -> Value {
+        try await MainActor.run {
+            var result: Value?
+            try context.updateProject { project in
+                guard project.id == projectID else {
+                    throw AIToolError.failed("Another project was opened before the change was applied; nothing was changed. Check which project is open and try again.")
+                }
+                result = try change(&project)
+            }
+            // The app must either apply the change or throw; never report an edit it skipped.
+            guard let result else { throw AIToolError.failed("The app did not apply the change; nothing was changed.") }
+            return result
+        }
     }
 
     static func seconds(_ value: Double) -> String {
@@ -538,13 +598,11 @@ struct SetBackgroundImageTool: AIAssistantTool {
         let arguments = AIToolArguments(raw)
         let url = try AIToolPaths.existingLocalFile(try arguments.requiredString("path"), context: context)
         guard ArkMediaClient.imagePixelSize(at: url) != nil else { throw AIToolError.invalidArgument("\(url.lastPathComponent) is not a readable image.") }
-        guard await MainActor.run(body: { context.readProject() }) != nil else { throw AIToolError.noProject }
+        let project = try await AIToolSupport.requireProject(context)
         let path = url.path
-        await MainActor.run {
-            context.updateProject { project in
-                project.settings.backgroundStyle = .image
-                project.settings.backgroundImagePath = path
-            }
+        try await AIToolSupport.edit(context, projectID: project.id) { project in
+            project.settings.backgroundStyle = .image
+            project.settings.backgroundImagePath = path
         }
         return AIToolResult(text: L10n.format("Background image set: %@", url.lastPathComponent), attachments: [url])
     }
@@ -554,10 +612,13 @@ struct SetBackgroundImageTool: AIAssistantTool {
 
 struct UpdateSettingsTool: AIAssistantTool {
     let name = "update_settings"
-    let summary = "Change how the recording looks: background (style, preset, colours, image, blur, brightness), padding, corner radius, shadow, screen animation, zoom scale, aspect ratio, motion blur, caption style and the product description. Only the given keys change."
+    let summary = "Change how the recording looks and exports: background (style, preset, colours, image, blur, brightness), padding, corner radius, shadow, screen animation, zoom scale, aspect ratio, motion blur, caption style, the product description, and the export width and frame rate. Only the given keys change."
 
     static let backgroundPresetNames = BackgroundPreset.allCases.map(\.rawValue)
     static let aspectRatioNames = CanvasAspectRatio.allCases.map(\.rawValue) + ["auto", "16:9", "9:16", "1:1", "4:3", "3:4"]
+    /// The choices the editor's Export inspector offers.
+    static let exportWidths = [1_280, 1_920, 2_560, 3_840]
+    static let exportFrameRates = [24, 30, 60]
 
     static let ranges: [String: ClosedRange<Double>] = [
         "padding": 0...160,
@@ -574,6 +635,7 @@ struct UpdateSettingsTool: AIAssistantTool {
         "backgroundStyle", "backgroundPreset", "backgroundColor", "secondaryBackgroundColor", "backgroundImagePath",
         "backgroundBlur", "backgroundBrightness", "padding", "cornerRadius", "shadow", "screenAnimation", "zoomScale",
         "aspectRatio", "motionBlur", "captionPosition", "captionScale", "showsChapterNumber", "productDescription",
+        "exportWidth", "frameRate",
     ]
 
     var parametersSchema: [String: Any] {
@@ -598,6 +660,8 @@ struct UpdateSettingsTool: AIAssistantTool {
                 "captionScale": ["type": "number", "minimum": 0.7, "maximum": 1.6],
                 "showsChapterNumber": ["type": "boolean"],
                 "productDescription": ["type": "string", "description": "What the demo shows, in the user's words."],
+                "exportWidth": ["type": "integer", "enum": Self.exportWidths, "description": "Width of the exported video in pixels; the height follows the aspect ratio."],
+                "frameRate": ["type": "integer", "enum": Self.exportFrameRates, "description": "Frames per second of the exported video."],
             ],
         ]
     }
@@ -607,13 +671,23 @@ struct UpdateSettingsTool: AIAssistantTool {
         context: AIAssistantContext,
         progress: @escaping @Sendable (String) -> Void
     ) async throws -> AIToolResult {
-        let changes = try await Self.apply(arguments: raw, context: context)
-        return AIToolResult(text: L10n.format("Updated %@", changes.joined(separator: ", ")))
+        let update = try Self.prepare(arguments: raw, context: context)
+        let project = try await AIToolSupport.requireProject(context)
+        try await AIToolSupport.edit(context, projectID: project.id) { try update.apply(&$0.settings) }
+        return AIToolResult(text: L10n.format("Updated %@", update.changes.joined(separator: ", ")))
     }
 
-    /// Validates and applies the settings, returning one "key = value" note per
-    /// change. Shared with set_zoom_style for the keys both tools accept.
-    static func apply(arguments raw: [String: Any], context: AIAssistantContext) async throws -> [String] {
+    /// A validated call: one "key = value" note per change, and the change
+    /// itself, which sets only the requested keys on whatever the project
+    /// holds when it is written.
+    struct SettingsUpdate: Sendable {
+        var changes: [String]
+        var apply: @Sendable (inout ProjectSettings) throws -> Void
+    }
+
+    /// Validates every argument before anything is written, so a bad call
+    /// changes nothing. Shared with set_zoom_style for the keys both tools accept.
+    static func prepare(arguments raw: [String: Any], context: AIAssistantContext) throws -> SettingsUpdate {
         let arguments = AIToolArguments(raw)
         let requested = raw.keys.filter { !(raw[$0] is NSNull) }
         let unknown = requested.filter { !Self.allowedKeys.contains($0) }
@@ -621,10 +695,10 @@ struct UpdateSettingsTool: AIAssistantTool {
             throw AIToolError.invalidArgument("Unknown settings \(unknown.sorted().joined(separator: ", ")). Allowed: \(Self.allowedKeys.joined(separator: ", ")).")
         }
         guard !requested.isEmpty else { throw AIToolError.invalidArgument("No settings given.") }
-        guard var project = await MainActor.run(body: { context.readProject() }) else { throw AIToolError.noProject }
 
         var changes: [String] = []
-        var settings = project.settings
+        // Applied in order to the settings as they are at write time.
+        var steps: [@Sendable (inout ProjectSettings) throws -> Void] = []
         func clamp(_ key: String, _ value: Double) -> Double {
             let range = Self.ranges[key] ?? (-Double.infinity...Double.infinity)
             let clamped = value.clamped(to: range)
@@ -636,47 +710,89 @@ struct UpdateSettingsTool: AIAssistantTool {
             guard let value = arguments.double(key) else { throw AIToolError.invalidArgument("\"\(key)\" must be a number.") }
             return value
         }
+        func option(_ key: String, in allowed: [Int]) throws -> Int? {
+            guard arguments.has(key) else { return nil }
+            // Matched as numbers: converting a huge value to Int first would trap.
+            guard let value = arguments.double(key), let match = allowed.first(where: { Double($0) == value }) else {
+                let given = arguments.string(key) ?? raw[key].map { String(describing: $0) } ?? ""
+                throw AIToolError.invalidArgument("\"\(key)\" must be one of \(allowed.map(String.init).joined(separator: ", ")) (got \"\(given)\").")
+            }
+            return match
+        }
+        let setsStyle = arguments.has("backgroundStyle")
+        let setsImagePath = arguments.has("backgroundImagePath")
 
         if let preset = try arguments.choice("backgroundPreset", in: Self.backgroundPresetNames, default: nil),
            let value = BackgroundPreset(rawValue: preset) {
-            settings.backgroundStyle = .gradient
-            settings.backgroundColor = value.primaryHex
-            settings.secondaryBackgroundColor = value.secondaryHex
+            steps.append { settings in
+                settings.backgroundStyle = .gradient
+                settings.backgroundColor = value.primaryHex
+                settings.secondaryBackgroundColor = value.secondaryHex
+            }
             changes.append("backgroundPreset = \(value.title)")
         }
         if let style = try arguments.choice("backgroundStyle", in: BackgroundStyle.allCases.map(\.rawValue), default: nil),
            let value = BackgroundStyle(rawValue: style) {
-            if value == .image, (settings.backgroundImagePath ?? "").isEmpty, !arguments.has("backgroundImagePath") {
-                throw AIToolError.invalidArgument("backgroundStyle image needs backgroundImagePath (or call set_background_image).")
+            steps.append { settings in
+                if value == .image, (settings.backgroundImagePath ?? "").isEmpty, !setsImagePath {
+                    throw AIToolError.invalidArgument("backgroundStyle image needs backgroundImagePath (or call set_background_image).")
+                }
+                settings.backgroundStyle = value
             }
-            settings.backgroundStyle = value
             changes.append("backgroundStyle = \(value.rawValue)")
         }
         for key in ["backgroundColor", "secondaryBackgroundColor"] where arguments.has(key) {
             guard let hex = AIToolSupport.hexColor(arguments.string(key) ?? "") else {
                 throw AIToolError.invalidArgument("\"\(key)\" must be a hex colour like #6D5DFB.")
             }
-            if key == "backgroundColor" { settings.backgroundColor = hex } else { settings.secondaryBackgroundColor = hex }
-            if settings.backgroundStyle == .image, !arguments.has("backgroundStyle") { settings.backgroundStyle = .gradient }
+            let isPrimary = key == "backgroundColor"
+            steps.append { settings in
+                if isPrimary { settings.backgroundColor = hex } else { settings.secondaryBackgroundColor = hex }
+                if settings.backgroundStyle == .image, !setsStyle { settings.backgroundStyle = .gradient }
+            }
             changes.append("\(key) = \(hex)")
         }
         if let path = arguments.string("backgroundImagePath") {
             let url = try AIToolPaths.existingLocalFile(path, context: context)
             guard ArkMediaClient.imagePixelSize(at: url) != nil else { throw AIToolError.invalidArgument("\(url.lastPathComponent) is not a readable image.") }
-            settings.backgroundImagePath = url.path
-            if !arguments.has("backgroundStyle") { settings.backgroundStyle = .image }
+            let imagePath = url.path
+            steps.append { settings in
+                settings.backgroundImagePath = imagePath
+                if !setsStyle { settings.backgroundStyle = .image }
+            }
             changes.append("backgroundImagePath = \(url.lastPathComponent)")
         }
-        if let value = try number("backgroundBlur") { settings.backgroundBlur = clamp("backgroundBlur", value) }
-        if let value = try number("backgroundBrightness") { settings.backgroundBrightness = clamp("backgroundBrightness", value) }
-        if let value = try number("padding") { settings.padding = clamp("padding", value) }
-        if let value = try number("cornerRadius") { settings.cornerRadius = clamp("cornerRadius", value) }
-        if let value = try number("shadow") { settings.shadow = clamp("shadow", value) }
-        if let value = try number("zoomScale") { settings.zoomScale = clamp("zoomScale", value) }
-        if let value = try number("motionBlur") { settings.motionBlur = clamp("motionBlur", value) }
+        if let value = try number("backgroundBlur") {
+            let blur = clamp("backgroundBlur", value)
+            steps.append { $0.backgroundBlur = blur }
+        }
+        if let value = try number("backgroundBrightness") {
+            let brightness = clamp("backgroundBrightness", value)
+            steps.append { $0.backgroundBrightness = brightness }
+        }
+        if let value = try number("padding") {
+            let padding = clamp("padding", value)
+            steps.append { $0.padding = padding }
+        }
+        if let value = try number("cornerRadius") {
+            let radius = clamp("cornerRadius", value)
+            steps.append { $0.cornerRadius = radius }
+        }
+        if let value = try number("shadow") {
+            let shadow = clamp("shadow", value)
+            steps.append { $0.shadow = shadow }
+        }
+        if let value = try number("zoomScale") {
+            let scale = clamp("zoomScale", value)
+            steps.append { $0.zoomScale = scale }
+        }
+        if let value = try number("motionBlur") {
+            let blur = clamp("motionBlur", value)
+            steps.append { $0.motionBlur = blur }
+        }
         if let animation = try arguments.choice("screenAnimation", in: ScreenAnimationStyle.allCases.map(\.rawValue), default: nil),
            let value = ScreenAnimationStyle(rawValue: animation) {
-            settings.screenAnimation = value
+            steps.append { $0.screenAnimation = value }
             changes.append("screenAnimation = \(value.rawValue)")
         }
         if let ratio = try arguments.choice("aspectRatio", in: Self.aspectRatioNames, default: nil) {
@@ -690,44 +806,59 @@ struct UpdateSettingsTool: AIAssistantTool {
             case "3:4": value = .tall
             default: value = CanvasAspectRatio(rawValue: ratio.lowercased()) ?? .wide
             }
-            settings.aspectRatio = value
+            steps.append { $0.aspectRatio = value }
             changes.append("aspectRatio = \(value.rawValue) (\(value.title))")
         }
-        var caption = settings.resolvedCaptionStyle
-        var captionChanged = false
+        var captionPosition: CaptionPosition?
+        var captionScale: Double?
+        var showsChapterNumber: Bool?
         if let position = try arguments.choice("captionPosition", in: CaptionPosition.allCases.map(\.rawValue), default: nil),
            let value = CaptionPosition(rawValue: position) {
-            caption.position = value
-            captionChanged = true
+            captionPosition = value
             changes.append("captionPosition = \(value.rawValue)")
         }
         if let value = try number("captionScale") {
-            caption.scale = clamp("captionScale", value)
-            captionChanged = true
+            captionScale = clamp("captionScale", value)
         }
         if arguments.has("showsChapterNumber") {
             guard let value = arguments.bool("showsChapterNumber") else { throw AIToolError.invalidArgument("\"showsChapterNumber\" must be true or false.") }
-            caption.showsChapterNumber = value
-            captionChanged = true
+            showsChapterNumber = value
             changes.append("showsChapterNumber = \(value)")
         }
-        if captionChanged { settings.captionStyle = caption.sanitized }
+        if captionPosition != nil || captionScale != nil || showsChapterNumber != nil {
+            let (position, scale, showsNumber) = (captionPosition, captionScale, showsChapterNumber)
+            steps.append { settings in
+                var caption = settings.resolvedCaptionStyle
+                if let position { caption.position = position }
+                if let scale { caption.scale = scale }
+                if let showsNumber { caption.showsChapterNumber = showsNumber }
+                settings.captionStyle = caption.sanitized
+            }
+        }
         if arguments.has("productDescription") {
             let description = (arguments.string("productDescription") ?? "").prefix(600)
-            settings.productDescription = description.isEmpty ? nil : String(description)
+            let stored = description.isEmpty ? nil : String(description)
+            steps.append { $0.productDescription = stored }
             changes.append("productDescription = \(description.isEmpty ? "(cleared)" : "\"\(description.prefix(60))\(description.count > 60 ? "…" : "")\"")")
         }
-
-        project.settings = settings
-        let updated = settings
-        await MainActor.run {
-            context.updateProject { $0.settings = updated }
+        if let width = try option("exportWidth", in: Self.exportWidths) {
+            steps.append { $0.exportWidth = width }
+            changes.append("exportWidth = \(width)")
         }
-        return changes
+        if let rate = try option("frameRate", in: Self.exportFrameRates) {
+            steps.append { $0.frameRate = rate }
+            changes.append("frameRate = \(rate)")
+        }
+
+        let ordered = steps
+        return SettingsUpdate(changes: changes) { settings in
+            for step in ordered { try step(&settings) }
+        }
     }
 
     static func number(_ value: Double) -> String {
-        value == value.rounded() ? String(Int(value)) : String(format: "%.2f", value)
+        if value == value.rounded(), let whole = Int(exactly: value) { return String(whole) }
+        return String(format: "%.2f", value)
     }
 }
 
@@ -779,21 +910,24 @@ struct SetChaptersTool: AIAssistantTool {
             )
         }
         let append = arguments.bool("append") ?? false
-        let combined = append ? (project.chapters ?? []) + candidates : candidates
-        let chapters = ChapterMath.sanitized(combined, duration: project.duration)
-        guard !chapters.isEmpty else {
-            throw AIToolError.invalidArgument("No valid chapters: each needs start < end inside 0–\(AIToolSupport.seconds(project.duration)) s, at least \(ChapterMath.minimumDuration) s long, with a title or caption.")
-        }
-        await MainActor.run {
-            context.updateProject { $0.chapters = chapters }
+        // Appending merges with the chapters the project has when it is written,
+        // so a parallel call's chapters are kept.
+        let (chapters, kept) = try await AIToolSupport.edit(context, projectID: project.id) { current -> ([DemoChapter], Int) in
+            let existing = append ? (current.chapters ?? []) : []
+            let chapters = ChapterMath.sanitized(existing + candidates, duration: current.duration)
+            guard !chapters.isEmpty else {
+                throw AIToolError.invalidArgument("No valid chapters: each needs start < end inside 0–\(AIToolSupport.seconds(current.duration)) s, at least \(ChapterMath.minimumDuration) s long, with a title or caption.")
+            }
+            current.chapters = chapters
+            return (chapters, existing.count)
         }
         var lines = [L10n.format("Set %lld chapters", chapters.count)]
         for (index, chapter) in chapters.enumerated() {
             let text = chapter.caption.isEmpty ? chapter.title : "\(chapter.title) — \(chapter.caption)"
             lines.append("\(index + 1). \(AIToolSupport.seconds(chapter.start))–\(AIToolSupport.seconds(chapter.end)) s  \(text)")
         }
-        if candidates.count != chapters.count - (append ? (project.chapters?.count ?? 0) : 0) {
-            lines.append("(\(candidates.count - (chapters.count - (append ? (project.chapters?.count ?? 0) : 0))) invalid chapters were dropped)")
+        if candidates.count != chapters.count - kept {
+            lines.append("(\(candidates.count - (chapters.count - kept)) invalid chapters were dropped)")
         }
         return AIToolResult(text: lines.joined(separator: "\n"))
     }
