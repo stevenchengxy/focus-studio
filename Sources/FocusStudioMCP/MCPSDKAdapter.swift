@@ -358,6 +358,19 @@ extension HelperLogLevel {
     }
 }
 
+extension HelperLog {
+    /// Lines on standard error through swift-log, as the server writes its
+    /// own; for the parts of the helper made before the server (the app
+    /// forwarder).
+    static func standardError(level: HelperLogLevel) -> HelperLog {
+        var logger = Logger(label: "focus-studio-mcp", factory: { StreamLogHandler.standardError(label: $0) })
+        logger.logLevel = level.swiftLog
+        return HelperLog(level: level) { [logger] level, message in
+            logger.log(level: level.swiftLog, "\(message)")
+        }
+    }
+}
+
 // MARK: - Roots
 
 /// The client's roots, fetched with `roots/list` on first use and again after

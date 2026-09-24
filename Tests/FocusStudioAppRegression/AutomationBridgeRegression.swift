@@ -28,7 +28,28 @@ enum AutomationBridgeRegression {
         try await libraryActions()
         try await englishUnderChineseUI()
         try await longCallsDetach()
-        print("AutomationBridgeRegression: PASS (edits by project_id open the editor and save, switching saves the other project, parallel calls take turns, refusals while busy or recording, while the in-app assistant works and during an editor export, unknown/withheld tools, project_id validation, read-only tools stay put, capture_frame inline JPEG, working-directory export with progress, import/screenshot/rename/Trash, English results and refusals under a Chinese UI, detached jobs with wait_for_job and cancellation, reads skip the queue, queued calls detach in time)")
+        try windowPresenterSteps()
+        print("AutomationBridgeRegression: PASS (main window presenter: a hidden app is unhidden instead of opening another window, a minimized window is restored, a closed one is never reused, edits by project_id open the editor and save, switching saves the other project, parallel calls take turns, refusals while busy or recording, while the in-app assistant works and during an editor export, unknown/withheld tools, project_id validation, read-only tools stay put, capture_frame inline JPEG, working-directory export with progress, import/screenshot/rename/Trash, English results and refusals under a Chinese UI, detached jobs with wait_for_job and cancellation, reads skip the queue, queued calls detach in time)")
+    }
+
+    // MARK: - Main window
+
+    /// What MainWindowPresenter.present() does before an AI call changes
+    /// what the app shows. A hidden app (⌘H) reports every window as not
+    /// visible; opening a new window then would stack a second editor on the
+    /// same project each time, so it is unhidden first and the choice is
+    /// made again once it has.
+    private static func windowPresenterSteps() throws {
+        typealias Presenter = MainWindowPresenter
+        let hidden: [(isVisible: Bool, isMiniaturized: Bool)] = [(false, false), (false, false)]
+        try expect(Presenter.step(appIsHidden: true, windows: hidden, canOpen: true) == .unhideFirst, "A hidden app is unhidden, not given another window")
+        try expect(Presenter.step(appIsHidden: true, windows: [], canOpen: true) == .unhideFirst, "Hidden with no window: unhidden first, then a window opens")
+        try expect(Presenter.step(appIsHidden: false, windows: [], canOpen: true) == .openNew, "No window: one opens")
+        try expect(Presenter.step(appIsHidden: false, windows: [(false, false)], canOpen: true) == .openNew, "A closed (still registered) window is never reused")
+        try expect(Presenter.step(appIsHidden: false, windows: [(false, false), (true, false)], canOpen: true) == .orderFront(1), "The open window comes to the front")
+        try expect(Presenter.step(appIsHidden: false, windows: [(false, true), (true, false)], canOpen: true) == .orderFront(1), "An open window wins over a minimized one")
+        try expect(Presenter.step(appIsHidden: false, windows: [(false, false), (false, true)], canOpen: true) == .restore(1), "A minimized window is restored")
+        try expect(Presenter.step(appIsHidden: false, windows: [], canOpen: false) == .nothing, "Nothing to do without a way to open one")
     }
 
     // MARK: - Editing

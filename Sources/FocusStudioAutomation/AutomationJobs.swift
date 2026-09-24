@@ -115,6 +115,16 @@ public final class AutomationJobs {
         detached.values.filter { $0.finishedAt == nil }.sorted { $0.startedAt < $1.startedAt }.map(\.id)
     }
 
+    /// Cancels every detached job still running (the app is quitting) and
+    /// returns their tasks, so the caller can wait for their cleanup (an
+    /// export removes its partial file).
+    public func cancelRunning() -> [Task<Void, Never>] {
+        detached.values.filter { $0.finishedAt == nil }.compactMap { job in
+            job.task?.cancel()
+            return job.task
+        }
+    }
+
     // MARK: - Helpers
 
     private func result(of outcome: Job.Outcome, tool: String) -> AutomationCallResult {

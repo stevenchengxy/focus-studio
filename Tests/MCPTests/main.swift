@@ -14,7 +14,10 @@ import MCP
 ///   that show the model only structuredContent, JSON values both ways;
 /// - identity (inside an app, also through a symlink), settings, the
 ///   progress relay and the M4 forwarder;
-/// - the server over a scripted transport (ProtocolTests.swift).
+/// - the server over a scripted transport (ProtocolTests.swift);
+/// - the app control channel's shared pieces (ControlChannelTests.swift);
+/// - the helper's end of it, SocketAppForwarder, against an in-process fake
+///   app and a scripted launcher (ForwarderTests.swift).
 ///
 /// `--dump <file>` also writes the catalog as the helper should list it, for
 /// the stdio client (mcp_client.py) to compare against.
@@ -47,8 +50,18 @@ struct MCPTests {
         step("protocol: arguments, results and tokens kept as sent"); try await protocolRawValues()
         step("protocol: batches refused"); try await protocolBatches()
         step("protocol: shutdown on end of input"); try await protocolShutdown()
+        step("control channel: framing"); try controlFraming()
+        step("control channel: messages and parameters"); try controlMessages()
+        step("control channel: call replies"); try controlCallResults()
+        step("control channel: socket location"); try controlSocketLocation()
+        step("control channel: connections"); try await controlConnections()
+        step("app forwarder: settings from the environment"); try forwarderSettings()
+        step("app forwarder: calls, progress, quit mid-call, protocol, hello"); try await forwarderCalls()
+        step("app forwarder: opening the app"); try await forwarderLaunch()
+        step("app forwarder: cancellation and shutdown"); try await forwarderCancellation()
+        step("app forwarder: a cancel never overtakes its call"); try await forwarderCancelOrder()
         if let dump = value(after: "--dump") { try dumpCatalog(to: URL(fileURLWithPath: dump)) }
-        print("MCPTests: PASS (v1 catalog names, conservative schemas with ranges in descriptions, tools/list entries, results by protocol version and content, JSON values, stdout isolation, identity inside an app bundle and through symlinks, settings, progress relay, unreachable forwarder, protocol handshake, forwarding with cwd/client/version/roots, progress notifications, cancellation, unknown and withheld tools, malformed params -32602, unknown arguments refused, data-URL-like strings kept as sent, batches -32600, shutdown drain)")
+        print("MCPTests: PASS (v1 catalog names, conservative schemas with ranges in descriptions, tools/list entries, results by protocol version and content, JSON values, stdout isolation, identity inside an app bundle and through symlinks, settings, progress relay, unreachable forwarder, protocol handshake, forwarding with cwd/client/version/roots, progress notifications, cancellation, unknown and withheld tools, malformed params -32602, unknown arguments refused, data-URL-like strings kept as sent, batches -32600, shutdown drain, control channel framing/messages/replies/socket location/connections, app forwarder settings/calls/progress/quit mid-call/reconnect/protocol mismatch/hello refused or late/opening the app/cancellation/cancel after its call/shutdown)")
     }
 
     // MARK: - Helpers

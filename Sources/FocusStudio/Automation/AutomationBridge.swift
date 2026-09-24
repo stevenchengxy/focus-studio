@@ -15,7 +15,8 @@ import Foundation
 ///   set_zoom_style reject unknown keys) and pins the call to that project;
 /// - for an editing or output tool, opens the project in the editor first,
 ///   saving and closing any other, so the person using the app watches each
-///   change; refused while recording or busy. Every call that changes what
+///   change (a main window is put on screen first, without activating the
+///   app); refused while recording or busy. Every call that changes what
 ///   the app shows is also refused while the in-app assistant is partway
 ///   through a request, an export from the editor runs or a save or open
 ///   panel is up. Read-only tools never navigate;
@@ -36,6 +37,10 @@ final class AutomationBridge {
     /// Turns for the calls that navigate, held until the call returns (a
     /// detached job lets the next call go while it keeps running).
     let queue = AutomationCallQueue()
+    /// Puts a main window on screen, without activating the app, before a
+    /// call changes what it shows (``MainWindowPresenter`` in the app; nil
+    /// in tests).
+    var presentWindow: (@MainActor () -> Void)?
 
     init(model: StudioModel, catalog: MCPToolCatalog = .v1, jobs: AutomationJobs? = nil) {
         self.model = model
@@ -46,12 +51,15 @@ final class AutomationBridge {
     /// `progress` receives measured progress (always increasing, on any
     /// thread) until the call returns. A cancelled caller gets `.cancelled`
     /// once the tool has stopped; nothing is sent to the client then.
+    /// `stillAllowed` is asked right before the tool runs, after any wait
+    /// for a turn; a refusal it returns is the call's `isError` result.
     func call(
         toolName: String,
         arguments: [String: Any],
         workingDirectory: URL?,
         clientName: String?,
-        progress: AIToolProgressHandler?
+        progress: AIToolProgressHandler?,
+        stillAllowed: (@MainActor () -> String?)? = nil
     ) async -> AutomationCallResult {
         guard let spec = catalog.tool(named: toolName) else { return .unknownTool(toolName) }
         if spec.name == MCPToolCatalog.waitForJobName {
@@ -64,6 +72,8 @@ final class AutomationBridge {
             guard await queue.acquire() else { return .cancelled }
         }
         defer { if spec.navigates { queue.release() } }
+        // AI tools may have been turned off, or the client revoked, while this call waited.
+        if let refusal = stillAllowed?() { return .result(.failure(refusal)) }
         let prepared: (arguments: ToolArguments, context: AIAssistantContext)
         do {
             prepared = try prepare(spec, arguments: arguments, workingDirectory: workingDirectory)
@@ -108,8 +118,9 @@ final class AutomationBridge {
         if let projectID, model.project(id: projectID) == nil {
             throw AIToolError.invalidArgument("No project has the id \(projectID.uuidString). Call list_projects for the current ids.")
         }
-        if spec.navigates, let refusal = model.automationNavigationRefusal {
-            throw AIToolError.failed(refusal)
+        if spec.navigates {
+            if let refusal = model.automationNavigationRefusal { throw AIToolError.failed(refusal) }
+            presentWindow?()
         }
         if let projectID, spec.scope == .project { try model.openProjectForAutomation(id: projectID) }
         let context = model.makeAutomationContext(projectID: projectID, workingDirectory: workingDirectory)

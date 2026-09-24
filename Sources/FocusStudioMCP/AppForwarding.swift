@@ -60,10 +60,11 @@ protocol AppForwarding: Sendable {
 }
 
 /// Answers every call with an error saying Focus Studio could not be
-/// reached: this helper has no channel to the app yet.
+/// reached: what ``SocketAppForwarder`` answers when the app is not running
+/// and the helper may not open it (`FOCUS_STUDIO_MCP_NO_LAUNCH=1`).
 struct UnreachableAppForwarder: AppForwarding {
     static func message(for toolName: String) -> String {
-        "Focus Studio could not be reached, so \(toolName) did not run and nothing was changed. This build of the focus-studio-mcp helper has no connection to the Focus Studio app, so retrying will not help; tell the person that controlling Focus Studio over MCP is not available in this build."
+        "Focus Studio could not be reached, so \(toolName) did not run and nothing was changed. Focus Studio is not running, and this focus-studio-mcp was started with \(AppConnectionSettings.noLaunchVariable)=1, so it does not open it. Ask the person to open Focus Studio, then try again."
     }
 
     func forward(_ call: ForwardedToolCall) async -> AutomationCallResult {

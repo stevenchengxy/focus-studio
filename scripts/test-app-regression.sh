@@ -21,4 +21,10 @@ swiftc -parse-as-library -g \
   Tests/FocusStudioAppRegression/*.swift \
   "${CORE_OBJECTS[@]}" "${CAPTURE_OBJECTS[@]}" "${AUTOMATION_OBJECTS[@]}" \
   -o "$TEST_DIR/navigation-regression"
-"$TEST_DIR/navigation-regression"
+# MCPEndToEndRegression drives the real focus-studio-mcp from this build
+# (swift build builds it) with Tests/MCPTests/mcp_e2e.py.
+[[ -x "$BUILD_DIR/focus-studio-mcp" ]] || { echo "Build focus-studio-mcp first: swift build" >&2; exit 1; }
+FOCUS_STUDIO_TEST_MCP_HELPER="$BUILD_DIR/focus-studio-mcp" \
+FOCUS_STUDIO_TEST_MCP_E2E="$PROJECT_DIR/Tests/MCPTests/mcp_e2e.py" \
+FOCUS_STUDIO_TEST_MCP_TOOLS="$PROJECT_DIR/Tests/MCPTests/v1-tools.txt" \
+  "$TEST_DIR/navigation-regression"

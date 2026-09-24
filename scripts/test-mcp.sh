@@ -5,15 +5,26 @@
 #    protocol version, JSON values, identity, the progress relay, and the
 #    server over a scripted transport (handshake, forwarding with working
 #    directory/client/version/roots, progress, cancellation, unknown and
-#    withheld tools, shutdown). Compiled from the helper's sources (not its
-#    main.swift) and linked with the objects of the helper's debug build.
+#    withheld tools, shutdown), and the helper's end of the control channel
+#    (SocketAppForwarder) against an in-process fake app on a real Unix
+#    socket and a scripted launcher (hello, calls, progress, the app quitting
+#    mid-call, reconnecting, protocol mismatch, opening the app, cancellation,
+#    shutdown). Compiled from the helper's sources (not its main.swift) and
+#    linked with the objects of the helper's debug build.
 # 2. Tests/MCPTests/mcp_client.py: the built helper over real stdio, as a
 #    stdlib-only Python MCP client (version negotiation, ping, tools/list
 #    against the catalog, tools/call, -32602, unknown arguments, batches
 #    -32600, progress token, cancellation, an idle helper that does not poll
 #    and leaves stdin blocking, stdout carrying only JSON-RPC, exit at end of
-#    input), then the same handshake from inside a minimal Focus Studio.app
-#    and through a symlink to it, which must report the app's version.
+#    input), the helper against Tests/MCPTests/fake-app.py on a socket of its
+#    own (forwarding, progress, cancel, quit mid-call, crash, reconnect,
+#    protocol mismatch, late hello, shutdown; launch settings refused before
+#    anything opens), then the same handshake from inside a minimal
+#    Focus Studio.app and through a symlink to it, which must report the
+#    app's version. No run opens or reaches a real Focus Studio: every helper
+#    gets FOCUS_STUDIO_MCP_NO_LAUNCH=1 and a scratch FOCUS_STUDIO_CONTROL_SOCKET.
+# The end-to-end run against the real ControlServer is in
+# scripts/test-app-regression.sh (MCPEndToEndRegression + mcp_e2e.py).
 set -euo pipefail
 SCRIPT_DIR="${0:A:h}"
 PROJECT_DIR="${SCRIPT_DIR:h}"

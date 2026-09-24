@@ -1,11 +1,20 @@
 import SwiftUI
 
+/// Identity of the main window scene.
+enum MainWindow {
+    static let id = "main"
+}
+
 @main
 struct FocusStudioApp: App {
-    @StateObject private var model = StudioModel()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    // One model for the app's lifetime, shared with the AppDelegate so the
+    // library loads and AI tools are served even when no window is open.
+    @StateObject private var model = AppServices.shared.model
+    private let services = AppServices.shared
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: MainWindow.id) {
             AppLocalizedView {
                 TextCompletionInjector(store: model.aiGateway) {
                     StudioRootView()
@@ -36,6 +45,8 @@ struct FocusStudioApp: App {
                         .tabItem { Label("AI models", systemImage: "sparkles") }
                     CodexConnectionSettingsView(director: model.codexDirector, showsDoneButton: false)
                         .tabItem { Label("Codex", systemImage: "terminal") }
+                    AutomationSettingsView(access: services.accessStore, connector: services.connector, server: services.controlServer)
+                        .tabItem { Label("AI tools", systemImage: "point.3.connected.trianglepath.dotted") }
                 }
                 .preferredColorScheme(.dark)
             }
@@ -106,9 +117,22 @@ struct StudioRootView: View {
                 .transition(.opacity.combined(with: .scale(scale: 0.96)))
             }
         }
+        .overlay(alignment: .top) {
+            // "Claude Code is working…" while an external AI call runs.
+            // Information only: it never catches clicks, and it sits below
+            // every top bar (at most 64 pt), not on the editor toolbar's controls.
+            AutomationActivityBadge(activity: AppServices.shared.activity)
+                .allowsHitTesting(false)
+                .padding(.top, 72)
+        }
         .animation(reduceMotion ? nil : StudioMotion.pageAnimation, value: model.destination)
         .animation(StudioMotion.fade, value: model.isBusy)
         .foregroundStyle(StudioTheme.text)
+        .background(HostingWindowReader { MainWindowPresenter.shared.register($0) })
+        .onAppear {
+            // Lets an AI call open a main window when none is open.
+            MainWindowPresenter.shared.openMainWindow = { [openWindow] in openWindow(id: MainWindow.id) }
+        }
         .task {
             await model.bootstrap()
             // QA hook: FOCUS_STUDIO_OPEN_SETTINGS=1 opens the Settings window on launch.

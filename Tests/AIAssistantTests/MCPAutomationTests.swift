@@ -316,6 +316,25 @@ extension AIAssistantTests {
         let afterWait = callResult(await background.waitForJob(arguments: ["job_id": backgroundID, "timeout_seconds": 5], progress: nil), "after wait")
         check(afterWait.text == "Assembled", "the job still finished")
 
+        // The app quitting cancels the detached jobs still running and can wait for them.
+        let quitting = AutomationJobs(detachAfter: 0.05)
+        let quitStopped = Flag()
+        let quitDetached = callResult(await quitting.run(tool: "export_project", progress: nil) { _ in
+            do {
+                try await Task.sleep(nanoseconds: 30_000_000_000)
+            } catch {
+                quitStopped.raise()
+                throw error
+            }
+            return final
+        }, "quitting")
+        let quitID = quitDetached.structuredContent!["job_id"]!.stringValue!
+        let cancelledTasks = quitting.cancelRunning()
+        check(cancelledTasks.count == 1 && background.cancelRunning().isEmpty, "only running detached jobs are cancelled: \(cancelledTasks.count)")
+        let quitStarted = Date()
+        for task in cancelledTasks { await task.value }
+        check(quitStopped.isRaised && quitting.runningJobIDs.isEmpty && Date().timeIntervalSince(quitStarted) < 2, "the job stopped and its cleanup ran before cancelRunning's tasks finished (\(quitID))")
+
         // Work cancelled by someone else is an error result, never a silent drop.
         let selfCancelled = callResult(await quick.run(tool: "export_project", progress: nil) { _ in throw CancellationError() }, "self-cancelled")
         check(selfCancelled.isError && selfCancelled.text.contains("cancelled before it finished"), "a cancellation the caller did not ask for is reported")

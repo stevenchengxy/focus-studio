@@ -347,7 +347,9 @@ extension MCPTests {
         // The app not knowing a catalog tool (an older app) is the same error.
         session.request(3, "tools/call", ["name": "list_assets"])
         let older = try await session.response(3)
-        check(older["error"]?["code"] == -32602, "a tool the app does not know: -32602: \(older)")
+        let olderText = older["error"]?["message"]?.stringValue ?? ""
+        check(older["error"]?["code"] == -32602 && olderText.contains("The Focus Studio that is running does not offer \"list_assets\"") && !olderText.contains("Call tools/list"),
+              "a tool the app does not know: -32602 saying the running app is older, not pointing at tools/list (which lists it): \(older)")
         _ = await session.finish()
     }
 

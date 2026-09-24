@@ -48,8 +48,11 @@ def main():
         {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
     ]
     payload = b"".join(json.dumps(message).encode("utf-8") + b"\n" for message in messages)
-    environment = {**os.environ, "FOCUS_STUDIO_MCP_NO_LAUNCH": "1"}
     with tempfile.TemporaryDirectory() as scratch:
+        # initialize and tools/list never reach the app; should that change,
+        # the helper still must not open or reach a real Focus Studio here.
+        environment = {**os.environ, "FOCUS_STUDIO_MCP_NO_LAUNCH": "1",
+                       "FOCUS_STUDIO_CONTROL_SOCKET": os.path.join(scratch, "none.sock")}
         try:
             completed = subprocess.run(command, input=payload, capture_output=True, timeout=15, cwd=scratch, env=environment)
         except subprocess.TimeoutExpired:

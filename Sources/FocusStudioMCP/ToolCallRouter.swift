@@ -239,6 +239,11 @@ final class ToolCallRouter: @unchecked Sendable {
         if MCPToolCatalog.withheldToolNames.contains(name) {
             return "The tool \"\(name)\" is not available to MCP clients. Call tools/list for the tools Focus Studio offers."
         }
+        if catalog.tool(named: name) != nil {
+            // Listed by this helper (only such names are forwarded), but the
+            // Focus Studio that is running does not know it: an older copy.
+            return "The Focus Studio that is running does not offer \"\(name)\": it is older than this focus-studio-mcp, so \(name) did not run and nothing was changed. Ask the person to update Focus Studio, or to quit the running copy so the one this AI tool uses opens, then try again."
+        }
         return "Unknown tool \"\(name)\". Call tools/list for the tools Focus Studio offers."
     }
 
