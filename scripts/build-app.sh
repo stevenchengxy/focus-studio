@@ -119,8 +119,8 @@ mkdir -p "$CONTENTS_DIR/MacOS" "$CONTENTS_DIR/Resources"
 MINIMUM_MACOS="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$PROJECT_DIR/Resources/Info.plist")"
 source_digest() {
     {
-        shasum -a 256 "$PROJECT_DIR/Package.swift" "$PROJECT_DIR/Resources/Info.plist" "$PROJECT_DIR/Resources/FocusStudio.entitlements"
-        find "$PROJECT_DIR/Sources/FocusStudio" "$PROJECT_DIR/Sources/FocusStudioCore" -type f -name '*.swift' -print | LC_ALL=C sort | while IFS= read -r source_file; do
+        shasum -a 256 "$PROJECT_DIR/Package.swift" "$PROJECT_DIR/Package.resolved" "$PROJECT_DIR/Resources/Info.plist" "$PROJECT_DIR/Resources/FocusStudio.entitlements"
+        find "$PROJECT_DIR/Sources/FocusStudio" "$PROJECT_DIR/Sources/FocusStudioCore" "$PROJECT_DIR/Sources/FocusStudioAutomation" "$PROJECT_DIR/Sources/FocusStudioMCP" -type f -name '*.swift' -print | LC_ALL=C sort | while IFS= read -r source_file; do
             shasum -a 256 "$source_file"
         done
         find "$PROJECT_DIR/Resources" -type f -print | LC_ALL=C sort | while IFS= read -r resource_file; do
@@ -130,21 +130,32 @@ source_digest() {
 }
 SOURCE_DIGEST_BEFORE="$(source_digest)"
 SLICE_PATHS=()
+HELPER_SLICE_PATHS=()
+HELPER_LINK_LISTS=()
+# The MCP helper (focus-studio-mcp) is built exactly like the app, per
+# architecture, from the versions pinned in Package.resolved.
 for architecture in "${ARCHITECTURES[@]}"; do
     triple="$architecture-apple-macosx$MINIMUM_MACOS"
     scratch_path="$PROJECT_DIR/.build/distribution/$architecture"
-    swift build -c release --product FocusStudio --triple "$triple" --scratch-path "$scratch_path"
+    swift build -c release --product FocusStudio --triple "$triple" --scratch-path "$scratch_path" --force-resolved-versions
+    swift build -c release --product focus-studio-mcp --triple "$triple" --scratch-path "$scratch_path" --force-resolved-versions
     binary_directory="$(swift build -c release --triple "$triple" --scratch-path "$scratch_path" --show-bin-path)"
     SLICE_PATHS+=("$binary_directory/FocusStudio")
+    HELPER_SLICE_PATHS+=("$binary_directory/focus-studio-mcp")
+    HELPER_LINK_LISTS+=("$binary_directory/focus-studio-mcp.product/Objects.LinkFileList")
 done
 [[ "$(source_digest)" == "$SOURCE_DIGEST_BEFORE" ]] || {
     echo "Sources changed during release build. Retry after edits are complete so both architectures use the same code." >&2
     exit 1
 }
+HELPER="$CONTENTS_DIR/MacOS/focus-studio-mcp"
+HELPER_IDENTIFIER="com.local.focusstudio.mcp"
 if (( ${#SLICE_PATHS[@]} > 1 )); then
     lipo -create "${SLICE_PATHS[@]}" -output "$CONTENTS_DIR/MacOS/FocusStudio"
+    lipo -create "${HELPER_SLICE_PATHS[@]}" -output "$HELPER"
 else
     cp "${SLICE_PATHS[1]}" "$CONTENTS_DIR/MacOS/FocusStudio"
+    cp "${HELPER_SLICE_PATHS[1]}" "$HELPER"
 fi
 cp "$PROJECT_DIR/Resources/Info.plist" "$CONTENTS_DIR/Info.plist"
 cp "$PROJECT_DIR/Resources/FocusStudio.icns" "$CONTENTS_DIR/Resources/FocusStudio.icns"
@@ -172,6 +183,62 @@ for asset in catalog["assets"]:
 print("Verified %d bundled backgrounds." % len(catalog["assets"]))
 PYCHECK
 
+# focus-studio-mcp statically links the MCP Swift SDK and some of its
+# dependencies; their licence and notice texts ship in the app. Every module
+# the helper links must belong to Focus Studio or to a package listed here,
+# so a new dependency (after an SDK upgrade) stops the build until its texts
+# are added (here and in verify-release.sh).
+typeset -A NOTICE_PACKAGE_OF_MODULE=(
+    MCP swift-sdk
+    Logging swift-log
+    SystemPackage swift-system
+    CSystem swift-system
+    EventSource eventsource
+)
+NOTICE_PACKAGES=(swift-sdk swift-log swift-system eventsource)
+typeset -A NOTICE_FILES=(
+    swift-sdk LICENSE
+    swift-log "LICENSE.txt NOTICE.txt"
+    swift-system LICENSE.txt
+    eventsource LICENSE.md
+)
+for link_list in "${HELPER_LINK_LISTS[@]}"; do
+    [[ -s "$link_list" ]] || { echo "Missing link file list of focus-studio-mcp: $link_list" >&2; exit 1; }
+    for linked_module in $(sed -E 's#.*/([^/]+)\.build/.*#\1#' "$link_list" | sort -u); do
+        case "$linked_module" in
+            FocusStudioMCP|FocusStudioAutomation|FocusStudioCore) ;;
+            *) [[ -n "${NOTICE_PACKAGE_OF_MODULE[$linked_module]:-}" ]] || {
+                echo "focus-studio-mcp links $linked_module, which has no third-party notice; add its package to build-app.sh and verify-release.sh." >&2
+                exit 1
+            } ;;
+        esac
+    done
+done
+pinned_package() {
+    python3 -c 'import json, sys
+pins = {pin["identity"]: pin for pin in json.load(open(sys.argv[1]))["pins"]}
+pin = pins[sys.argv[2]]
+print(pin["state"].get("version") or pin["state"]["revision"], pin["location"])' "$PROJECT_DIR/Package.resolved" "$1"
+}
+notice_checkouts="$PROJECT_DIR/.build/distribution/${ARCHITECTURES[1]}/checkouts"
+{
+    print -r -- "Third-party software in Focus Studio"
+    print -r -- ""
+    print -r -- "Focus Studio's MCP helper (Contents/MacOS/focus-studio-mcp) includes the following open-source packages, at the versions pinned in Package.resolved. Their licence and notice texts follow."
+    for notice_package in "${NOTICE_PACKAGES[@]}"; do
+        notice_pin="$(pinned_package "$notice_package")"
+        print -r -- ""
+        print -r -- "==== $notice_package ${notice_pin%% *} (${notice_pin#* }) ===="
+        for notice_file in ${(z)NOTICE_FILES[$notice_package]}; do
+            [[ -s "$notice_checkouts/$notice_package/$notice_file" ]] || { echo "Missing licence text: $notice_package/$notice_file" >&2; exit 1; }
+            print -r -- ""
+            print -r -- "---- $notice_file ----"
+            print -r -- ""
+            cat "$notice_checkouts/$notice_package/$notice_file"
+        done
+    done
+} > "$CONTENTS_DIR/Resources/ThirdPartyNotices.txt"
+
 for required_resource in catalog.json README.md "${BUNDLED_AUDIO_ASSETS[@]}"; do
     if [[ ! -f "$CONTENTS_DIR/Resources/Audio/$required_resource" ]]; then
         echo "Missing bundled audio resource: $required_resource" >&2
@@ -190,18 +257,29 @@ if [[ -z "$FOCUS_SIGNING_IDENTITY" ]]; then
     FOCUS_SIGNING_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/Apple Development/ { print $2; exit }')"
 fi
 
+# The helper is nested code: it is signed first, under its own identifier and
+# without entitlements, and the app's signature then seals it.
 if [[ -n "$FOCUS_SIGNING_IDENTITY" && "$FOCUS_SIGNING_IDENTITY" != "-" ]]; then
+    HELPER_SIGN_OPTIONS=(--force --options runtime --identifier "$HELPER_IDENTIFIER" --sign "$FOCUS_SIGNING_IDENTITY")
     SIGN_OPTIONS=(--force --options runtime --entitlements "$PROJECT_DIR/Resources/FocusStudio.entitlements" --sign "$FOCUS_SIGNING_IDENTITY")
     if [[ "$FOCUS_SIGNING_IDENTITY" == "Developer ID Application:"* ]]; then
+        HELPER_SIGN_OPTIONS+=(--timestamp)
         SIGN_OPTIONS+=(--timestamp)
     fi
+    codesign "${HELPER_SIGN_OPTIONS[@]}" "$HELPER"
     codesign "${SIGN_OPTIONS[@]}" "$STAGED_APP"
     echo "Signed with stable identity: $FOCUS_SIGNING_IDENTITY"
 else
-    # Keep the fallback identifier deterministic, but ad-hoc signatures are not
+    # Keep the fallback identifiers deterministic, but ad-hoc signatures are not
     # a durable TCC identity across rebuilt binaries. For persistent Screen
     # Recording grants, set FOCUS_STUDIO_SIGNING_IDENTITY to an Apple
     # Development or Developer ID certificate.
+    codesign \
+        --force \
+        --sign - \
+        --identifier "$HELPER_IDENTIFIER" \
+        --requirements "=designated => identifier \"$HELPER_IDENTIFIER\"" \
+        "$HELPER"
     codesign \
         --force \
         --sign - \

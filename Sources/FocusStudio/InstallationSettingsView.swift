@@ -1,4 +1,5 @@
 import AppKit
+import FocusStudioAutomation
 import SwiftUI
 
 @MainActor
@@ -105,7 +106,11 @@ final class AppInstallationCoordinator: ObservableObject {
 }
 
 struct InstallationSettingsView: View {
+    /// Disables the buttons and shows the hint; as of the last render.
     let isBusy: Bool
+    /// Read again when a button is clicked: an AI call or job can start or
+    /// end without this view rendering again.
+    let isBusyNow: @MainActor () -> Bool
     @ObservedObject private var installation = AppInstallationCoordinator.shared
     @ObservedObject private var localization = AppLocalization.shared
     @State private var confirmsInstall = false
@@ -134,7 +139,7 @@ struct InstallationSettingsView: View {
                     Button("Install this copy to Applications") { confirmsInstall = true }
                         .disabled(!installation.canInstallCurrent || installation.isWorking || isBusy)
                         .accessibilityIdentifier("installation.install")
-                    Button("Open installed copy") { installation.openInstalledCopy(isBusy: isBusy) }
+                    Button("Open installed copy") { installation.openInstalledCopy(isBusy: isBusyNow()) }
                         .disabled(installation.installed == nil || installation.isCanonical || installation.isWorking || isBusy)
                         .accessibilityIdentifier("installation.openInstalled")
                     Button("Refresh") { Task { await installation.refresh() } }
@@ -164,7 +169,7 @@ struct InstallationSettingsView: View {
         }
         .alert("Install Focus Studio in Applications?", isPresented: $confirmsInstall) {
             Button("Cancel", role: .cancel) {}
-            Button("Install") { Task { await installation.installThisCopy(isBusy: isBusy) } }
+            Button("Install") { Task { await installation.installThisCopy(isBusy: isBusyNow()) } }
         } message: {
             Text("The verified app will be copied to /Applications/Focus Studio.app. A previous installation is backed up. Running apps are not replaced, and your projects are not changed.")
         }
@@ -173,6 +178,8 @@ struct InstallationSettingsView: View {
 
 struct InstallationNoticeView: View {
     let isBusy: Bool
+    /// Read again when a button is clicked (see InstallationSettingsView).
+    let isBusyNow: @MainActor () -> Bool
     @ObservedObject private var installation = AppInstallationCoordinator.shared
     @Environment(\.openSettings) private var openSettings
 
@@ -188,7 +195,7 @@ struct InstallationNoticeView: View {
                         }
                         Spacer()
                         if installation.hasNewerInstalledCopy {
-                            Button("Open installed copy") { installation.openInstalledCopy(isBusy: isBusy) }
+                            Button("Open installed copy") { installation.openInstalledCopy(isBusy: isBusyNow()) }
                                 .disabled(isBusy || installation.isWorking)
                         }
                         Button("Installation settings") {

@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import CoreGraphics
+import FocusStudioAutomation
 import FocusStudioCore
 import Foundation
 

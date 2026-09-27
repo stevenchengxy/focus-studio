@@ -1,4 +1,5 @@
 import AppKit
+import FocusStudioAutomation
 import SwiftUI
 
 struct CodexConnectionSettingsView: View {

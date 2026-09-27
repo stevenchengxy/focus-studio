@@ -1,3 +1,4 @@
+import FocusStudioAutomation
 import SwiftUI
 
 /// Settings › AI models. Providers on the left; the selected provider's key,

@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import FocusStudioAutomation
 import SwiftUI
 import UniformTypeIdentifiers
 

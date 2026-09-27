@@ -42,7 +42,8 @@ actor ProjectStore {
 
     typealias TrashOperation = @Sendable (URL) throws -> Void
     private let fileManager: FileManager
-    private let projectsDirectory: URL
+    /// The library root; each project is a `<UUID>/` folder inside it.
+    nonisolated let projectsDirectory: URL
     private let trashOperation: TrashOperation?
 
     private var incomingDirectory: URL {

@@ -1,4 +1,5 @@
 import AppKit
+import FocusStudioAutomation
 import FocusStudioCore
 import ImageIO
 import SwiftUI

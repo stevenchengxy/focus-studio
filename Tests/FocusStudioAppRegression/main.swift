@@ -6,6 +6,12 @@ import SwiftUI
 struct AppRegression {
     @MainActor
     static func main() async throws {
+        // Never touch the real ark.env, secrets.json or the network from a
+        // test: the ControlServer and MCP end-to-end fixtures run
+        // StudioModel.bootstrap(), which would import an Ark key otherwise.
+        setenv("FOCUS_STUDIO_IMPORT_ARK_ENV", "0", 1)
+        unsetenv("FOCUS_STUDIO_START_DESTINATION")
+        unsetenv("FOCUS_STUDIO_ASSISTANT_PROMPT")
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("FocusStudio-Navigation-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -126,6 +132,12 @@ struct AppRegression {
         await model.flushProjectEdits()
         try await ProjectLibraryRegression.run()
         try await RecordingLifecycleRegression.run()
-        print("FocusStudioAppRegression: PASS (interaction preflight, 50 open/edit/back cycles, stale binding reads/writes, autosave, zoom timing edit/save/reload/regeneration)")
+        try await AssistantControlRegression.run()
+        try await RecordingSessionRegression.run()
+        try await AutomationBridgeRegression.run()
+        try await ControlServerRegression.run()
+        try await MCPClientConnectorRegression.run()
+        try await MCPEndToEndRegression.run()
+        print("FocusStudioAppRegression: PASS (interaction preflight, 50 open/edit/back cycles, stale binding reads/writes, autosave, zoom timing edit/save/reload/regeneration, recording lifecycle (toolbar source kinds, area re-selection, busy/off-page guards), assistant control, recording sessions (countdown, duration, pause and resume, joined stop, per-recording options, the sound prompt), automation bridge, control server and approvals within the call's time, MCP client connector, MCP end to end through focus-studio-mcp)")
     }
 }

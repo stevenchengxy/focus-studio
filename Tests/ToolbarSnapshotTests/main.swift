@@ -10,7 +10,7 @@ import SwiftUI
 @main
 struct ToolbarSnapshotTests {
     @MainActor
-    static func main() throws {
+    static func main() async throws {
         let output = URL(fileURLWithPath: CommandLine.arguments.dropFirst().first
             ?? ".artifacts/qa-1.6.0-b11", isDirectory: true).standardizedFileURL
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
@@ -113,6 +113,52 @@ struct ToolbarSnapshotTests {
             precondition(size > 500, "Compact snapshot PNG must not be empty")
             reports.append(["path": url.path, "width": image.width, "height": image.height,
                             "distinctColors": variedPixels, "bytes": size])
+        }
+        // An AI tool's recording: its countdown names the tool and the sound,
+        // and its recording bar shows the recorded time left beside the clock.
+        // The capture is scripted through the model's seams; nothing records.
+        do {
+            let live = StudioModel(
+                store: ProjectStore(projectsDirectory: fixtureRoot.appendingPathComponent("LiveFixture", isDirectory: true)),
+                interactionTrackingAccess: { true }, inputMonitoringAccess: { true },
+                startCapture: { _, _, _, _ in ProcessInfo.processInfo.systemUptime },
+                recordingClock: RecordingClock(now: { ProcessInfo.processInfo.systemUptime }, sleep: { _ in await Task.yield() })
+            )
+            live.automationRequester = { "Claude Code" }
+            let display = CaptureTargetInfo(id: "toolbar-fixture-display", kind: .display, nativeID: 424243,
+                title: "Built-in Retina Display", frame: CaptureRect(x: 0, y: 0, width: 1440, height: 900))
+            var settings = live.recorderSettings
+            settings.microphone = true
+            settings.systemAudio = true
+            precondition(live.beginRecordingCountdown(target: display, settings: settings, duration: 60) != nil,
+                         "The scripted countdown must start")
+            precondition(live.currentRecording?.requester == "Claude Code" && live.destination == .countdown)
+            precondition(RecordingPanelLayout.compact(for: live.currentRecording) == .compactDetailed
+                         && RecordingPanelLayout.compact(for: nil) == .compact && RecordingPanelLayout.compactDetailed.preferredSize == NSSize(width: 392, height: 46),
+                         "A recording with a duration or sound gets the wider bar, chosen at its countdown")
+            var shots: [(name: String, layout: RecordingPanelLayout, width: Int, height: Int)] = [
+                ("toolbar-countdown-ai-compact.png", .compactDetailed, 392, 46),
+                ("toolbar-countdown-ai-expanded.png", .expanded, 760, 116),
+            ]
+            for shot in shots {
+                reports.append(try snapshot(FloatingRecordingControls(model: live, layoutOverride: shot.layout),
+                                            width: shot.width, height: shot.height, minimumColors: 30, to: output.appendingPathComponent(shot.name)))
+            }
+            let deadline = Date().addingTimeInterval(10)
+            while live.destination != .recording {
+                precondition(Date() < deadline, "The scripted recording did not start")
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            precondition(live.currentRecording?.isLive == true && live.currentRecording?.duration == 60)
+            shots = [
+                ("toolbar-recording-ai-compact.png", .compactDetailed, 392, 46),
+                ("toolbar-recording-ai-expanded.png", .expanded, 760, 116),
+            ]
+            for shot in shots {
+                reports.append(try snapshot(FloatingRecordingControls(model: live, layoutOverride: shot.layout),
+                                            width: shot.width, height: shot.height, minimumColors: 30, to: output.appendingPathComponent(shot.name)))
+            }
+            await live.cancelRecording()
         }
         // The cursor inspector, so the style gallery is checked the same way the
         // toolbar is: rendered from the real view, never from a description of it.
@@ -221,10 +267,26 @@ struct ToolbarSnapshotTests {
         try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
             .write(to: output.appendingPathComponent("toolbar-snapshots.json"), options: .atomic)
         precondition(!model.captureEngine.isRecording && model.destination == .recorder)
-        print("ToolbarSnapshotTests: PASS (real SwiftUI ready toolbar at 760×116 and 640×116, the 324×46 recording bar, window mode, the cursor and background inspectors and the area overlay; isolated fixture, no live app or screen capture)")
+        print("ToolbarSnapshotTests: PASS (real SwiftUI ready toolbar at 760×116 and 640×116, the 324×46 recording bar, window mode, an AI tool's countdown and recording (named tool, sound, recorded time left) compact and expanded, the cursor and background inspectors and the area overlay; isolated fixture, no live app, panels or screen capture)")
     }
 
     enum SnapshotError: Error { case renderFailed }
+
+    /// Renders `view` at its real size, checks it is not flat and writes the PNG.
+    @MainActor
+    private static func snapshot<V: View>(_ view: V, width: Int, height: Int, minimumColors: Int, to url: URL) throws -> [String: Any] {
+        let image = try renderOffscreen(view.preferredColorScheme(.dark).frame(width: CGFloat(width), height: CGFloat(height)), width: width, height: height)
+        precondition(image.width == width && image.height == height, "\(url.lastPathComponent) must use its real logical layout dimensions")
+        let variedPixels = countDistinctColors(image)
+        precondition(variedPixels > minimumColors, "\(url.lastPathComponent) must contain rendered controls, not a flat background")
+        guard let destination = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) else {
+            throw SnapshotError.renderFailed
+        }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else { throw SnapshotError.renderFailed }
+        return ["path": url.path, "width": image.width, "height": image.height, "distinctColors": variedPixels,
+                "bytes": try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0]
+    }
 
     @MainActor
     private static func renderOffscreen<V: View>(_ view: V, width: Int, height: Int) throws -> CGImage {
