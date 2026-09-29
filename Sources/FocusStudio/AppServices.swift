@@ -61,7 +61,12 @@ final class AppServices {
         // in the app (a call running, or a detached export or other job).
         automationObserver = Self.reportAutomationWork(of: activity, jobs: bridge.jobs, to: model)
         // A person's Finish with no main window open opens one for the editor.
-        model.presentMainWindow = { MainWindowPresenter.shared.present() }
+        model.presentMainWindow = { MainWindowPresenter.shared.present(activate: true) }
+        model.presentAssistantWindow = {
+            guard let app = NSApp, app.activationPolicy() == .regular else { return }
+            AssistantWindow.presenter.present(activate: true)
+            app.activate(ignoringOtherApps: true)
+        }
         // The recording control bar follows the model, window or not.
         RecordingControlPanelCoordinator.shared.follow(model)
     }

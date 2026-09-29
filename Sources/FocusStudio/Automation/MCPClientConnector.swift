@@ -76,7 +76,11 @@ enum MCPClientKind: String, CaseIterable, Identifiable, Sendable {
         paths += versions.map { "\(nvm)/\($0)/bin/\(name)" }
         if self == .codex {
             for applications in ["/Applications", "\(home)/Applications"] {
-                paths += ["\(applications)/Codex.app/Contents/Resources/codex", "\(applications)/ChatGPT.app/Contents/Resources/codex"]
+                paths += [
+                    "\(applications)/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+                    "\(applications)/Codex.app/Contents/Resources/codex",
+                    "\(applications)/ChatGPT.app/Contents/Resources/codex"
+                ]
             }
         }
         return paths

@@ -395,13 +395,20 @@ extension AIAssistantTests {
         app.projects = [other, project]
         try app.openProject(id: other.id)
 
+        // The in-app catalog exposes the same read-only implementation as MCP.
+        guard let sharedTool = AIAssistantToolCatalog.standard.first(where: { $0.name == "get_project" }) else {
+            fatalError("FAIL: unified assistant needs get_project")
+        }
+        check(sharedTool is GetProjectTool, "the assistant reuses the shared project reader")
         // Not open: read from the library, and the editor stays on the other project.
-        let result = try await GetProjectTool().run(arguments: ["project_id": project.id.uuidString], context: context, progress: { _ in })
+        let result = try await sharedTool.run(arguments: ["project_id": project.id.uuidString], context: context, progress: { _ in })
         let data = try structured(result, "get_project")
         check(app.openID == other.id && box.project?.id == other.id && app.closeCount == 0, "get_project never navigates")
         check(data["id"]?.stringValue == project.id.uuidString && data["title"] == "Checkout flow" && data["duration"] == 20 && data["source_width"] == 640 && data["source_height"] == 360 && data["open_in_editor"] == false, "identity and size: \(data)")
         check(data["created_at"]?.stringValue?.contains("T") == true && data["export_width"] == 1_920 && data["frame_rate"] == 60, "dates and export settings")
         check(data["look"]?["padding"] == 40 && data["look"]?["backgroundStyle"] == "gradient" && data["look"]?["aspectRatio"] == "wide" && data["look"]?["captionPosition"] == "bottom", "look under update_settings' names: \(data["look"] ?? .null)")
+        check(data["look"]?["zoomFollowsCursor"] == AIJSONValue(project.settings.resolvedZoomFollowsCursor),
+              "get_project reports the resolved camera-follow value that editing can restore")
         check(data["zoom_style"]?["autoZoomEnabled"] == true && data["zoom_style"]?["zoomHold"]?.doubleValue != nil, "zoom style under set_zoom_style's names")
         check(data["audio"]?["background_music"]?["track_id"] == "calm-gradient" && data["audio"]?["background_music"]?["volume"] == 0.3 && data["audio"]?["click"] == true && data["audio"]?["zoom"] == false, "audio under set_sound_effects' names: \(data["audio"] ?? .null)")
         let zoomID = project.zoomSegments[0].id.uuidString
@@ -411,6 +418,21 @@ extension AIAssistantTests {
         check(data["typing"] == [["t": 4, "x": 0.6, "y": 0.7]] && data["typing_count"] == 1, "typing moments")
         check(data["assets_dir"]?.stringValue == folder.appendingPathComponent("ai").path, "the project's assets folder: \(data["assets_dir"] ?? .null)")
         check(result.text.hasPrefix("Project \"Checkout flow\" (id \(project.id.uuidString), not open in the editor)") && result.text.contains("Title: Checkout flow") && result.text.contains("Chapters: 1. 0–4 s Browse"), "text: \(result.text)")
+
+        check(result.text.contains("Interaction trace: source system") && result.text.contains("cursor samples 2") && result.text.contains("rejected events 0"),
+              "trace diagnostics are visible in the model's text receipt as well as structured output")
+        let inspection = ScriptedCompletion([
+            action("get_project", "{\"project_id\":\"\(project.id.uuidString)\"}"),
+            action("get_project", "{\"project_id\":\"\(project.id.uuidString)\"}"), reply("Verified."),
+        ])
+        let inspector = AIAssistantSession(context: context, completion: inspection)
+        inspector.send("Verify the recorded cursor and automatic zooms")
+        try await waitUntil("unified assistant project inspection") { !inspector.isRunning }
+        let receipts = inspector.messages.filter { $0.role == .tool && $0.toolName == "get_project" }
+        check(receipts.count == 2 && receipts.allSatisfy { $0.text.contains("Interaction trace:") && $0.text.contains("Zooms:") },
+              "the assistant can re-read a project to verify current cursor and zoom evidence")
+        check(inspector.pendingConfirmation == nil && app.openID == other.id && box.project?.id == other.id && box.writeCount == 0,
+              "read-only assistant inspection neither asks to mutate nor changes the editor")
 
         // The open project is read from the editor, with edits the library has not seen.
         box.project!.title = "Edited in the editor"
@@ -445,7 +467,7 @@ extension AIAssistantTests {
         var long = makeProject(sourceVideoPath: "/long/raw.mp4", duration: 1_800)
         long.clickEvents = (0..<1_000).map { ClickEvent(time: Double($0) * 1.7, x: 0.123_456, y: 0.654_321, button: .left) }
         long.typingActivity = (0..<1_000).map { TypingActivity(time: Double($0) * 1.3, x: 0.5, y: 0.5) }
-        long.zoomSegments = (0..<500).map { ZoomSegment(start: Double($0) * 3.5, end: Double($0) * 3.5 + 1.25, targetX: 0.333_333, targetY: 0.666_666, scale: 1.75, kind: .automatic) }
+        long.zoomSegments = (0..<500).map { ZoomSegment(start: Double($0) * 3.5, end: Double($0) * 3.5 + 1.25, targetX: 0.333_333, targetY: 0.666_666, scale: 1.75, kind: .automatic, zoomEaseIn: 0.42, zoomEaseOut: 0.52) }
         long.cursorSamples = (0..<50_000).map { CursorSample(time: Double($0) / 30, x: 0.5, y: 0.5) }
         long.chapters = (0..<12).map { DemoChapter(start: Double($0) * 100, end: Double($0) * 100 + 50, title: "Chapter \($0)", caption: String(repeating: "c", count: 60)) }
         app.projects.append(long)
@@ -485,7 +507,11 @@ extension AIAssistantTests {
         let project = makeProject(sourceVideoPath: "/nonexistent.mp4", duration: 5)
         app.projects = [project, makeProject(sourceVideoPath: "/nonexistent.mp4", duration: 6)]
 
-        let idle = try await GetStatusTool().run(arguments: [:], context: context, progress: { _ in })
+        guard let sharedStatus = AIAssistantToolCatalog.standard.first(where: { $0.name == "get_status" }) else {
+            fatalError("FAIL: unified assistant needs get_status")
+        }
+        check(sharedStatus is GetStatusTool, "the assistant reuses the shared readiness reader")
+        let idle = try await sharedStatus.run(arguments: [:], context: context, progress: { _ in })
         let data = try structured(idle, "get_status")
         check(data["recording"] == ["state": "idle", "elapsed": nil, "remaining": nil, "paused": false, "error": nil] && data["open_project_id"] == .null && data["library_count"] == 2, "idle state: \(data)")
         check(data["permissions"] == ["screen_recording": false, "accessibility": true, "input_monitoring": false], "permissions: \(data["permissions"] ?? .null)")
@@ -662,5 +688,75 @@ extension AIAssistantTests {
         let byDefault = try await AssembleVideoTool().run(arguments: ["clips": [intro.path]], context: context, progress: { _ in })
         check(byDefault.attachments[0].deletingLastPathComponent().path == context.assetsDirectory.path && byDefault.attachments[0].lastPathComponent.hasPrefix("assembled-"), "no path still means the assets folder")
         check(AssembleVideoTool().parametersSchema.description.contains("overwrite") && (AssembleVideoTool().parametersSchema["required"] as? [String]) == ["clips"], "the schema offers path and overwrite; only clips is required")
+        try await sharedMediaOutputGuard(root: root, source: intro, sharedSource: outro)
+    }
+
+    /// Export and assembly must treat the shared catalog as app-owned storage,
+    /// including when assembly has no open project. All files are test fixtures.
+    @MainActor
+    private static func sharedMediaOutputGuard(root: URL, source: URL, sharedSource: URL) async throws {
+        let fileManager = FileManager.default
+        let support = root.appendingPathComponent("shared-media-output-guard", isDirectory: true)
+        let projects = support.appendingPathComponent("Projects", isDirectory: true)
+        let shared = support.appendingPathComponent("MediaLibrary", isDirectory: true)
+        let files = shared.appendingPathComponent("files", isDirectory: true)
+        let project = makeProject(sourceVideoPath: source.path, duration: 1)
+        let assets = projects.appendingPathComponent(project.id.uuidString, isDirectory: true)
+            .appendingPathComponent("ai", isDirectory: true)
+        for directory in [files, assets] {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        let sharedMovie = files.appendingPathComponent("shared.mp4")
+        try fileManager.copyItem(at: sharedSource, to: sharedMovie)
+        let catalog = shared.appendingPathComponent("index.json")
+        let catalogBytes = Data(#"[{"id":"shared-fixture","filePath":"files/shared.mp4","duration":1}]"#.utf8)
+        try catalogBytes.write(to: catalog)
+        let movieBytes = try Data(contentsOf: sharedMovie)
+        let alias = support.appendingPathComponent("shared-alias", isDirectory: true)
+        try fileManager.createSymbolicLink(at: alias, withDestinationURL: shared)
+
+        var exportContext = makeContext(root: root, box: ProjectBox(project))
+        exportContext.projectsDirectory = projects
+        exportContext.assetsDirectory = assets
+        var assemblyContext = makeContext(root: root, box: ProjectBox(nil))
+        assemblyContext.projectsDirectory = projects
+        assemblyContext.assetsDirectory = support.appendingPathComponent("AI Assets", isDirectory: true)
+
+        for destination in [sharedMovie, alias.appendingPathComponent("files/shared.mp4")] {
+            await expectToolError("export cannot overwrite a shared media asset", {
+                _ = try await ExportProjectTool().run(arguments: ["path": destination.path, "overwrite": true],
+                    context: exportContext, progress: { _ in })
+            }, isLibraryRefusal)
+            await expectToolError("projectless assembly cannot overwrite a shared media asset", {
+                _ = try await AssembleVideoTool().run(arguments: ["clips": [source.path], "path": destination.path, "overwrite": true],
+                    context: assemblyContext, progress: { _ in })
+            }, isLibraryRefusal)
+        }
+        // Check metadata directly: MP4 output resolution changes extensions,
+        // whereas the location guard itself must reject every catalog file.
+        for currentProject in [Optional(project), nil] {
+            let guardrail = ExportProjectTool.OutputGuard(project: currentProject, context: exportContext)
+            for destination in [catalog, alias.appendingPathComponent("index.json")] {
+                await expectToolError("shared library metadata cannot be overwritten", {
+                    try guardrail.check(destination, overwrite: true)
+                }, isLibraryRefusal)
+            }
+            await expectToolError("new output folders cannot be created inside the shared library", {
+                try guardrail.checkFolder(shared.appendingPathComponent("new-output", isDirectory: true))
+            }, isLibraryRefusal)
+        }
+        let movieAfter = try Data(contentsOf: sharedMovie)
+        let catalogAfter = try Data(contentsOf: catalog)
+        check(movieAfter == movieBytes && catalogAfter == catalogBytes,
+              "refused export and assembly preserve shared media bytes and catalog metadata")
+        check(!fileManager.fileExists(atPath: shared.appendingPathComponent("new-output").path),
+              "refused shared-library output creates no folders")
+    }
+
+    nonisolated private static func isLibraryRefusal(_ error: AIToolError) -> Bool {
+        if case let .invalidArgument(message) = error {
+            return message.lowercased().contains("library")
+        }
+        return false
     }
 }

@@ -46,6 +46,7 @@ public struct CodexCaptureDirective: Codable, Hashable, Sendable {
 
 public enum CodexRecordingActionType: String, Codable, CaseIterable, Sendable {
     case wait
+    case move
     case click
     case scroll
     case navigate
@@ -88,6 +89,8 @@ public struct CodexRecordingAction: Codable, Hashable, Sendable {
         switch type {
         case .wait:
             return "Wait \(Self.formatted(seconds ?? 0))s"
+        case .move:
+            return "Move to \(Self.formatted(x ?? 0)), \(Self.formatted(y ?? 0))"
         case .click:
             let target = label.map { " “\($0)”" } ?? ""
             if let x, let y {
@@ -166,13 +169,23 @@ public struct CodexRecordingPlan: Codable, Hashable, Sendable {
                 if action.seconds.map({ !$0.isFinite || !(0...30).contains($0) }) != false {
                     issues.append("\(prefix) requires seconds between 0 and 30.")
                 }
-            case .click:
+            case .move, .click:
                 let hasCoordinates = action.x.map(Self.isNormalized) == true
                     && action.y.map(Self.isNormalized) == true
                 if !hasCoordinates {
                     issues.append("\(prefix) requires normalized x/y coordinates so it can run safely.")
                 }
+                if let seconds = action.seconds, !seconds.isFinite || !(0.08...3).contains(seconds) {
+                    issues.append("\(prefix) movement duration must be between 0.08 and 3 seconds.")
+                }
             case .scroll:
+                if let seconds = action.seconds, !seconds.isFinite || !(0.08...3).contains(seconds) {
+                    issues.append("\(prefix) movement duration must be between 0.08 and 3 seconds.")
+                }
+                if (action.x != nil || action.y != nil)
+                    && !(action.x.map(Self.isNormalized) == true && action.y.map(Self.isNormalized) == true) {
+                    issues.append("\(prefix) requires both normalized scroll target coordinates.")
+                }
                 let x = action.deltaX ?? 0
                 let y = action.deltaY ?? 0
                 if !x.isFinite || !y.isFinite || (x == 0 && y == 0) {

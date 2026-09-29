@@ -34,6 +34,12 @@ swiftc -parse-as-library -g \
   Sources/FocusStudioAutomation/ArkMediaClient.swift \
   Sources/FocusStudioAutomation/AIAssistantTools.swift \
   Sources/FocusStudioAutomation/AIAssistantAppControl.swift \
+  Sources/FocusStudioAutomation/RecordingActionTool.swift \
+  Sources/FocusStudioAutomation/RecordingTextTool.swift \
+  Sources/FocusStudioAutomation/DemoPageTool.swift \
+  Sources/FocusStudioAutomation/DemoEditingTools.swift \
+  Sources/FocusStudioAutomation/TimelineEditingTools.swift \
+  Sources/FocusStudioAutomation/MediaLibraryTools.swift \
   Sources/FocusStudioAutomation/AIProjectReport.swift \
   Sources/FocusStudioAutomation/AIAutomationTools.swift \
   Sources/FocusStudioAutomation/AIProjectLibraryTools.swift \
@@ -45,6 +51,14 @@ swiftc -parse-as-library -g \
   Tests/AIAssistantTests/AutomationAPITests.swift \
   Tests/AIAssistantTests/MCPAutomationTests.swift \
   Tests/AIAssistantTests/RecordingSessionTests.swift \
+  Tests/AIAssistantTests/RecordingActionTests.swift \
+  Tests/AIAssistantTests/RecordingTextTests.swift \
+  Tests/AIAssistantTests/GuidedDemoTaskTests.swift \
+  Tests/AIAssistantTests/DemoPageTests.swift \
+  Tests/AIAssistantTests/DemoEditingTests.swift \
+  Tests/AIAssistantTests/TimelineEditingTests.swift \
+  Tests/AIAssistantTests/MediaLibraryToolsTests.swift \
+  Tests/AIAssistantTests/VideoTimelineTests.swift \
   "${CORE_OBJECTS[@]}" \
   -o "$TEST_DIR/AIAssistantTests"
 chmod +x Tests/AIAssistantTests/fake-ark.py

@@ -20,11 +20,18 @@ struct AIAssistantTests {
         defer { try? FileManager.default.removeItem(at: root) }
 
         step("protocol parsing"); protocolParsing()
+        step("video timeline rendering"); try await videoTimelineRendering(root: root)
+        step("media library assistant tools"); try await mediaLibraryTools(root: root)
         step("scripted agent loop"); try await scriptedAgentLoop(root: root)
         step("confirmation flow"); try await confirmationFlow(root: root)
         step("stop while thinking"); try await stopWhileThinking(root: root)
         step("model resolver"); try await modelResolver(root: root)
         step("shared conversation and plan drafts"); try await conversationWorkflow(root: root)
+        step("visual recording actions"); try await visualRecordingActions(root: root)
+        step("guided demo tasks"); try await guidedDemoTasks(root: root)
+        step("recording action arguments"); try await recordingActionArguments(root: root)
+        step("recording text arguments"); try await recordingTextArguments(root: root)
+        step("visible demo page preparation"); try await demoPageArguments(root: root)
         step("update_settings"); try await updateSettingsValidation(root: root)
         step("set_chapters"); try await setChaptersSanitization(root: root)
         step("dropped writes"); try await droppedWrites(root: root)
@@ -33,6 +40,8 @@ struct AIAssistantTests {
         step("app control: permission, main display, joined stops"); try await recordingEdgeCases(root: root)
         step("app control: library"); try await libraryControl(root: root)
         step("zoom tools"); try await zoomTools(root: root)
+        step("non-destructive demo editing"); try await demoEditing(root: root)
+        step("video track editing tools"); try await timelineEditingTools(root: root)
         step("audio tools"); try await audioTools(root: root)
         step("export paths"); try exportPaths(root: root)
         step("export guard"); try await exportGuard(root: root)
@@ -210,6 +219,35 @@ struct AIAssistantTests {
         }
     }
 
+    final class VisualCompletion: AssistantVisualCompletionProviding, @unchecked Sendable {
+        let scripted: ScriptedCompletion
+        private let lock = NSLock()
+        private var received: [[URL]] = []
+        var images: [[URL]] { lock.lock(); defer { lock.unlock() }; return received }
+        init(_ responses: [String]) { scripted = ScriptedCompletion(responses) }
+        private func record(_ urls: [URL]) { lock.lock(); received.append(urls); lock.unlock() }
+        func complete(system: String, user: String, json: Bool) async throws -> String {
+            try await scripted.complete(system: system, user: user, json: json)
+        }
+        func complete(system: String, user: String, json: Bool, imageURLs: [URL]) async throws -> String {
+            record(imageURLs)
+            return try await scripted.complete(system: system, user: user, json: json)
+        }
+    }
+
+    struct RecordingFrameFixture: AIAssistantTool {
+        let name = "capture_recording_frame"
+        let summary = "Observe the currently recorded source."
+        let frame: URL
+        let log: ToolLog
+        var parametersSchema: [String: Any] { ["type": "object", "properties": [:]] }
+        func costEstimate(arguments: [String: Any]) -> AIToolCostEstimate? { nil }
+        func run(arguments: [String: Any], context: AIAssistantContext, progress: @escaping @Sendable (String) -> Void) async throws -> AIToolResult {
+            log.record("frame")
+            return AIToolResult(text: "recording_id=fixture observation_id=observed", attachments: [frame])
+        }
+    }
+
     final class ToolLog: @unchecked Sendable {
         private let lock = NSLock()
         private var entries: [String] = []
@@ -249,7 +287,7 @@ struct AIAssistantTests {
         let context = makeContext(root: root, box: ProjectBox(nil))
         let history = root.appendingPathComponent("conversation/history.json")
         var identity = "codex/model-a"
-        let provider = ScriptedCompletion([reply("Let's discuss."), reply("Refined."), reply("New model."), reply("Fresh chat.")])
+        let provider = ScriptedCompletion([reply("Let's discuss."), reply("Refined."), reply("New model."), reply("Fresh chat."), reply("Resumed history.")])
         let session = AIAssistantSession(context: context, completionResolver: { provider }, tools: [], historyURL: history, providerIdentity: { identity })
         session.send("How should I present my product?")
         try await waitUntil("ordinary conversation") { !session.isRunning }
@@ -269,8 +307,40 @@ struct AIAssistantTests {
         session.send("Start over")
         try await waitUntil("new conversation") { !session.isRunning }
         check(previousID != session.conversationID && provider.resets == 3 && !provider.calls.last!.user.contains("How should I present"), "new conversation resets transcript and provider context")
+        let freshID = session.conversationID
+        check(session.conversationSummaries.count == 2 && session.conversationSummaries.contains(where: { $0.id == previousID }), "new conversation preserves the previous chat in history")
+        session.renameConversation(previousID, to: "  Marketing demo  ")
+        check(session.conversationSummaries.first(where: { $0.id == previousID })?.title == "Marketing demo", "saved conversations can be renamed")
+        session.selectConversation(previousID)
+        check(session.conversationID == previousID && session.messages.contains(where: { $0.text == "Let's discuss." }), "history selection restores the old transcript")
+        session.send("Resume the original discussion")
+        try await waitUntil("resumed conversation") { !session.isRunning }
+        check(provider.resets == 4 && provider.calls.last!.user.contains("How should I present") && !provider.calls.last!.user.contains("Start over"), "resuming a saved chat resets hidden provider context and sends only that chat's transcript")
+        let restoredArchive = AIAssistantSession(context: context, completionResolver: { provider }, tools: [], historyURL: history)
+        check(restoredArchive.conversationID == previousID && restoredArchive.conversationSummaries.count == 2, "selected chat and multiple histories survive relaunch")
+        restoredArchive.selectConversation(freshID)
+        check(restoredArchive.messages.contains(where: { $0.text == "Start over" }), "second chat can be reopened after relaunch")
+        restoredArchive.deleteConversation(previousID)
+        check(restoredArchive.conversationID == freshID && restoredArchive.conversationSummaries.count == 1 && !restoredArchive.conversationSummaries.contains(where: { $0.id == previousID }), "deleting one saved chat leaves the active chat intact")
         let messageID = session.messages.last!.id
         check(session.claimSpeech(for: messageID) && !session.claimSpeech(for: messageID), "shared surfaces cannot read one reply twice")
+
+        // A build-43 conversation.json contains one SavedConversation rather
+        // than an archive. Opening it must keep every message and migrate only
+        // after the next write, without requiring the user to export history.
+        let legacyURL = root.appendingPathComponent("conversation/legacy.json")
+        let legacyProvider = ScriptedCompletion([reply("Legacy answer.")])
+        let legacyWriter = AIAssistantSession(context: context, completionResolver: { legacyProvider }, tools: [], historyURL: legacyURL)
+        legacyWriter.send("Old request")
+        try await waitUntil("legacy source") { !legacyWriter.isRunning }
+        let archived = try JSONSerialization.jsonObject(with: Data(contentsOf: legacyURL)) as! [String: Any]
+        let single = (archived["conversations"] as! [[String: Any]])[0]
+        try JSONSerialization.data(withJSONObject: single).write(to: legacyURL, options: .atomic)
+        let legacyReader = AIAssistantSession(context: context, completionResolver: { legacyProvider }, tools: [], historyURL: legacyURL)
+        check(legacyReader.messages.last?.text == "Legacy answer." && legacyReader.conversationSummaries.count == 1, "build-43 single-chat history opens unchanged")
+        legacyReader.createConversation()
+        let migrated = try JSONSerialization.jsonObject(with: Data(contentsOf: legacyURL)) as! [String: Any]
+        check(migrated["version"] as? Int == 2 && (migrated["conversations"] as? [[String: Any]])?.count == 2, "single-chat history migrates atomically when a new chat is saved")
 
         let plan = CodexRecordingPlan(title: "Demo", summary: "A short draft", capture: CodexCaptureDirective(mode: .url, url: "https://example.com"), actions: [CodexRecordingAction(type: .wait, seconds: 3)])
         let encoded = String(decoding: try JSONEncoder().encode(plan), as: UTF8.self)
@@ -292,7 +362,7 @@ struct AIAssistantTests {
         try await waitUntil("ungrounded plan rejection") { !unsafeSession.isRunning }
         check(unsafeSession.recordingPlan == nil && unsafeSession.messages.last?.role == .error, "unguarded live click coordinates never become executable drafts")
         // Simulate an older saved draft that predates the text-only safety gate.
-        var saved = try JSONSerialization.jsonObject(with: Data(contentsOf: history)) as! [String: Any]
+        var saved = single
         saved["plan"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(unsafe))
         saved["planWasRun"] = false
         let unsafeHistory = root.appendingPathComponent("unsafe-history.json")
@@ -342,6 +412,42 @@ struct AIAssistantTests {
     }
 
     @MainActor
+    static func visualRecordingActions(root: URL) async throws {
+        let frame = root.appendingPathComponent("live-frame.png")
+        let log = ToolLog()
+        let context = makeContext(root: root, box: ProjectBox(makeProject(sourceVideoPath: "/nonexistent.mp4", duration: 12)))
+        let capture = RecordingFrameFixture(frame: frame, log: log)
+        let pointer = RecordingTool(name: "perform_recording_action", summary: "Move or click in the recording.", cost: nil, log: log)
+        let visual = VisualCompletion([
+            action("capture_recording_frame"), action("perform_recording_action", "{\"x\":1}"),
+            action("perform_recording_action", "{\"x\":2}"), action("capture_recording_frame"),
+            action("perform_recording_action", "{\"x\":2}"), reply("Recorded."),
+        ])
+        let session = AIAssistantSession(context: context, completion: visual, tools: [capture, pointer])
+        session.send("Record the reviewed interaction")
+        try await waitUntil("visual actions complete") { !session.isRunning }
+        check(log.runs == ["frame", "frame"] && session.pendingConfirmation == nil,
+              "a live screenshot alone never grants control outside one approved demo task")
+        check(visual.images == [[], [frame], [], [], [frame], []], "refused action attempts invalidate their earlier geometry")
+        check(session.completionImages().isEmpty && visual.images.last == [], "the consumed observation is no longer a coordinate reference")
+
+        let textOnly = ScriptedCompletion([action("capture_recording_frame"), action("perform_recording_action"), reply("Use Codex.")])
+        let fallback = AIAssistantSession(context: context, completion: textOnly, tools: [capture, pointer])
+        fallback.send("Record interactively")
+        try await waitUntil("text-only action refusal") { !fallback.isRunning }
+        check(fallback.pendingConfirmation == nil && log.runs.filter { $0.hasPrefix("perform_recording_action") }.isEmpty,
+              "a text-only provider cannot act on an image path")
+        check(textOnly.calls.last?.system.contains("This model cannot inspect image attachments") == true, "text-only prompt reports its limitation")
+
+        let uploadOnly = VisualCompletion([action("perform_recording_action"), reply("Observe first.")])
+        let uploaded = AIAssistantSession(context: context, completion: uploadOnly, tools: [pointer])
+        uploaded.send("Click the item in this reference", attachments: [frame, root.appendingPathComponent("not-an-image.mp4")])
+        try await waitUntil("uploaded image is not live geometry") { !uploaded.isRunning }
+        check(uploadOnly.images.first == [frame] && uploaded.pendingConfirmation == nil,
+              "an uploaded image can be inspected but never authorizes a live pointer action")
+    }
+
+    @MainActor
     static func scriptedAgentLoop(root: URL) async throws {
         let log = ToolLog()
         let free = RecordingTool(name: "fake_free", summary: "A free fixture tool.", cost: nil, log: log)
@@ -380,7 +486,7 @@ struct AIAssistantTests {
         check(session2.messages.last?.text == "Just prose, no JSON.", "prose is shown as the reply")
 
         // The step budget ends runaway loops.
-        let provider3 = ScriptedCompletion(Array(repeating: action("fake_free"), count: 12))
+        let provider3 = ScriptedCompletion(Array(repeating: action("fake_free"), count: AIAssistantSession.maximumStepsPerTurn + 1))
         let session3 = AIAssistantSession(context: context, completion: provider3, tools: [free])
         session3.send("loop")
         try await waitUntil("runaway turn to stop") { !session3.isRunning }
@@ -395,11 +501,15 @@ struct AIAssistantTests {
         // Transcript truncation keeps the newest messages.
         let session5 = AIAssistantSession(context: context, completion: ScriptedCompletion([]), tools: [free])
         for index in 0..<40 {
-            session5.send("message \(index) " + String(repeating: "x", count: 500))
+            session5.send("message \(index) " + String(repeating: "x", count: AIAssistantSession.transcriptCharacterBudget / 20))
             try await waitUntil("filler turn") { !session5.isRunning }
         }
+        let latestProjectID = UUID().uuidString, latestZoomID = UUID().uuidString
+        session5.send("Current editing context: project \(latestProjectID), zoom \(latestZoomID); preserve this request.")
+        try await waitUntil("latest editing context") { !session5.isRunning }
         let transcript = session5.transcript()
-        check(transcript.count <= AIAssistantSession.transcriptCharacterBudget + 600 && transcript.contains("message 39") && !transcript.contains("message 0 ") && transcript.contains("(earlier messages omitted)"), "transcript keeps the newest ~12k characters: \(transcript.count)")
+        check(transcript.count <= AIAssistantSession.transcriptCharacterBudget + 600 && transcript.contains("message 39") && !transcript.contains("message 0 ") && transcript.contains("(earlier messages omitted)")
+              && transcript.contains(latestProjectID) && transcript.contains(latestZoomID), "transcript bounds expanded structured results while retaining newest editing context and dropping oldest messages: \(transcript.count)")
     }
 
     @MainActor
@@ -408,10 +518,18 @@ struct AIAssistantTests {
         let paid = RecordingTool(name: "fake_paid", summary: "A paid fixture tool.", cost: AIToolCostEstimate(yuan: 1.5, summary: "fixture · 5 s"), log: log)
         let box = ProjectBox(makeProject(sourceVideoPath: "/nonexistent.mp4", duration: 12))
         let context = makeContext(root: root, box: box)
+        var presentationEvents: [String] = []
 
         // Decline: the tool never runs and the model hears about it.
         let provider = ScriptedCompletion([action("fake_paid", "{\"x\": 1}"), reply("Okay, tell me what to change.")])
         let session = AIAssistantSession(context: context, completion: provider, tools: [paid])
+        session.configureConfirmationPresentation(onRequest: { [weak session] in
+            check(session?.pendingConfirmation != nil, "the pending card exists before its window is presented")
+            presentationEvents.append("show1")
+        }, onResolution: { [weak session] in
+            check(session?.pendingConfirmation == nil && log.runs.isEmpty, "decline hides the card and returns focus synchronously")
+            presentationEvents.append("return1")
+        })
         session.send("make a clip")
         try await waitUntil("confirmation to appear") { session.pendingConfirmation != nil }
         check(session.isRunning, "the turn stays running while waiting for the user")
@@ -426,9 +544,14 @@ struct AIAssistantTests {
         // Confirm: the tool runs after the user agrees.
         let provider2 = ScriptedCompletion([action("fake_paid", "{\"x\": 2}"), reply("Done.")])
         let session2 = AIAssistantSession(context: context, completion: provider2, tools: [paid])
+        session2.configureConfirmationPresentation(onRequest: { presentationEvents.append("show2") }, onResolution: {
+            check(log.runs.isEmpty, "target focus is restored before the confirmed tool can run")
+            presentationEvents.append("return2")
+        })
         session2.send("make a clip")
         try await waitUntil("second confirmation") { session2.pendingConfirmation != nil }
         session2.confirmPending()
+        check(presentationEvents == ["show1", "return1", "show2", "return2"], "confirm restores focus before returning to the caller")
         try await waitUntil("confirmed turn to finish") { !session2.isRunning }
         check(log.runs == ["fake_paid:2"], "confirmed tool ran exactly once: \(log.runs)")
         check(session2.messages.map(\.role) == [.user, .tool, .assistant] && session2.messages[1].text == "ok fake_paid", "confirmed run produces a tool row")
@@ -437,12 +560,16 @@ struct AIAssistantTests {
         // Stop while waiting for confirmation: nothing runs, the turn ends.
         let provider3 = ScriptedCompletion([action("fake_paid"), reply("unused")])
         let session3 = AIAssistantSession(context: context, completion: provider3, tools: [paid])
+        session3.configureConfirmationPresentation(onRequest: { presentationEvents.append("show3") }, onResolution: {
+            presentationEvents.append("return3")
+        })
         session3.send("make a clip")
         try await waitUntil("third confirmation") { session3.pendingConfirmation != nil }
         session3.stop()
         try await waitUntil("stopped turn to finish") { !session3.isRunning }
         check(session3.pendingConfirmation == nil && log.runs == ["fake_paid:2"] && provider3.calls.count == 1, "stop cancels the pending call without running it")
         check(session3.messages.last?.role == .status, "stop leaves a status row")
+        check(presentationEvents == ["show1", "return1", "show2", "return2", "show3", "return3"], "stop resolves exactly one visible confirmation")
     }
 
     @MainActor
@@ -478,8 +605,32 @@ struct AIAssistantTests {
         check(settings.aspectRatio == .vertical && settings.zoomScale == 2.2 && settings.screenAnimation == .snappy, "ratios, numeric strings and case-insensitive enums are accepted")
         check(settings.resolvedCaptionStyle.position == .top && settings.resolvedCaptionStyle.showsChapterNumber == false, "caption style keys apply")
         check(result.text.contains("padding") && result.text.contains("clamped"), "clamping is reported: \(result.text)")
+        check(settings.zoomFollowsCursor == nil && settings.resolvedZoomFollowsCursor == ProjectSettings.defaultZoomFollowsCursor,
+              "Unrelated edits preserve the existing cursor-follow default")
+        let originalZooms = box.project!.zoomSegments
+        let lockedCamera = try await tool.run(arguments: ["zoomFollowsCursor": 0], context: context, progress: { _ in })
+        check(box.project!.settings.zoomFollowsCursor == 0 && lockedCamera.data?["look"]?["zoomFollowsCursor"] == 0,
+              "A camera lock is stored and reported without changing zoom targets")
+        check(AIProjectReport.summary(of: box.project, assetsDirectory: root).contains("cursor follow 0"),
+              "The assistant's project summary exposes a fixed camera for diagnosing result framing")
+        let restored = try JSONDecoder().decode(RecordingProject.self, from: JSONEncoder().encode(box.project!))
+        check(restored.settings.zoomFollowsCursor == 0 && restored.zoomSegments == originalZooms,
+              "A saved project retains the explicit zero follow setting and all authored zooms")
+        let lowFollow = try await tool.run(arguments: ["zoomFollowsCursor": -2], context: context, progress: { _ in })
+        check(box.project!.settings.zoomFollowsCursor == 0 && lowFollow.text.contains("clamped"), "Negative cursor follow clamps to zero")
+        let highFollow = try await tool.run(arguments: ["zoomFollowsCursor": 3], context: context, progress: { _ in })
+        check(box.project!.settings.zoomFollowsCursor == 1 && highFollow.text.contains("clamped"), "Cursor follow above one clamps to one")
+        _ = try await tool.run(arguments: ["zoomFollowsCursor": 0.37], context: context, progress: { _ in })
+        _ = try await tool.run(arguments: ["padding": 160], context: context, progress: { _ in })
+        check(box.project!.settings.zoomFollowsCursor == 0.37 && box.project!.zoomSegments == originalZooms,
+              "Later unrelated edits preserve the selected follow strength and existing zoom IDs")
 
         let before = box.project!.settings
+        for invalid in ["cursor" as Any, Double.nan, Double.infinity] {
+            await expectThrows("invalid cursor follow") {
+                _ = try await tool.run(arguments: ["zoomFollowsCursor": invalid, "padding": 20], context: context, progress: { _ in })
+            }
+        }
         await expectThrows("unknown key") { _ = try await tool.run(arguments: ["bogus": 1], context: context, progress: { _ in }) }
         await expectThrows("bad colour") { _ = try await tool.run(arguments: ["backgroundColor": "blue"], context: context, progress: { _ in }) }
         await expectThrows("bad enum") { _ = try await tool.run(arguments: ["screenAnimation": "wobbly"], context: context, progress: { _ in }) }
@@ -494,6 +645,9 @@ struct AIAssistantTests {
 
         // Export width and frame rate take exactly the editor's choices.
         let properties = tool.parametersSchema["properties"] as? [String: Any]
+        let followProperty = properties?["zoomFollowsCursor"] as? [String: Any]
+        check(followProperty?["type"] as? String == "number" && followProperty?["minimum"] as? Int == 0 && followProperty?["maximum"] as? Int == 1,
+              "Cursor follow uses the existing editor's zero-to-one range")
         check((properties?["exportWidth"] as? [String: Any])?["enum"] as? [Int] == [1_280, 1_920, 2_560, 3_840] && (properties?["frameRate"] as? [String: Any])?["enum"] as? [Int] == [24, 30, 60], "the schema lists the export choices")
         let exportResult = try await tool.run(arguments: ["exportWidth": 3_840, "frameRate": "60 fps"], context: context, progress: { _ in })
         check(box.project!.settings.exportWidth == 3_840 && box.project!.settings.frameRate == 60 && exportResult.text.contains("exportWidth = 3840") && exportResult.text.contains("frameRate = 60"), "export width and frame rate apply: \(exportResult.text)")
@@ -707,7 +861,8 @@ struct AIAssistantTests {
         let content = appSession.userContent()
         check(content.contains("[App]") && content.contains("Recording: idle") && content.contains("Bundled music: Calm Gradient (calm-gradient)") && content.contains("[Project]"), "app summary precedes the project: \(content.prefix(300))")
         check(!session.userContent().contains("[App]"), "no app → no app section")
-        check(appSession.systemPrompt().contains("list_recording_sources → start_recording") && appSession.systemPrompt().contains("step by step"), "system prompt teaches the workflow")
+        check(appSession.systemPrompt().contains("run_demo_task") && appSession.systemPrompt().contains("one bounded task")
+              && !appSession.systemPrompt().contains("list_recording_sources → start_recording"), "system prompt teaches the single bounded recording workflow")
     }
 
     // MARK: - App control (fake app)
@@ -758,6 +913,38 @@ struct AIAssistantTests {
 
         init(box: ProjectBox) { self.box = box }
 
+        var recordingActionCalls: [(recordingID: UUID, actionID: String, observationID: UUID, action: CodexRecordingAction)] = []
+        var recordingFrameCalls: [(recordingID: UUID, url: URL)] = []
+        var recordingFrameError: Error?
+        var recordingActionError: Error?
+        var preparedFrameCalls: [(sourceID: String, url: URL)] = []
+        var recordingTextCalls: [(recordingID: UUID, actionID: String, observationID: UUID, text: String)] = []
+        func capturePreparedDemoFrame(sourceID: String, to url: URL) async throws -> AIJSONValue {
+            preparedFrameCalls.append((sourceID, url))
+            try Data().write(to: url)
+            return ["source_id": AIJSONValue(sourceID), "purpose": "preflight", "path": AIJSONValue(url.path)]
+        }
+        func performRecordingText(recordingID: UUID, actionID: String, observationID: UUID, text: String) async throws -> AIJSONValue {
+            recordingTextCalls.append((recordingID, actionID, observationID, text))
+            return ["status": "performed", "action": "type_text", "typed_characters": AIJSONValue(text.count)]
+        }
+        var demoPageCalls: [(URL, AIDemoBrowser)] = []
+        func prepareDemoPage(url: URL, browser: AIDemoBrowser) async throws -> AIPreparedDemoPage {
+            demoPageCalls.append((url, browser))
+            return AIPreparedDemoPage(url: url, source: sources.first(where: { $0.kind == .window })!, browserName: browser == .safari ? "Safari" : "Google Chrome")
+        }
+        func performRecordingAction(recordingID: UUID, actionID: String, observationID: UUID, action: CodexRecordingAction) async throws -> AIJSONValue {
+            if let recordingActionError { throw recordingActionError }
+            recordingActionCalls.append((recordingID, actionID, observationID, action))
+            return ["status": "performed", "action_id": AIJSONValue(actionID)]
+        }
+        func captureRecordingFrame(recordingID: UUID, to url: URL) async throws -> AIJSONValue {
+            recordingFrameCalls.append((recordingID, url))
+            if let recordingFrameError { throw recordingFrameError }
+            return ["recording_id": AIJSONValue(recordingID.uuidString), "observation_id": AIJSONValue(UUID().uuidString),
+                    "coordinate_space": "normalized_uncropped_source", "path": AIJSONValue(url.path)]
+        }
+
         var recordingSources: [AIRecordingSource] { sources }
 
         func refreshRecordingSources() async throws -> [AIRecordingSource] {
@@ -799,10 +986,14 @@ struct AIAssistantTests {
         func startRecording(sourceID: String, options: AIRecordingOptions) throws -> UUID {
             if let startFailure { self.startFailure = nil; throw startFailure }
             guard recordingPhase == .idle else { throw AIToolError.failed("A recording is already in progress.") }
-            guard sources.contains(where: { $0.id == sourceID }) else { throw AIToolError.invalidArgument("Unknown source \(sourceID).") }
+            guard let source = sources.first(where: { $0.id == sourceID }) else { throw AIToolError.invalidArgument("Unknown source \(sourceID).") }
+            guard options.interactionMode != "codex" || source.kind == .window else {
+                throw AIToolError.invalidArgument("Codex interaction mode requires a window source.")
+            }
             startedSourceIDs.append(sourceID)
             startedOptions.append(options)
             var used = recorderPreferences
+            if let value = options.interactionMode { used.interactionMode = value }
             if let value = options.systemAudio { used.systemAudio = value }
             if let value = options.microphone { used.microphone = value }
             if let value = options.automaticZooms { used.automaticZooms = value }
@@ -976,8 +1167,77 @@ struct AIAssistantTests {
         var libraryFailure: AILocalizedFailure?
         /// Files imported, in order.
         var imported: [URL] = []
+        var globalMedia: [DemoMediaAsset] = []
         /// Projects moved to the Trash, in order.
         var trashed: [UUID] = []
+
+        var demoCutCalls: [(UUID, [DemoKeepRange])] = []
+        func createDemoCut(projectID: UUID, keepRanges: [DemoKeepRange], title: String?) async throws -> RecordingProject {
+            if let libraryFailure { throw libraryFailure }
+            guard let original = project(id: projectID) else { throw AIToolError.noProject }
+            let edit = try DemoTimelineEdit(keepRanges: keepRanges, sourceDuration: original.duration)
+            demoCutCalls.append((projectID, keepRanges))
+            let result = edit.remap(original, title: title, sourceVideoPath: library.appendingPathComponent("derived.mov").path)
+            projects.append(result)
+            openID = result.id
+            box.project = result
+            return result
+        }
+
+        var videoEditCalls: [(UUID, DemoVideoEditOperation)] = []
+        var videoEditUndo: [UUID: [RecordingProject]] = [:]
+        var videoEditRedo: [UUID: [RecordingProject]] = [:]
+        var videoEditingCopies = Set<UUID>()
+        func applyVideoEdit(projectID: UUID, operation: DemoVideoEditOperation) async throws -> RecordingProject {
+            if let libraryFailure { throw libraryFailure }
+            guard let source = project(id: projectID) else { throw AIToolError.noProject }
+            let timeline = try DemoVideoTimeline(project: source)
+            var working = try timeline.applying(operation, to: source)
+            // The production app creates a new working project on the first
+            // clip edit. Its source media and the library original remain intact.
+            if !videoEditingCopies.contains(source.id) {
+                working.id = UUID()
+                working.title += " · Edited"
+                var baseline = source
+                baseline.id = working.id
+                baseline.title = working.title
+                videoEditUndo[working.id] = [baseline]
+                videoEditingCopies.insert(working.id)
+                projects.append(working)
+            } else if let index = projects.firstIndex(where: { $0.id == working.id }) {
+                videoEditUndo[working.id, default: []].append(source)
+                projects[index] = working
+            }
+            videoEditCalls.append((projectID, operation))
+            videoEditRedo[working.id] = []
+            openID = working.id
+            box.project = working
+            return working
+        }
+
+        func undoVideoEdit(projectID: UUID) async throws -> RecordingProject {
+            guard projectID == openID, let current = project(id: projectID),
+                  var history = videoEditUndo[projectID], let previous = history.popLast() else {
+                throw AIToolError.failed("There is no video edit to undo.")
+            }
+            videoEditUndo[projectID] = history
+            videoEditRedo[projectID, default: []].append(current)
+            if let index = projects.firstIndex(where: { $0.id == projectID }) { projects[index] = previous }
+            box.project = previous
+            return previous
+        }
+
+        func redoVideoEdit(projectID: UUID) async throws -> RecordingProject {
+            guard projectID == openID, let current = project(id: projectID),
+                  var history = videoEditRedo[projectID], let next = history.popLast() else {
+                throw AIToolError.failed("There is no video edit to redo.")
+            }
+            videoEditRedo[projectID] = history
+            videoEditUndo[projectID, default: []].append(current)
+            if let index = projects.firstIndex(where: { $0.id == projectID }) { projects[index] = next }
+            box.project = next
+            return next
+        }
 
         /// Like StudioModel: the editor is saved and closed, then the new project opens.
         func importVideo(from url: URL, title: String?) async throws -> RecordingProject {
@@ -1864,7 +2124,7 @@ enum Pixels {
 
 /// Solid-colour H.264 clips (optionally with a sine tone) for assembly tests.
 enum SolidClipWriter {
-    static func write(to url: URL, width: Int, height: Int, duration: Double, color: (Double, Double, Double), audio: Bool, frameRate: Int = 30) async throws {
+    static func write(to url: URL, width: Int, height: Int, duration: Double, color: (Double, Double, Double), audio: Bool, frameRate: Int = 30, patterned: Bool = false) async throws {
         let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
         let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: [
             AVVideoCodecKey: AVVideoCodecType.h264,
@@ -1906,6 +2166,12 @@ enum SolidClipWriter {
                                        space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue) {
                 context.setFillColor(CGColor(red: color.0, green: color.1, blue: color.2, alpha: 1))
                 context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+                if patterned {
+                    context.setFillColor(CGColor(gray: 1, alpha: 1))
+                    context.fill(CGRect(x: width / 6, y: height / 4, width: width / 5, height: height / 2))
+                    context.setFillColor(CGColor(red: 0.9, green: 0.15, blue: 0.1, alpha: 1))
+                    context.fill(CGRect(x: width * 2 / 3, y: height / 3, width: width / 5, height: height / 3))
+                }
             }
             CVPixelBufferUnlockBaseAddress(buffer, [])
             guard adaptor.append(buffer, withPresentationTime: CMTime(value: CMTimeValue(frameIndex), timescale: CMTimeScale(frameRate))) else {

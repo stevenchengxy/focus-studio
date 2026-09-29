@@ -5,13 +5,18 @@ description: Turn a product description plus a Focus Studio recording (project.j
 
 # demo-storyboard - from recording to storyboard.json
 
-The storyboard is the contract between the human, Claude and `product-demo-composer`: an ordered list of
+The storyboard is the contract between the user, their assistant and `product-demo-composer`: an ordered list of
 segments (`demo` slices of the Focus Studio export, `ai_clip`, `still`, `title`) with captions, transitions and
 audio settings. Get it right here and the composer is a one-liner.
 
 Full schema: `references/storyboard-schema.md`. Worked examples: `examples/saas-dashboard-launch.json`
 (SaaS, Chinese captions, sidechain ducking) and `examples/devtool-feature-update.json` (developer tool, English,
 still-based opener, cuts). Copy the closest one instead of starting from scratch.
+
+For long idle stretches in a Codex-controlled take, start with
+[focus-demo-editing](../focus-demo-editing/SKILL.md). It creates a native edited project and remaps cursor,
+zoom and chapter timing before export. Use that edited export here; do not pair a shortened video with the
+original project's timestamps. The project reader below is read-only; never write into the app's library.
 
 ## Workflow
 

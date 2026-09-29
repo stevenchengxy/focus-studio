@@ -22,7 +22,9 @@ struct StudioSettingsView: View {
                 .disabled(installation.isWorking)
                 .tabItem { Label("AI models", systemImage: "sparkles") }
                 .tag(AppSettingsSection.aiModels)
-            CodexConnectionSettingsView(director: model.codexDirector, showsDoneButton: false)
+            CodexConnectionSettingsView(director: model.codexAssistant,
+                                        mirrorPreferencesTo: model.codexDirector,
+                                        showsDoneButton: false)
                 .disabled(installation.isWorking)
                 .tabItem { Label("Codex", systemImage: "terminal") }
                 .tag(AppSettingsSection.codex)

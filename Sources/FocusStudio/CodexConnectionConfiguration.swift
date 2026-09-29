@@ -45,6 +45,7 @@ struct CodexAvailableModel: Identifiable, Equatable, Sendable {
     let id: String
     let title: String
     let defaultEffort: String?
+    let supportedEfforts: Set<String>
     let isDefault: Bool
     let supportsImages: Bool
 
@@ -55,10 +56,17 @@ struct CodexAvailableModel: Identifiable, Equatable, Sendable {
         self.id = id
         title = value["displayName"]?.stringValue ?? id
         defaultEffort = value["defaultReasoningEffort"]?.stringValue
+        supportedEfforts = Set(value["supportedReasoningEfforts"]?.arrayValue?.compactMap {
+            $0.objectValue?["reasoningEffort"]?.stringValue
+        } ?? [])
         isDefault = value["isDefault"]?.boolValue == true
         supportsImages = value["inputModalities"]?.arrayValue.map {
             $0.contains(.string("image"))
         } ?? true
+    }
+
+    func assistantEffort(interactive: Bool) -> String? {
+        interactive && supportedEfforts.contains("low") ? "low" : defaultEffort
     }
 }
 
@@ -241,8 +249,10 @@ enum CodexExecutableDiscovery {
         if searchesStandardLocations {
             let home = fileManager.homeDirectoryForCurrentUser
             candidates += [
+                "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
                 "/Applications/Codex.app/Contents/Resources/codex",
                 "/Applications/ChatGPT.app/Contents/Resources/codex",
+                home.appendingPathComponent("Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex").path,
                 home.appendingPathComponent("Applications/Codex.app/Contents/Resources/codex").path,
                 home.appendingPathComponent("Applications/ChatGPT.app/Contents/Resources/codex").path,
                 "/opt/homebrew/bin/codex", "/usr/local/bin/codex",
@@ -256,6 +266,18 @@ enum CodexExecutableDiscovery {
             let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
             return seen.insert(resolved).inserted
         }
+    }
+
+    /// A selected application can be ChatGPT.app, Codex.app, or the nested
+    /// CodexCLI.app bundled by current ChatGPT desktop releases.
+    static func executable(in application: URL, fileManager: FileManager = .default) -> URL? {
+        let suffixes = [
+            "Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+            "Contents/Resources/codex",
+            "Contents/MacOS/codex"
+        ]
+        return suffixes.map { application.appendingPathComponent($0) }
+            .first { isExecutableFile($0.path, fileManager: fileManager) }
     }
 
     /// PATH for launching a Codex executable: its own directory first so a

@@ -6,6 +6,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 enum EditorTool: String, CaseIterable, Identifiable {
+    case video
     case zoom
     case captions
     case design
@@ -18,6 +19,7 @@ enum EditorTool: String, CaseIterable, Identifiable {
     var title: String { rawValue.capitalized }
     var icon: String {
         switch self {
+        case .video: return "film.stack"
         case .zoom: return "plus.magnifyingglass"
         case .captions: return "captions.bubble"
         case .design: return "paintpalette"
@@ -35,9 +37,28 @@ struct EditorInspectorView: View {
     @Binding var project: RecordingProject
     @Binding var selectedZoomID: UUID?
     @Binding var selectedChapterID: UUID?
+    @Binding var selectedClipID: UUID?
+    @Binding var currentTime: Double
     let tool: EditorTool
+    let isVideoEditing: Bool
+    let canUndoVideoEdit: Bool
+    let canRedoVideoEdit: Bool
+    let onVideoEdit: (DemoVideoEditOperation) -> Void
+    let onUndoVideoEdit: () -> Void
+    let onRedoVideoEdit: () -> Void
+    let onImportMedia: () -> Void
+    let onCreateMediaWithAI: () -> Void
+    let onInsertMedia: (UUID) -> Void
+    let onImportSharedMedia: (UUID) -> Void
+    let onSaveMediaToShared: (UUID) -> Void
+    let isImportingMedia: Bool
     @State private var isGeneratingChapters = false
     @State private var captionsMessage: String?
+    @State private var trimStartDraft = 0.0
+    @State private var trimEndDraft = 0.0
+    @State private var transitionDurationDraft = 0.5
+    @State private var sourceAudioDraft = 1.0
+    @State private var imageDurationDraft = 3.0
     private let systemWallpapers = SystemWallpaperCatalog.installed
     private let bundledBackgrounds = (try? BackgroundCatalog.loadBundled())?.assets ?? []
     private let bundledBackgroundCatalog = try? BackgroundCatalog.loadBundled()
@@ -49,21 +70,20 @@ struct EditorInspectorView: View {
 
     private var hasMissingInteractionTrace: Bool {
         project.settings.autoZoomEnabled
-            && project.clickEvents.isEmpty
-            && (project.typingActivity ?? []).isEmpty
-            && project.cursorSamples.count <= 1
+            && project.zoomSegments.isEmpty
+            && !TimelineMath.hasAutomaticZoomInput(in: project)
     }
 
     private var missingInteractionWarning: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("No interaction events captured", systemImage: "exclamationmark.triangle.fill")
+            Label("No automatic zoom cues", systemImage: "exclamationmark.triangle.fill")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(StudioTheme.yellow)
-            Text("This recording has video, but no captured clicks or typing to create automatic zooms. Check Focus Studio’s Accessibility permission, then make a new recording.")
+            Text("No clicks or typing were captured inside the visible video. Browser automation may not send system mouse events. For manual recording, check Accessibility and Input Monitoring.")
                 .font(.system(size: 10))
                 .foregroundStyle(StudioTheme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Granting permission now cannot add events to this saved video. You can still double-click the Zoom lane to add zooms manually.")
+            Text("Double-click the Zoom lane to add a focus, or let your AI tool add zooms at the times it interacted with the page.")
                 .font(.system(size: 10))
                 .foregroundStyle(StudioTheme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -87,6 +107,8 @@ struct EditorInspectorView: View {
                 Divider().overlay(StudioTheme.line)
 
                 switch tool {
+                case .video:
+                    videoInspector
                 case .zoom:
                     if !project.zoomSegments.isEmpty {
                         Picker("Selected zoom", selection: $selectedZoomID) {
@@ -118,6 +140,9 @@ struct EditorInspectorView: View {
             .padding(18)
         }
         .background(StudioTheme.panel)
+        .onAppear(perform: syncVideoDrafts)
+        .onChange(of: selectedClipID) { _, _ in syncVideoDrafts() }
+        .onChange(of: project.videoClips) { _, _ in syncVideoDrafts() }
     }
 
     @ViewBuilder
@@ -521,6 +546,218 @@ struct EditorInspectorView: View {
                 }
                 .disabled(!project.settings.resolvedShowCursor)
             }
+        }
+    }
+
+    private var videoTimeline: DemoVideoTimeline? { try? DemoVideoTimeline(project: project) }
+
+    private var selectedVideoPlacement: DemoVideoClipPlacement? {
+        videoTimeline?.placements.first { $0.clip.id == selectedClipID }
+    }
+
+    private var canSplitVideoAtPlayhead: Bool {
+        videoTimeline?.placements.contains {
+            currentTime > $0.start + 0.1 && currentTime < $0.end - 0.1
+        } == true
+    }
+
+    private func syncVideoDrafts() {
+        guard tool == .video, let timeline = videoTimeline, !timeline.placements.isEmpty else { return }
+        let placement = timeline.placements.first { $0.clip.id == selectedClipID }
+            ?? timeline.placements.first { currentTime >= $0.start && currentTime < $0.end }
+            ?? timeline.placements[0]
+        if selectedClipID != placement.clip.id { selectedClipID = placement.clip.id }
+        trimStartDraft = placement.clip.sourceStart
+        trimEndDraft = placement.clip.sourceEnd
+        sourceAudioDraft = placement.clip.sourceAudioVolume
+        imageDurationDraft = placement.clip.duration
+        transitionDurationDraft = timeline.transition(after: placement.clip.id).map {
+            $0.preset == .cut ? 0.5 : $0.duration
+        } ?? 0.5
+    }
+
+    private func maximumTransitionDuration(after index: Int, in timeline: DemoVideoTimeline) -> Double {
+        guard index >= 0, index + 1 < timeline.clips.count else { return 0 }
+        let incoming = index > 0 ? timeline.transitions[index - 1].duration / 2 : 0
+        let nextOutgoing = index + 1 < timeline.transitions.count ? timeline.transitions[index + 1].duration / 2 : 0
+        return max(0, min(2,
+            2 * (timeline.clips[index].duration - incoming),
+            2 * (timeline.clips[index + 1].duration - nextOutgoing)))
+    }
+
+    @ViewBuilder
+    private var videoInspector: some View {
+        if let timeline = videoTimeline {
+            InspectorSection("Media library") {
+                EditorMediaLibraryView(
+                    assets: project.mediaAssets ?? [],
+                    sharedAssets: model.globalMediaAssets,
+                    isImporting: isImportingMedia,
+                    onImport: onImportMedia,
+                    onCreateWithAI: onCreateMediaWithAI,
+                    onInsert: onInsertMedia,
+                    onImportShared: onImportSharedMedia,
+                    onSaveShared: onSaveMediaToShared
+                )
+            }
+            InspectorSection("Video clips") {
+                Picker("Selected clip", selection: $selectedClipID) {
+                    ForEach(Array(timeline.placements.enumerated()), id: \.element.clip.id) { index, placement in
+                        Text(L10n.format("Clip %lld · %.2f s", index + 1, placement.duration))
+                            .tag(Optional(placement.clip.id))
+                    }
+                }
+                .font(.system(size: 11))
+                .accessibilityIdentifier("video.selectedClip")
+
+                HStack(spacing: 8) {
+                    Button {
+                        guard let placement = timeline.placements.first(where: {
+                            currentTime > $0.start + 0.1 && currentTime < $0.end - 0.1
+                        }) else { return }
+                        selectedClipID = placement.clip.id
+                        onVideoEdit(.split(clipID: placement.clip.id, at: currentTime))
+                    } label: { Label("Split at playhead", systemImage: "scissors") }
+                        .disabled(!canSplitVideoAtPlayhead)
+                        .accessibilityIdentifier("video.split")
+                    Button(action: onUndoVideoEdit) {
+                        Label("Undo", systemImage: "arrow.uturn.backward")
+                    }
+                    .disabled(!canUndoVideoEdit)
+                    .accessibilityIdentifier("video.undo")
+                    Button(action: onRedoVideoEdit) {
+                        Label("Redo", systemImage: "arrow.uturn.forward")
+                    }
+                    .disabled(!canRedoVideoEdit)
+                    .accessibilityIdentifier("video.redo")
+                }
+                .buttonStyle(.bordered)
+                .font(.system(size: 10, weight: .medium))
+                .disabled(isVideoEditing)
+
+                Text("Split with S. Drag clip edges to trim and drag a clip to change its order. Use the join button for transitions.")
+                    .font(.system(size: 9))
+                    .foregroundStyle(StudioTheme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let placement = selectedVideoPlacement,
+               let index = timeline.placements.firstIndex(where: { $0.clip.id == placement.clip.id }) {
+                let selectedAsset = timeline.asset(for: placement.clip)
+                InspectorSection("Trim and arrange") {
+                    Text(L10n.format("On timeline %@–%@", placement.start.editorTimecode, placement.end.editorTimecode))
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(StudioTheme.secondaryText)
+                    if selectedAsset?.kind == .image {
+                        Text("Still image")
+                            .font(.system(size: 10, weight: .medium))
+                        NumberField(title: "Duration", value: $imageDurationDraft,
+                                    range: 0.1...120, suffix: "s")
+                        Button("Apply duration") {
+                            onVideoEdit(.setImageDuration(clipID: placement.clip.id,
+                                                           duration: imageDurationDraft))
+                        }
+                        .disabled(isVideoEditing || !imageDurationDraft.isFinite
+                                  || !(0.1...120).contains(imageDurationDraft)
+                                  || abs(imageDurationDraft - placement.clip.duration) < 0.001)
+                        .accessibilityIdentifier("video.applyImageDuration")
+                    } else {
+                    HStack(spacing: 6) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Source in").font(.system(size: 9))
+                            TextField("In", value: $trimStartDraft, format: .number.precision(.fractionLength(3)))
+                                .textFieldStyle(.roundedBorder)
+                                .accessibilityIdentifier("video.trimIn")
+                        }
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Source out").font(.system(size: 9))
+                            TextField("Out", value: $trimEndDraft, format: .number.precision(.fractionLength(3)))
+                                .textFieldStyle(.roundedBorder)
+                                .accessibilityIdentifier("video.trimOut")
+                        }
+                    }
+                    .font(.system(size: 10, design: .monospaced))
+                    Button("Apply trim") {
+                        onVideoEdit(.trim(clipID: placement.clip.id,
+                                          sourceStart: trimStartDraft,
+                                          sourceEnd: trimEndDraft))
+                    }
+                    .disabled(isVideoEditing || !trimStartDraft.isFinite || !trimEndDraft.isFinite
+                              || trimStartDraft < placement.clip.sourceStart
+                              || trimEndDraft > placement.clip.sourceEnd
+                              || trimEndDraft - trimStartDraft < 0.1
+                              || (abs(trimStartDraft - placement.clip.sourceStart) < 0.001
+                                  && abs(trimEndDraft - placement.clip.sourceEnd) < 0.001))
+                    .accessibilityIdentifier("video.applyTrim")
+                    }
+
+                    HStack {
+                        Button("Move left") { onVideoEdit(.move(clipID: placement.clip.id, toIndex: index - 1)) }
+                            .disabled(index == 0)
+                        Button("Move right") { onVideoEdit(.move(clipID: placement.clip.id, toIndex: index + 1)) }
+                            .disabled(index + 1 >= timeline.clips.count)
+                    }
+                    .disabled(isVideoEditing)
+                    Button(role: .destructive) { onVideoEdit(.delete(clipID: placement.clip.id)) } label: {
+                        Label("Remove clip", systemImage: "trash")
+                    }
+                    .disabled(isVideoEditing || timeline.clips.count == 1)
+                    .accessibilityIdentifier("video.deleteClip")
+                }
+
+                if selectedAsset?.kind != .image {
+                InspectorSection("Clip sound") {
+                    Text("Captured sound for this clip")
+                        .font(.system(size: 9))
+                        .foregroundStyle(StudioTheme.secondaryText)
+                    LabeledSlider(value: $sourceAudioDraft, range: 0...2,
+                                  label: "Volume", suffix: "%", multiplier: 100, decimals: 0)
+                    Button("Apply volume") {
+                        onVideoEdit(.setClipAudio(clipID: placement.clip.id, volume: sourceAudioDraft))
+                    }
+                    .disabled(isVideoEditing || abs(sourceAudioDraft - placement.clip.sourceAudioVolume) < 0.001)
+                    .accessibilityIdentifier("video.applyVolume")
+                    Text("Music and sound effects are in the Audio panel.")
+                        .font(.system(size: 9))
+                        .foregroundStyle(StudioTheme.secondaryText)
+                }
+                }
+
+                if index + 1 < timeline.clips.count {
+                    let transition = timeline.transition(after: placement.clip.id)
+                    let maximum = maximumTransitionDuration(after: index, in: timeline)
+                    InspectorSection("Transition after clip") {
+                        Picker("Style", selection: Binding<DemoTransitionPreset>(
+                            get: { videoTimeline?.transition(after: placement.clip.id)?.preset ?? .cut },
+                            set: { preset in
+                                let length = preset == .cut ? 0 : min(maximum, max(0.1, transitionDurationDraft))
+                                onVideoEdit(.setTransition(fromClipID: placement.clip.id, preset: preset, duration: length))
+                            }
+                        )) {
+                            Text("Cut").tag(DemoTransitionPreset.cut)
+                            Text("Fade to black").tag(DemoTransitionPreset.fadeToBlack)
+                            Text("Flash").tag(DemoTransitionPreset.flash)
+                        }
+                        .disabled(isVideoEditing || maximum < 0.1)
+                        .accessibilityIdentifier("video.transitionPreset")
+                        if transition?.preset != .cut && transition != nil {
+                            LabeledSlider(value: $transitionDurationDraft,
+                                          range: 0.1...max(0.1, maximum),
+                                          label: "Duration", suffix: "s", decimals: 2)
+                            Button("Apply duration") {
+                                onVideoEdit(.setTransition(fromClipID: placement.clip.id,
+                                                            preset: transition?.preset ?? .cut,
+                                                            duration: transitionDurationDraft))
+                            }
+                            .disabled(isVideoEditing || abs(transitionDurationDraft - (transition?.duration ?? 0)) < 0.001)
+                            .accessibilityIdentifier("video.applyTransitionDuration")
+                        }
+                    }
+                }
+            }
+        } else {
+            Label("Video timeline unavailable", systemImage: "exclamationmark.triangle")
+                .foregroundStyle(StudioTheme.yellow)
         }
     }
 

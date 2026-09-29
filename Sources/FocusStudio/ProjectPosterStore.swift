@@ -17,6 +17,7 @@ final class ProjectPosterStore: ObservableObject {
 
     @Published private var entries: [UUID: Entry] = [:]
     private var inFlight: Set<UUID> = []
+    private var pending: [UUID: RecordingProject] = [:]
 
     func poster(for project: RecordingProject) -> NSImage? {
         guard let entry = entries[project.id], entry.lookHash == Self.lookHash(project) else { return nil }
@@ -26,7 +27,12 @@ final class ProjectPosterStore: ObservableObject {
     func requestPoster(for project: RecordingProject) {
         let hash = Self.lookHash(project)
         if let entry = entries[project.id], entry.lookHash == hash { return }
-        guard !inFlight.contains(project.id) else { return }
+        if inFlight.contains(project.id) {
+            // A render started before the latest edit. Queue only the newest
+            // appearance so the library cannot get stuck on a stale poster.
+            pending[project.id] = project
+            return
+        }
         inFlight.insert(project.id)
         let id = project.id
         Task.detached(priority: .utility) {
@@ -34,6 +40,9 @@ final class ProjectPosterStore: ObservableObject {
             await MainActor.run {
                 self.inFlight.remove(id)
                 if let image { self.entries[id] = Entry(lookHash: hash, image: image) }
+                if let latest = self.pending.removeValue(forKey: id) {
+                    self.requestPoster(for: latest)
+                }
             }
         }
     }
@@ -42,7 +51,15 @@ final class ProjectPosterStore: ObservableObject {
         var hasher = Hasher()
         hasher.combine(project.settings)
         hasher.combine(project.sourceVideoPath)
-        hasher.combine(project.zoomSegments.count)
+        hasher.combine(project.sourceWidth)
+        hasher.combine(project.sourceHeight)
+        hasher.combine(project.videoClips)
+        hasher.combine(project.videoTransitions)
+        let referenced = Set((project.videoClips ?? []).compactMap(\.mediaAssetID))
+        hasher.combine(project.mediaAssets?.filter { referenced.contains($0.id) } ?? [])
+        hasher.combine(project.zoomSegments)
+        hasher.combine(project.chapters)
+        hasher.combine(project.editCutTimes)
         hasher.combine(project.duration)
         return hasher.finalize()
     }

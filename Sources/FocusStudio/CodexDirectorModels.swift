@@ -150,7 +150,10 @@ extension CodexRecordingPlan {
                             "type": .string("string"),
                             "enum": .array(CodexRecordingActionType.allCases.map { .string($0.rawValue) })
                         ]),
-                        "seconds": Self.nullableNumberSchema,
+                        "seconds": .object([
+                            "type": .array([.string("number"), .string("null")]),
+                            "description": .string("For wait: 0–30 seconds. For move/click/scroll: optional smooth approach duration, 0.08–3 seconds.")
+                        ]),
                         "x": Self.nullableNumberSchema,
                         "y": Self.nullableNumberSchema,
                         "deltaX": Self.nullableNumberSchema,

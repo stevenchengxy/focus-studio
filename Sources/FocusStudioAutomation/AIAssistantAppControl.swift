@@ -142,6 +142,8 @@ public struct AIRecordingOptions: Equatable, Sendable {
     public var systemAudio: Bool?
     public var microphone: Bool?
     public var automaticZooms: Bool?
+    /// Exclusive tracked action source for this take; nil keeps manual recording.
+    public var interactionMode: String?
     public var browserContentOnly: Bool?
     public var frameRate: Int?
     /// Seconds of recording after which the app stops it by itself, through
@@ -153,7 +155,8 @@ public struct AIRecordingOptions: Equatable, Sendable {
     /// What `duration` may be: one second to ten minutes.
     public static let durationRange: ClosedRange<TimeInterval> = 1...600
 
-    public init(systemAudio: Bool? = nil, microphone: Bool? = nil, automaticZooms: Bool? = nil, browserContentOnly: Bool? = nil, frameRate: Int? = nil, duration: TimeInterval? = nil) {
+    public init(systemAudio: Bool? = nil, microphone: Bool? = nil, automaticZooms: Bool? = nil, browserContentOnly: Bool? = nil, frameRate: Int? = nil, duration: TimeInterval? = nil, interactionMode: String? = nil) {
+        self.interactionMode = interactionMode
         self.systemAudio = systemAudio
         self.microphone = microphone
         self.automaticZooms = automaticZooms
@@ -390,6 +393,12 @@ public struct AIMusicTrack: Equatable, Sendable, Identifiable {
 /// conforms; tests use a fake. Every member runs on the main actor.
 @MainActor
 public protocol AppControlling: AnyObject, Sendable {
+    /// Opens a visible browser page and returns its exact recordable window.
+    /// Does not start recording or alter the person's recorder settings.
+    func prepareDemoPage(url: URL, browser: AIDemoBrowser) async throws -> AIPreparedDemoPage
+    /// A preflight image of one prepared window. It never starts recording or
+    /// grants a live interaction observation token.
+    func capturePreparedDemoFrame(sourceID: String, to url: URL) async throws -> AIJSONValue
     /// Refreshes the displays and windows from the OS and returns them.
     func refreshRecordingSources() async throws -> [AIRecordingSource]
     /// The sources from the last refresh.
@@ -413,6 +422,10 @@ public protocol AppControlling: AnyObject, Sendable {
     /// attempt's id (``recordingSession``). Throws when the app cannot start
     /// (unknown source, recording in progress).
     func startRecording(sourceID: String, options: AIRecordingOptions) throws -> UUID
+    func captureRecordingFrame(recordingID: UUID, to url: URL) async throws -> AIJSONValue
+    /// Execute only inside the live session target and record the dispatched pointer path.
+    func performRecordingAction(recordingID: UUID, actionID: String, observationID: UUID, action: CodexRecordingAction) async throws -> AIJSONValue
+    func performRecordingText(recordingID: UUID, actionID: String, observationID: UUID, text: String) async throws -> AIJSONValue
     /// Finishes the recording; on success the app opens the editor with the new
     /// project and brings it forward, as the Finish button does. A call while
     /// a stop is already under way (the Finish button, the recording's
@@ -420,10 +433,8 @@ public protocol AppControlling: AnyObject, Sendable {
     /// of finalizing again; a call with no live recording (a stop that
     /// already finished, a cancel winding down) does nothing.
     func stopRecording() async
-    /// ``stopRecording()`` for stop_recording: the in-app assistant's
-    /// (the person confirmed it inside the app) shows the editor in front;
-    /// an external AI tool's (`external`) leaves the app where it is, since
-    /// the person may be typing in another app.
+    /// ``stopRecording()`` for either assistant: a saved take opens in front.
+    /// The external flag identifies the caller without changing this behavior.
     func stopRecording(external: Bool) async
     /// Cancels attempt `id` (its countdown, its capture start or the
     /// recording) and keeps nothing, as the Cancel buttons do. Does nothing
@@ -465,6 +476,29 @@ public protocol AppControlling: AnyObject, Sendable {
     /// editor (saving and closing any open project first), as Import video
     /// does. A nil title is the file name.
     func importVideo(from url: URL, title: String?) async throws -> RecordingProject
+    /// Create an independent, editable cut while preserving the source project.
+    func createDemoCut(projectID: UUID, keepRanges: [DemoKeepRange], title: String?) async throws -> RecordingProject
+    /// Apply one validated video-track edit. Its first call may open a new
+    /// working project; callers must use the returned ID thereafter.
+    func applyVideoEdit(projectID: UUID, operation: DemoVideoEditOperation) async throws -> RecordingProject
+    /// Reverse the latest video-track edit of this open working project.
+    func undoVideoEdit(projectID: UUID) async throws -> RecordingProject
+    /// Reapply the latest undone video-track edit of this open working project.
+    func redoVideoEdit(projectID: UUID) async throws -> RecordingProject
+    /// Copy local videos or images into this project's reusable media library.
+    /// The first edit may create and open a separate working project; callers
+    /// must use the returned project ID for subsequent operations.
+    func importEditorMedia(from urls: [URL], projectID: UUID) async throws -> RecordingProject
+    /// List assets shared across projects. No project is opened or changed.
+    func listGlobalMedia() async throws -> [DemoMediaAsset]
+    /// Copy local media into the shared catalog; no project is changed.
+    func importGlobalMedia(from urls: [URL]) async throws -> [DemoMediaAsset]
+    /// Copy selected shared assets into one project's own library.
+    func importGlobalMediaToProject(assetIDs: [UUID], projectID: UUID) async throws -> RecordingProject
+    /// Place an already imported media asset on the video track. Images use a
+    /// still duration (three seconds when omitted); video defaults to its full
+    /// source duration. The asset remains reusable after a clip is removed.
+    func insertEditorMedia(projectID: UUID, assetID: UUID, atIndex: Int, duration: Double?) async throws -> RecordingProject
     /// Turns a PNG or JPEG screenshot into an editable demo project and opens
     /// it in the editor, as Animate screenshot does. A nil title is
     /// "<file name> Demo".
@@ -479,6 +513,49 @@ public protocol AppControlling: AnyObject, Sendable {
 }
 
 extension AppControlling {
+    public func createDemoCut(projectID: UUID, keepRanges: [DemoKeepRange], title: String?) async throws -> RecordingProject {
+        throw AIToolError.failed("Creating an editable demo cut is unavailable in this app.")
+    }
+    public func applyVideoEdit(projectID: UUID, operation: DemoVideoEditOperation) async throws -> RecordingProject {
+        throw AIToolError.failed("Editing the video track is unavailable in this app.")
+    }
+    public func undoVideoEdit(projectID: UUID) async throws -> RecordingProject {
+        throw AIToolError.failed("Undoing a video-track edit is unavailable in this app.")
+    }
+    public func redoVideoEdit(projectID: UUID) async throws -> RecordingProject {
+        throw AIToolError.failed("Redoing a video-track edit is unavailable in this app.")
+    }
+    public func importEditorMedia(from urls: [URL], projectID: UUID) async throws -> RecordingProject {
+        throw AIToolError.failed("Importing editor media is unavailable in this app.")
+    }
+    public func listGlobalMedia() async throws -> [DemoMediaAsset] {
+        throw AIToolError.failed("The shared media library is unavailable in this app.")
+    }
+    public func importGlobalMedia(from urls: [URL]) async throws -> [DemoMediaAsset] {
+        throw AIToolError.failed("Importing shared media is unavailable in this app.")
+    }
+    public func importGlobalMediaToProject(assetIDs: [UUID], projectID: UUID) async throws -> RecordingProject {
+        throw AIToolError.failed("Adding shared media to a project is unavailable in this app.")
+    }
+    public func insertEditorMedia(projectID: UUID, assetID: UUID, atIndex: Int, duration: Double?) async throws -> RecordingProject {
+        throw AIToolError.failed("Inserting editor media is unavailable in this app.")
+    }
+    public func prepareDemoPage(url: URL, browser: AIDemoBrowser) async throws -> AIPreparedDemoPage {
+        throw AIToolError.failed("Preparing a visible demo page is unavailable in this app.")
+    }
+    public func capturePreparedDemoFrame(sourceID: String, to url: URL) async throws -> AIJSONValue {
+        throw AIToolError.failed("Observing a prepared demo window is unavailable in this app.")
+    }
+    public func captureRecordingFrame(recordingID: UUID, to url: URL) async throws -> AIJSONValue {
+        throw AIToolError.failed("Live recording frames are unavailable in this app.")
+    }
+    public func performRecordingAction(recordingID: UUID, actionID: String, observationID: UUID, action: CodexRecordingAction) async throws -> AIJSONValue {
+        throw AIToolError.failed("Tracked recording actions are unavailable in this app.")
+    }
+    public func performRecordingText(recordingID: UUID, actionID: String, observationID: UUID, text: String) async throws -> AIJSONValue {
+        throw AIToolError.failed("Recorded text entry is unavailable in this app.")
+    }
+
     /// An app without a pause (test fakes) never reports one.
     public var isRecordingPaused: Bool { false }
 
@@ -600,6 +677,9 @@ extension AIToolSupport {
     static func finishedRecording(_ project: AIProjectSummary, isOpen: Bool) -> AIToolResult {
         var text = "Recording saved as project \"\(project.displayTitle)\" (id \(project.id.uuidString), \(seconds(project.duration)) s, \(project.sourceWidth)×\(project.sourceHeight), \(project.zoomCount) automatic zooms)."
         if isOpen { text += " It is open in the editor." }
+        if project.zoomCount == 0 {
+            text += " No zoom segments were generated. Call get_project to check whether automatic zooms were enabled and input was captured; browser automation may not emit system clicks. Add zooms at your observed interaction times with add_zoom."
+        }
         let data = merged(AIProjectReport.summaryData(project, isOpen: isOpen), ["project_id": AIJSONValue(project.id.uuidString), "state": "finished"])
         return AIToolResult(text: text, data: data)
     }
@@ -715,9 +795,11 @@ struct StartRecordingTool: AIAssistantTool {
 
     /// How long the countdown plus capture start may take.
     var startTimeout: TimeInterval = 20
+    var onStarted: (@MainActor @Sendable (UUID) -> Void)?
 
-    init(startTimeout: TimeInterval = 20) {
+    init(startTimeout: TimeInterval = 20, onStarted: (@MainActor @Sendable (UUID) -> Void)? = nil) {
         self.startTimeout = startTimeout
+        self.onStarted = onStarted
     }
 
     var parametersSchema: [String: Any] {
@@ -726,6 +808,7 @@ struct StartRecordingTool: AIAssistantTool {
             "required": ["source"],
             "properties": [
                 "source": ["type": "string", "description": "A source id from list_recording_sources, an app name (e.g. Safari), part of a window title, or \"display\" for the main display (\"display 2\" for the second one)."],
+                "interaction_mode": ["type": "string", "enum": ["manual", "codex"], "description": "manual observes physical input; codex records exclusively the mouse path from perform_recording_action. Use codex for an automated demo with automatic cursor-follow zooms. Only window sources support codex."],
                 "system_audio": ["type": "boolean", "description": "Capture the Mac's audio output."],
                 "microphone": ["type": "boolean"],
                 "automatic_zooms": ["type": "boolean", "description": "Generate zooms from clicks and typing (default on)."],
@@ -747,6 +830,12 @@ struct StartRecordingTool: AIAssistantTool {
         let arguments = AIToolArguments(raw)
         let query = try arguments.requiredString("source")
         var options = AIRecordingOptions()
+        if arguments.has("interaction_mode") {
+            guard let mode = arguments.string("interaction_mode"), ["manual", "codex"].contains(mode) else {
+                throw AIToolError.invalidArgument("interaction_mode must be manual or codex.")
+            }
+            options.interactionMode = mode
+        }
         for key in ["system_audio", "microphone", "automatic_zooms", "browser_content_only"] where arguments.has(key) {
             guard let value = arguments.bool(key) else { throw AIToolError.invalidArgument("\"\(key)\" must be true or false.") }
             switch key {
@@ -783,6 +872,9 @@ struct StartRecordingTool: AIAssistantTool {
             sources = try await AIToolSupport.appAction(context) { try await app.refreshRecordingSources() }
         }
         let source = try Self.resolveSource(query, in: sources)
+        guard options.interactionMode != "codex" || source.kind == .window else {
+            throw AIToolError.invalidArgument("Codex interaction mode requires a window source.")
+        }
         // Sound the person's own recorder settings leave off is recorded only
         // when the person allows it, asked before the countdown and never
         // remembered. The in-app assistant never asks: the person drives it.
@@ -854,7 +946,9 @@ struct StartRecordingTool: AIAssistantTool {
                 let (options, leftOff) = isExternal
                     ? Self.withoutUnallowedSound(requestedOptions, allowed: allowedAudio, recorder: app.recorderAudio)
                     : (requestedOptions, AIRecordingAudio())
-                return (try app.startRecording(sourceID: source.id, options: options), options, leftOff)
+                let id = try app.startRecording(sourceID: source.id, options: options)
+                onStarted?(id)
+                return (id, options, leftOff)
             }
         }
         options = startedOptions
@@ -910,7 +1004,9 @@ struct StartRecordingTool: AIAssistantTool {
         if let duration = session.duration {
             text += " It stops by itself once \(AIToolSupport.seconds(duration)) s are recorded (at \(Self.clockTime(startedAt.addingTimeInterval(duration))) unless it is paused; paused time does not count)."
         }
-        if context.isExternal {
+        if options.interactionMode == "codex" {
+            text += " Use perform_recording_action with recording_id \(session.id.uuidString) for every pointer movement, click and scroll; it records the same path that drives cursor animation and automatic zooms. Coordinates are normalized to the full uncropped source window. Unreported browser/AX clicks are not tracked. Observe the current window before choosing coordinates."
+        } else if context.isExternal {
             // An MCP client may drive the recorded app itself (computer use, browser automation).
             text += " The person sees a control bar and can pause, finish or cancel it at any time. Let them perform the demo, or operate the recorded app yourself with your own tools meanwhile; the control bar floats above every app at the bottom centre of each display, so keep your clicks off it (its x button discards the recording) and stop with stop_recording. Then call wait_for_recording to get the saved project (or stop_recording to stop now)."
         } else if session.duration != nil {
@@ -920,6 +1016,7 @@ struct StartRecordingTool: AIAssistantTool {
             text += " The user sees a control bar and can pause, finish or cancel it at any time, and performs the demo now. Reply to the user now; when they say they are done, call stop_recording (it also reports the project if they already clicked Finish)."
         }
         var optionData: [String: AIJSONValue] = [:]
+        if let value = options.interactionMode { optionData["interaction_mode"] = AIJSONValue(value) }
         if let value = options.systemAudio { optionData["system_audio"] = AIJSONValue(value) }
         if let value = options.microphone { optionData["microphone"] = AIJSONValue(value) }
         if let value = options.automaticZooms { optionData["automatic_zooms"] = AIJSONValue(value) }
@@ -927,6 +1024,7 @@ struct StartRecordingTool: AIAssistantTool {
         if let value = options.frameRate { optionData["frame_rate"] = AIJSONValue(value) }
         var data: [String: AIJSONValue] = [
             "state": "recording",
+            "recording_id": AIJSONValue(session.id.uuidString),
             "source": source.data,
             "started_at": AIJSONValue(startedAt),
             "options": .object(optionData),
@@ -1172,9 +1270,8 @@ struct StopRecordingTool: AIAssistantTool {
         let sessionID = await MainActor.run { app.recordingSession.flatMap { $0.outcome == nil ? $0.id : nil } }
         progress(context.tr("Preparing your editable recording…"))
         // A joined stop is only waited for: asking again could land after it
-        // finished and finalize a capture that no longer exists. An external
-        // AI tool's stop leaves the app where it is; the in-app assistant's
-        // brings the saved project forward, as Finish does.
+        // finished and finalize a capture that no longer exists. Every saved
+        // stop brings the editor forward, as Finish does.
         let external = context.isExternal
         if !joining { Task { @MainActor in await app.stopRecording(external: external) } }
         let outcome = try await AIToolSupport.waitOnMain(timeout: stopTimeout) {
@@ -1985,12 +2082,14 @@ public struct ExportProjectTool: AIAssistantTool {
     /// Where a tool may write a file for `project`. Never over the recording
     /// or any media the project uses (or any other `protecting` file, such as
     /// the clips being joined); never inside the projects library except the
-    /// project's own `ai/` folder; never over an existing file unless the
+    /// project's own `ai/` folder; never inside the shared media library;
+    /// never over an existing file unless the
     /// caller asked to overwrite it. Paths are compared with symlinks resolved.
     /// Without a project only the library rule and the extra files apply.
     struct OutputGuard {
         let protectedFiles: [String]
         let libraryRoot: URL?
+        let sharedMediaLibraryRoot: URL?
         let allowedFolders: [URL]
 
         init(project: RecordingProject?, context: AIAssistantContext, protecting extraFiles: [URL] = []) {
@@ -2010,6 +2109,11 @@ public struct ExportProjectTool: AIAssistantTool {
                 .compactMap(resolved)
             protectedFiles = (projectFiles + extraFiles).map(AIToolPaths.canonicalPath)
             libraryRoot = context.projectsDirectory
+            // The reusable catalog is a sibling of Projects, not a child of
+            // it. Protect the entire app-owned catalog (including index.json
+            // and future entries), independently of the open project's media.
+            sharedMediaLibraryRoot = context.projectsDirectory?
+                .deletingLastPathComponent().appendingPathComponent("MediaLibrary", isDirectory: true)
             // The canonical ai folder, and the one next to a nested legacy source
             // (the assistant's assets folder for that project).
             var folders: [URL] = []
@@ -2040,6 +2144,10 @@ public struct ExportProjectTool: AIAssistantTool {
         }
 
         private func checkLocation(_ destination: String) throws {
+            if let sharedMediaLibraryRoot,
+               AIToolPaths.path(destination, isInside: AIToolPaths.canonicalPath(sharedMediaLibraryRoot)) {
+                throw AIToolError.invalidArgument("\"path\" is inside the Focus Studio shared media library (\(sharedMediaLibraryRoot.path)), which only the app writes. Choose a folder outside the library.")
+            }
             guard let libraryRoot, AIToolPaths.path(destination, isInside: AIToolPaths.canonicalPath(libraryRoot)) else { return }
             guard !allowedFolders.contains(where: { AIToolPaths.path(destination, isInside: AIToolPaths.canonicalPath($0)) }) else { return }
             let suggestion = allowedFolders.first.map { " Use \($0.path)," } ?? ""

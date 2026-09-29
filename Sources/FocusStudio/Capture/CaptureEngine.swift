@@ -311,6 +311,10 @@ public final class CaptureEngine: ObservableObject {
     /// recorded so far (paused time left out) and when the current interval
     /// started, nil while paused. A recording's duration limit is measured on it.
     public var recordingIntervals: RecordingPauseClock { pauseClock }
+    /// The source geometry resolved when the current stream was configured.
+    /// Automation uses it to reject resized windows rather than guessing how
+    /// padded recording pixels map back to desktop input coordinates.
+    public var recordingTarget: CaptureTargetInfo? { activeTarget }
 
     /// Actual video time zero in the `ProcessInfo.systemUptime` clock. This is
     /// derived from the first complete screen sample's presentation timestamp.
@@ -901,7 +905,7 @@ public final class CaptureEngine: ObservableObject {
     /// Captures the exact source currently being recorded and writes a PNG.
     /// The active content filter is reused so a display screenshot follows the
     /// same app-exclusion and area-crop rules as the movie.
-    public func captureScreenshot(to outputURL: URL) async throws {
+    public func captureScreenshot(to outputURL: URL, allowLatestFrameFallback: Bool = true) async throws {
         guard
             isRecording,
             let filter = activeContentFilter,
@@ -938,7 +942,7 @@ public final class CaptureEngine: ObservableObject {
                 // in another Space, but SCScreenshotManager may reject a fresh
                 // one-shot capture in that state. The stream's latest complete
                 // pixel buffer is the same selected source and is a safe fallback.
-                guard let pixelBuffer = delegateBridge?.latestScreenPixelBuffer() else {
+                guard allowLatestFrameFallback, let pixelBuffer = delegateBridge?.latestScreenPixelBuffer() else {
                     throw error
                 }
                 let source = CIImage(cvPixelBuffer: pixelBuffer)

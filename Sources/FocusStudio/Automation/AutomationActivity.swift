@@ -94,6 +94,7 @@ final class MainWindowPresenter {
     /// Opens a main window; set from a SwiftUI view's `openWindow`.
     var openMainWindow: (() -> Void)?
     private var ordersNextWindowFront = false
+    private var activatesNextWindow = false
     private var unhideObserver: NSObjectProtocol?
     private var restoreObserver: NSObjectProtocol?
 
@@ -102,7 +103,9 @@ final class MainWindowPresenter {
         windows.add(window)
         if ordersNextWindowFront {
             ordersNextWindowFront = false
-            window.orderFrontRegardless()
+            if activatesNextWindow { window.makeKeyAndOrderFront(nil) }
+            else { window.orderFrontRegardless() }
+            activatesNextWindow = false
         }
     }
 
@@ -114,7 +117,7 @@ final class MainWindowPresenter {
         return canOpen ? .openNew : .nothing
     }
 
-    func present() {
+    func present(activate: Bool = false) {
         let registered = windows.allObjects
         let state = registered.map { (isVisible: $0.isVisible, isMiniaturized: $0.isMiniaturized) }
         switch Self.step(appIsHidden: NSApp.isHidden, windows: state, canOpen: openMainWindow != nil) {
@@ -125,13 +128,14 @@ final class MainWindowPresenter {
                         guard let self else { return }
                         if let observer = self.unhideObserver { NotificationCenter.default.removeObserver(observer) }
                         self.unhideObserver = nil
-                        self.present()
+                        self.present(activate: activate)
                     }
                 }
             }
             NSApp.unhideWithoutActivation()
         case let .orderFront(index):
-            registered[index].orderFrontRegardless()
+            if activate { registered[index].makeKeyAndOrderFront(nil) }
+            else { registered[index].orderFrontRegardless() }
         case let .restore(index):
             let window = registered[index]
             if let observer = restoreObserver { NotificationCenter.default.removeObserver(observer) }
@@ -139,12 +143,14 @@ final class MainWindowPresenter {
                 MainActor.assumeIsolated {
                     if let observer = self?.restoreObserver { NotificationCenter.default.removeObserver(observer) }
                     self?.restoreObserver = nil
-                    window?.orderFrontRegardless()
+                    if activate { window?.makeKeyAndOrderFront(nil) }
+                    else { window?.orderFrontRegardless() }
                 }
             }
             window.deminiaturize(nil)
         case .openNew:
             ordersNextWindowFront = true
+            activatesNextWindow = activate
             openMainWindow?()
         case .nothing:
             break

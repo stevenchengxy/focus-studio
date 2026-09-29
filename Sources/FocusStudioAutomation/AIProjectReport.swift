@@ -13,7 +13,7 @@ public enum AIProjectReport {
     /// recording comes to about 10k) and carry their totals; cursor samples
     /// are never included. Zooms and chapters are the first ones in time
     /// order, and long texts are shortened with "…".
-    static let maximumDataZooms = 100
+    static let maximumDataZooms = 80
     static let maximumDataClicks = 200
     static let maximumDataTyping = 200
     static let maximumDataChapters = 50
@@ -34,15 +34,27 @@ public enum AIProjectReport {
         var lines: [String] = []
         let title = project.title.trimmingCharacters(in: .whitespacesAndNewlines)
         lines.append("Title: \(title.isEmpty ? "Untitled" : title) | Duration: \(seconds(project.duration)) s | Source: \(project.sourceWidth)×\(project.sourceHeight) | Clicks: \(project.clickEvents.count) | Zooms: \(project.zoomSegments.filter(\.isEnabled).count) | Chapters: \(project.chapters?.count ?? 0)")
-        lines.append("Look: background \(backgroundDescription(settings)) | aspect \(settings.aspectRatio.title) | padding \(Int(settings.padding)) px | corner radius \(Int(settings.cornerRadius)) px | shadow \(seconds(settings.shadow)) | screen animation \(settings.screenAnimation.rawValue) | zoom scale \(seconds(settings.zoomScale))× | caption \(settings.resolvedCaptionStyle.position.rawValue)")
+        let interactions = project.resolvedInteractions
+        lines.append("Interaction trace: source \(project.interactionTrace?.source.rawValue ?? "system") | cursor display \(project.interactionTrace?.cursorDisplayMode.rawValue ?? "overlay") | cursor samples \(interactions.cursorSamples.count) | events \(project.interactionTrace?.events.count ?? 0) | typing events \(project.resolvedTypingActivity.count) | rejected events \(interactions.rejectedEventCount)")
+        lines.append("Look: background \(backgroundDescription(settings)) | aspect \(settings.aspectRatio.title) | padding \(Int(settings.padding)) px | corner radius \(Int(settings.cornerRadius)) px | shadow \(seconds(settings.shadow)) | screen animation \(settings.screenAnimation.rawValue) | zoom scale \(seconds(settings.zoomScale))× | cursor follow \(seconds(settings.resolvedZoomFollowsCursor)) (0 = fixed target) | caption \(settings.resolvedCaptionStyle.position.rawValue)")
         if let description = settings.productDescription?.trimmingCharacters(in: .whitespacesAndNewlines), !description.isEmpty {
             lines.append("Product: \(String(description.prefix(400)))")
         }
         let audio = settings.resolvedProductDemoAudio
         let music = audio.backgroundMusicPath.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent } ?? "none"
         lines.append("Zoom style: automatic zooms \(settings.autoZoomEnabled ? "on" : "off") | hold \(seconds(settings.zoomHold)) s | ease in \(seconds(settings.zoomEaseIn)) s | ease out \(seconds(settings.zoomEaseOut)) s | chain gap \(seconds(settings.resolvedZoomChainGap)) s")
+        if settings.autoZoomEnabled, project.zoomSegments.isEmpty, !TimelineMath.hasAutomaticZoomInput(in: project) {
+            lines.append("No eligible clicks or typing were captured inside the visible crop. Browser/AX automation may not emit system input events. Use add_zoom at your observed interaction times; enabling automatic zooms cannot recover missing events.")
+        }
         lines.append("Audio: music \(music) (volume \(seconds(audio.backgroundMusicVolume))) | click sound \(audio.clickSoundEnabled ? "on" : "off") | zoom whoosh \(audio.zoomTransitionSoundEnabled ? "on" : "off")")
         lines.append("Export: \(settings.exportWidth) px wide | \(settings.frameRate) fps")
+        if let timeline = try? DemoVideoTimeline(project: project) {
+            lines.append("Video track: \(timeline.clips.count) clip(s) | \(timeline.transitions.filter { $0.preset != .cut }.count) visual transition(s). Use get_timeline for stable clip IDs and in/out points.")
+        }
+        if let media = project.mediaAssets, !media.isEmpty {
+            let listed = media.prefix(maximumListedAssets).map { "\($0.title) [\($0.kind.rawValue), \($0.id.uuidString)]" }
+            lines.append("Editor media library: \(media.count) asset(s). \(listed.joined(separator: ", ")). Use list_media_assets for all IDs and insert_media_asset to place one on the track.")
+        }
         let zooms = AIToolSupport.orderedZooms(project)
         if !zooms.isEmpty {
             let listed = zooms.prefix(maximumListedZooms).map { "#\($0.index) \(AIToolSupport.zoomLine($0.segment))" }
@@ -79,7 +91,7 @@ public enum AIProjectReport {
         let settings = project.settings
         let zooms = AIToolSupport.orderedZooms(project)
         let chapters = (project.chapters ?? []).sorted(by: ChapterMath.precedes)
-        let typing = project.typingActivity ?? []
+        let typing = project.resolvedTypingActivity
         let clickItems = sampled(project.clickEvents.sorted { $0.time < $1.time }, limit: maximumDataClicks)
             .map { click -> AIJSONValue in [.rounded(click.time), .rounded(click.x), .rounded(click.y)] }
         let typingItems = sampled(typing.sorted { $0.time < $1.time }, limit: maximumDataTyping)
@@ -106,8 +118,17 @@ public enum AIProjectReport {
                 // [seconds, x, y]; evenly sampled across the recording beyond the cap.
                 "items": .array(clickItems),
             ],
+            "interaction_trace": [
+                "source": AIJSONValue(project.interactionTrace?.source.rawValue ?? "system"),
+                "cursor_display": AIJSONValue(project.interactionTrace?.cursorDisplayMode.rawValue ?? "overlay"),
+                "cursor_samples": AIJSONValue(project.resolvedInteractions.cursorSamples.count),
+                "events": AIJSONValue(project.interactionTrace?.events.count ?? 0),
+                "rejected_events": AIJSONValue(project.resolvedInteractions.rejectedEventCount),
+            ],
             "typing_count": AIJSONValue(typing.count),
             "typing": .array(typingItems),
+            "media_asset_count": AIJSONValue(project.mediaAssets?.count ?? 0),
+            "media_assets": .array((project.mediaAssets ?? []).prefix(maximumListedAssets).map(MediaLibraryToolSupport.data)),
             "assets_dir": assetsDirectory.map { AIJSONValue($0) } ?? .null,
         ]
     }
@@ -130,6 +151,7 @@ public enum AIProjectReport {
             "shadow": .rounded(settings.shadow),
             "screenAnimation": AIJSONValue(settings.screenAnimation.rawValue),
             "zoomScale": .rounded(settings.zoomScale),
+            "zoomFollowsCursor": .rounded(settings.resolvedZoomFollowsCursor),
             "aspectRatio": AIJSONValue(settings.aspectRatio.rawValue),
             "motionBlur": .rounded(settings.motionBlur),
             "captionPosition": AIJSONValue(caption.position.rawValue),
@@ -183,6 +205,9 @@ public enum AIProjectReport {
             "x": .rounded(segment.targetX),
             "y": .rounded(segment.targetY),
             "scale": .rounded(segment.scale),
+            // Null means the project's zoomEaseIn/zoomEaseOut is inherited.
+            "ease_in": segment.zoomEaseIn.map { .rounded($0) } ?? .null,
+            "ease_out": segment.zoomEaseOut.map { .rounded($0) } ?? .null,
             "kind": AIJSONValue(segment.kind.rawValue),
             "enabled": AIJSONValue(segment.isEnabled),
         ]

@@ -18,6 +18,7 @@ swiftc -parse-as-library \
   -target "$(uname -m)-apple-macosx15.0" \
   -I "$BUILD_DIR/Modules" \
   Sources/FocusStudio/CodexPlanRunner.swift \
+  Sources/FocusStudio/RecordingWindowFocus.swift \
   Tests/CodexPlanRunnerTests/main.swift \
   "${CORE_OBJECTS[@]}" "${AUTOMATION_OBJECTS[@]}" \
   -o "$TEST_DIR/CodexPlanRunnerTests"

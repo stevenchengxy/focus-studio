@@ -4,6 +4,9 @@ import SwiftUI
 
 struct CodexConnectionSettingsView: View {
     @ObservedObject var director: CodexDirectorService
+    /// The older recording-plan service uses the same non-secret preferences,
+    /// while the visible status and sign-in belong to the assistant service.
+    var mirrorPreferencesTo: CodexDirectorService?
     @ObservedObject private var localization = AppLocalization.shared
     @Environment(\.dismiss) private var dismiss
     @State private var draft: CodexConnectionPreferences
@@ -12,10 +15,13 @@ struct CodexConnectionSettingsView: View {
     @State private var installations: [CodexInstallation] = []
     @State private var isDetectingInstallations = false
     @State private var detectionTask: Task<Void, Never>?
+    @State private var showsInstallations = false
+    @State private var showsAdvanced = false
     var showsDoneButton: Bool
 
-    init(director: CodexDirectorService, showsDoneButton: Bool = true) {
+    init(director: CodexDirectorService, mirrorPreferencesTo: CodexDirectorService? = nil, showsDoneButton: Bool = true) {
         self.director = director
+        self.mirrorPreferencesTo = mirrorPreferencesTo
         self.showsDoneButton = showsDoneButton
         _draft = State(initialValue: director.preferences)
     }
@@ -27,8 +33,12 @@ struct CodexConnectionSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Codex connection").font(.system(size: 20, weight: .semibold))
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Codex connection").font(.system(size: 20, weight: .semibold))
+                    Text("Connect the AI assistant in Focus Studio.")
+                        .font(.system(size: 11)).foregroundStyle(StudioTheme.secondaryText)
+                }
                 Spacer()
                 if showsDoneButton {
                     Button("Done") { apiKey = ""; dismiss() }
@@ -38,29 +48,35 @@ struct CodexConnectionSettingsView: View {
             .padding(22)
             Divider()
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    AppLanguagePicker()
-                        .help("Changes immediately. Your recording and edits stay open.")
-                    Divider()
+                VStack(alignment: .leading, spacing: 18) {
+                    statusSection
                     executableSection
                     accountSection
-                    modelSection
-                    statusSection
+                    DisclosureGroup("Advanced options", isExpanded: $showsAdvanced) {
+                        VStack(alignment: .leading, spacing: 14) {
+                            executablePathSection
+                            modelSection
+                            AppLanguagePicker()
+                        }
+                        .padding(.top, 10)
+                    }
+                    .font(.system(size: 12))
                 }
                 .padding(22)
             }
             Divider()
             HStack {
-                Link("Setup guide", destination: URL(string: "https://developers.openai.com/codex/cli/")!)
+                Link("Setup guide", destination: URL(string: "https://learn.chatgpt.com/docs/codex/cli")!)
                     .font(.system(size: 12))
                 Spacer()
                 if director.isServerConnected {
                     Button("Disconnect") { director.disconnect(); apiKey = "" }
                         .disabled(director.connectionState == .generating)
                 }
-                Button("Save & test connection") {
+                Button(LocalizedStringKey(hasUnsavedChanges || !director.isServerConnected ? "Connect & test" : "Test again")) {
                     apiKey = ""
                     director.savePreferences(draft)
+                    mirrorPreferencesTo?.savePreferences(draft)
                     Task { await director.connect() }
                 }
                 .buttonStyle(PrimaryButtonStyle())
@@ -68,7 +84,7 @@ struct CodexConnectionSettingsView: View {
             }
             .padding(20)
         }
-        .frame(width: 620, height: 650)
+        .frame(width: 620, height: 610)
         .background(StudioTheme.panel)
         .foregroundStyle(StudioTheme.text)
         .environment(\.locale, localization.locale)
@@ -91,8 +107,56 @@ struct CodexConnectionSettingsView: View {
 
     private var executableSection: some View {
         VStack(alignment: .leading, spacing: 9) {
-            Text("1. Codex installation").font(.system(size: 13, weight: .semibold))
-                .help("Install Codex CLI or the Codex desktop app. Leave the path empty to detect it automatically, or choose your installation.")
+            HStack(spacing: 9) {
+                stepNumber(1)
+                Text("Find Codex").font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Button("Check again", action: detectInstallations)
+                    .font(.system(size: 11))
+                    .disabled(isDetectingInstallations)
+            }
+            if isDetectingInstallations {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Checking installations…")
+                }.font(.system(size: 11)).foregroundStyle(StudioTheme.secondaryText)
+            } else if let preferred = installations.first {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    Text("Codex found").font(.system(size: 12, weight: .medium))
+                    Text(verbatim: preferred.versionString)
+                        .font(.system(size: 11)).foregroundStyle(StudioTheme.secondaryText)
+                    Spacer()
+                    if !draft.executablePath.isEmpty { Button("Use automatic") { draft.executablePath = "" }.font(.system(size: 11)) }
+                }
+            } else {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.circle").foregroundStyle(StudioTheme.yellow)
+                    Text("Codex was not found on this Mac.").font(.system(size: 11))
+                    Spacer()
+                    Link("Install Codex", destination: URL(string: "https://learn.chatgpt.com/docs/codex/cli")!)
+                        .font(.system(size: 11))
+                }
+            }
+            if installations.count > 1 {
+                DisclosureGroup("Other installations", isExpanded: $showsInstallations) {
+                    installationsList.padding(.top, 8)
+                }.font(.system(size: 11))
+            }
+        }
+    }
+
+    private func stepNumber(_ number: Int) -> some View {
+        Text("\(number)")
+            .font(.system(size: 10, weight: .semibold, design: .rounded))
+            .foregroundStyle(StudioTheme.purple)
+            .frame(width: 20, height: 20)
+            .background(StudioTheme.purple.opacity(0.14), in: Circle())
+    }
+
+    private var executablePathSection: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("Codex executable path").font(.system(size: 11, weight: .semibold))
             HStack {
                 TextField("Automatic detection", text: $draft.executablePath)
                     .textFieldStyle(.roundedBorder)
@@ -102,13 +166,11 @@ struct CodexConnectionSettingsView: View {
             }
             .disabled(director.connectionState.isBusy)
             if let path = director.resolvedExecutablePath, !hasUnsavedChanges {
-                Text("Detected: \(path)")
+                Text(verbatim: path)
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(StudioTheme.secondaryText)
                     .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
             }
-            installationsList
         }
     }
 
@@ -117,26 +179,8 @@ struct CodexConnectionSettingsView: View {
     /// specific installation instead.
     private var installationsList: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Text("Detected installations").font(.system(size: 11, weight: .semibold))
-                if isDetectingInstallations {
-                    ProgressView().controlSize(.small)
-                    Text("Checking versions…").font(.system(size: 11)).foregroundStyle(StudioTheme.secondaryText)
-                }
-                Spacer()
-                Button("Detect again", action: detectInstallations)
-                    .disabled(isDetectingInstallations)
-            }
-            if installations.isEmpty {
-                if !isDetectingInstallations {
-                    Text("No Codex installation was found. Install Codex CLI or the ChatGPT desktop app, or choose the executable above.")
-                        .font(.system(size: 11)).foregroundStyle(StudioTheme.secondaryText)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            } else {
-                ForEach(installations) { installation in
-                    installationRow(installation)
-                }
+            ForEach(installations) { installation in
+                installationRow(installation)
             }
         }
         .padding(10)
@@ -196,7 +240,10 @@ struct CodexConnectionSettingsView: View {
 
     private var accountSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("2. Account").font(.system(size: 13, weight: .semibold))
+            HStack(spacing: 9) {
+                stepNumber(2)
+                Text("Choose an account").font(.system(size: 13, weight: .semibold))
+            }
             Picker("Account", selection: $draft.accountScope) {
                 ForEach(CodexConnectionPreferences.AccountScope.allCases, id: \.self) { scope in
                     Text(LocalizedStringKey(scope.title)).tag(scope)
@@ -221,6 +268,7 @@ struct CodexConnectionSettingsView: View {
                         }
                         .disabled(!canAuthenticate)
                         Button(LocalizedStringKey(showAPIKey ? "Hide API key" : "Use API key")) { showAPIKey.toggle(); apiKey = "" }
+                            .font(.system(size: 11))
                             .disabled(!canAuthenticate)
                         if director.canCreatePlan {
                             Spacer()
@@ -245,24 +293,27 @@ struct CodexConnectionSettingsView: View {
                         .font(.system(size: 10)).foregroundStyle(StudioTheme.secondaryText)
                 }
             } else {
-                Text("Uses your existing Codex sign-in.")
+                Text("Uses the account already signed in to Codex on this Mac.")
                     .font(.system(size: 11)).foregroundStyle(StudioTheme.secondaryText)
-                    .help("Reuses the account configured in your local Codex CLI. Manage that account in Codex. No credentials are copied into Focus Studio or installation packages.")
             }
-            if hasUnsavedChanges || !director.isServerConnected {
-                Text("Select Save & test connection first to enable sign-in.")
-                    .font(.system(size: 11)).foregroundStyle(StudioTheme.yellow)
+            if draft.accountScope == .focusStudio && (hasUnsavedChanges || !director.isServerConnected) {
+                Text("Connect & test first, then sign in.")
+                    .font(.system(size: 11)).foregroundStyle(StudioTheme.secondaryText)
             }
         }
     }
 
     private var modelSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("3. Planning model").font(.system(size: 13, weight: .semibold))
+            Text("Planning model").font(.system(size: 11, weight: .semibold))
             Picker("Model", selection: $draft.modelID) {
                 Text("Account default").tag("")
                 ForEach(director.availableModels) { model in
-                    (Text(verbatim: model.title) + Text(LocalizedStringKey(model.supportsImages ? "" : " · text only"))).tag(model.id)
+                    if model.supportsImages {
+                        Text(verbatim: model.title).tag(model.id)
+                    } else {
+                        Text(L10n.format("%@ · text only", model.title)).tag(model.id)
+                    }
                 }
                 if !draft.modelID.isEmpty && !director.availableModels.contains(where: { $0.id == draft.modelID }) {
                     Text("\(draft.modelID) · reconnect to check").tag(draft.modelID)
@@ -273,30 +324,25 @@ struct CodexConnectionSettingsView: View {
     }
 
     private var statusSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 8) {
                 if director.connectionState.isBusy { ProgressView().controlSize(.small) }
+                else {
+                    Image(systemName: director.canCreatePlan ? "checkmark.circle.fill" : "circle.dotted")
+                        .foregroundStyle(director.canCreatePlan ? .green : StudioTheme.secondaryText)
+                }
                 Text(LocalizedStringKey(director.connectionState.title)).font(.system(size: 12, weight: .semibold))
             }
-            Text(localizedAccountSummary).font(.system(size: 11)).textSelection(.enabled)
-            if let summary = director.connectionTestSummary {
-                Group {
-                    if summary == "Codex connected. Sign in to finish setup." {
-                        Text("Codex connected. Sign in to finish setup.")
-                    } else if summary.hasPrefix("Connection verified · ") {
-                        Text("Connection verified · \(director.availableModels.count) available models")
-                    } else {
-                        Text(summary)
-                    }
-                }
-                .font(.system(size: 11)).foregroundStyle(StudioTheme.secondaryText)
+            if director.isServerConnected {
+                Text(localizedAccountSummary).font(.system(size: 11))
+                    .foregroundStyle(StudioTheme.secondaryText).textSelection(.enabled)
             }
             if let error = director.lastErrorMessage {
                 Text(error).font(.system(size: 11)).foregroundStyle(StudioTheme.yellow)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(12)
+        .padding(11)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(StudioTheme.window)
         .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -321,7 +367,7 @@ struct CodexConnectionSettingsView: View {
         panel.treatsFilePackagesAsDirectories = false
         guard panel.runModal() == .OK, let selected = panel.url else { return }
         draft.executablePath = selected.pathExtension == "app"
-            ? selected.appendingPathComponent("Contents/Resources/codex").path
+            ? (CodexExecutableDiscovery.executable(in: selected)?.path ?? selected.path)
             : selected.path
     }
 }

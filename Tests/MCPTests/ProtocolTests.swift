@@ -193,6 +193,26 @@ extension MCPTests {
         check(newest["result"]?["protocolVersion"] == "2025-11-25", "an unknown version gets 2025-11-25")
         check(newer.host.session.protocolVersion == "2025-11-25", "and that is recorded")
         _ = await newer.finish()
+
+        // Codex 0.158.0 sends a nested experimental capability. MCP permits
+        // arbitrary JSON there, but Swift SDK 0.12.1 decodes only strings.
+        let codex = Session { _ in .result(.failure("unused")) }
+        let codexReply = try await codex.initialize(
+            version: "2025-06-18",
+            capabilities: [
+                "experimental": ["codex/auth-change": [:]],
+                "elicitation": ["form": [:], "url": [:]]
+            ],
+            client: ["name": "codex-mcp-client", "title": "Codex", "version": "0.158.0-alpha.2.1"]
+        )
+        check(codexReply["result"]?["protocolVersion"] == "2025-06-18", "Codex nested capability initializes: \(codexReply)")
+        check(codex.host.session.client == MCPClientIdentity(name: "codex-mcp-client", version: "0.158.0-alpha.2.1", title: "Codex"),
+              "Codex identity is retained after capability normalization")
+        codex.request(2, "tools/list")
+        let codexList = try await codex.response(2)
+        let codexTools = codexList["result"]?["tools"]?.arrayValue ?? []
+        check(codexTools.contains { $0["name"] == "get_status" }, "Codex can list tools after initialize")
+        _ = await codex.finish()
     }
 
     // MARK: - Forwarding

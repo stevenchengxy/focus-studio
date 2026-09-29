@@ -13,15 +13,15 @@ struct AutomationSettingsView: View {
     @ObservedObject private var localization = AppLocalization.shared
     @State private var didRefresh = false
     @State private var busyKinds: Set<MCPClientKind> = []
+    @State private var showsApprovedClients = false
+    @State private var manualCommands: Set<MCPClientKind> = []
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: 18) {
                 accessSection
-                Divider()
-                approvedSection
-                Divider()
                 connectSection
+                approvedSection
             }
             .padding(22)
         }
@@ -43,7 +43,7 @@ struct AutomationSettingsView: View {
             Toggle("Allow AI tools to control Focus Studio", isOn: $access.isEnabled)
                 .font(.system(size: 13, weight: .semibold))
                 .accessibilityIdentifier("automation.enabled")
-            Text("Claude Code, Codex and other MCP clients can record, edit and export in Focus Studio through focus-studio-mcp. The first time an AI tool calls, Focus Studio asks you to approve it. Every recording still shows the countdown and the control bar.")
+            Text("External AI tools can record and edit after you approve their first call.")
                 .font(.system(size: 11))
                 .foregroundStyle(StudioTheme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -94,26 +94,33 @@ struct AutomationSettingsView: View {
 
     private var approvedSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Approved AI tools").font(.system(size: 13, weight: .semibold))
-            if access.approvedClients.isEmpty {
-                Text("No AI tool has been approved yet.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(StudioTheme.secondaryText)
-            } else {
-                ForEach(access.approvedClients) { client in
-                    clientRow(client.identity, name: client.clientName, date: client.approvedAt, lastUsed: client.lastUsedAt) {
-                        Button("Revoke") { access.revoke(key: client.identity.key) }
-                            .accessibilityIdentifier("automation.revoke.\(client.identity.programName)")
+            DisclosureGroup(isExpanded: $showsApprovedClients) {
+                VStack(alignment: .leading, spacing: 10) {
+                    if access.approvedClients.isEmpty {
+                        Text("No AI tool has been approved yet.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(StudioTheme.secondaryText)
+                    } else {
+                        ForEach(access.approvedClients) { client in
+                            clientRow(client.identity, name: client.clientName, date: client.approvedAt, lastUsed: client.lastUsedAt) {
+                                Button("Revoke") { access.revoke(key: client.identity.key) }
+                                    .accessibilityIdentifier("automation.revoke.\(client.identity.programName)")
+                            }
+                        }
+                    }
+                    if !access.declinedClients.isEmpty {
+                        Text("Recently declined").font(.system(size: 12, weight: .semibold)).padding(.top, 4)
+                        ForEach(access.declinedClients) { client in
+                            clientRow(client.identity, name: client.clientName, date: nil, lastUsed: nil) {
+                                Button("Allow") { access.approve(client.identity, clientName: client.clientName) }
+                            }
+                        }
                     }
                 }
-            }
-            if !access.declinedClients.isEmpty {
-                Text("Recently declined").font(.system(size: 12, weight: .semibold)).padding(.top, 4)
-                ForEach(access.declinedClients) { client in
-                    clientRow(client.identity, name: client.clientName, date: nil, lastUsed: nil) {
-                        Button("Allow") { access.approve(client.identity, clientName: client.clientName) }
-                    }
-                }
+                .padding(.top, 10)
+            } label: {
+                Text("Approved AI tools")
+                    .font(.system(size: 13, weight: .semibold))
             }
         }
     }
@@ -181,21 +188,17 @@ struct AutomationSettingsView: View {
                 Button("Check again") { Task { await connector.refresh() } }
                     .disabled(connector.isLocating || !busyKinds.isEmpty)
             }
-            Text("Adds Focus Studio to the AI tool's list of MCP servers with its own command. Nothing else in its settings changes.")
+            Text("Connect once, then start a new AI tool session.")
                 .font(.system(size: 11))
                 .foregroundStyle(StudioTheme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
-            Text(verbatim: connector.helperPath)
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundStyle(StudioTheme.secondaryText)
-                .textSelection(.enabled)
             if let warning = connector.helperWarning {
                 Label(LocalizedStringKey(warning), systemImage: "exclamationmark.triangle")
                     .font(.system(size: 11))
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            ForEach(MCPClientKind.allCases) { kind in
+            ForEach([MCPClientKind.codex, .claudeCode]) { kind in
                 clientConnection(kind)
             }
         }
@@ -217,30 +220,46 @@ struct AutomationSettingsView: View {
                 connectButton(kind, state: status.state)
                     .disabled(isBusy || connector.isLocating || connector.helperWarning != nil)
             }
-            if let note = status.note {
-                Text(LocalizedStringKey(note))
-                    .font(.system(size: 11))
-                    .foregroundStyle(StudioTheme.secondaryText)
+            if case .connected = status.state {
+                Text(LocalizedStringKey(kind == .codex
+                    ? "Start a new Codex session to use Focus Studio."
+                    : "Start a new Claude Code session to use Focus Studio."))
+                    .font(.system(size: 11)).foregroundStyle(StudioTheme.secondaryText)
+            } else if let note = status.note {
+                Text(LocalizedStringKey(note)).font(.system(size: 11)).foregroundStyle(StudioTheme.secondaryText)
             }
-            if let path = status.cliPath {
-                Text("Uses \(path)")
-                    .font(.system(size: 10))
-                    .foregroundStyle(StudioTheme.secondaryText)
-                    .textSelection(.enabled)
-            }
-            HStack(alignment: .top, spacing: 8) {
-                Text(verbatim: connector.commandLine(for: kind))
-                    .font(.system(size: 10, design: .monospaced))
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-                    .background(Color.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                Button("Copy command") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(connector.commandLine(for: kind), forType: .string)
+            HStack {
+                Button(LocalizedStringKey(manualCommands.contains(kind) ? "Hide manual setup" : "Manual setup")) {
+                    if manualCommands.contains(kind) { manualCommands.remove(kind) }
+                    else { manualCommands.insert(kind) }
                 }
-                .help("Copies the command to paste into Terminal.")
+                .buttonStyle(.link).font(.system(size: 11))
+                if kind == .codex, case .cliNotFound = status.state {
+                    Link("Install Codex", destination: URL(string: "https://learn.chatgpt.com/docs/codex/cli")!)
+                        .font(.system(size: 11))
+                }
+            }
+            if manualCommands.contains(kind) {
+                if let path = status.cliPath {
+                    Text("Uses \(path)")
+                        .font(.system(size: 10))
+                        .foregroundStyle(StudioTheme.secondaryText)
+                        .textSelection(.enabled)
+                }
+                HStack(alignment: .top, spacing: 8) {
+                    Text(verbatim: connector.commandLine(for: kind))
+                        .font(.system(size: 10, design: .monospaced))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .background(Color.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    Button("Copy command") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(connector.commandLine(for: kind), forType: .string)
+                    }
+                    .help("Copies the command to paste into Terminal.")
+                }
             }
         }
         .padding(10)
@@ -254,7 +273,7 @@ struct AutomationSettingsView: View {
         case .unknown, .checking:
             Text("Checking…")
         case .cliNotFound:
-            Text("\(kind.executableName) was not found on this Mac. Install \(kind.title), or run the command below in Terminal.")
+            Text("AI tool not found.")
         case .notConnected:
             Text("Not connected.")
         case .connected:

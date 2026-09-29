@@ -1,14 +1,42 @@
-# Focus Studio AI 演示视频 Skills（火山方舟 Seedance / Seedream + ffmpeg）
+# Focus Studio 录制与 Demo 剪辑 Skills
 
-这是一组 Claude Code skills（`SKILL.md` 格式），把 Focus Studio 的录屏导出与火山引擎 **火山方舟（Ark）** 的
-Seedance 视频生成、Seedream 图片生成结合起来，产出企业级科技产品演示视频：**AI 片头 → 录屏功能章节（字幕）→ AI 片尾 CTA**，
-成片可直接发布，也可重新导入 Focus Studio 继续加缩放与音效。
+这些 Skills 可安装到 **Codex 或 Claude Code**。普通产品演示直接通过 Focus Studio 的 MCP 工具完成：
+录制 → 保存原始项目 → 分析操作间的等待 → 创建剪辑副本 → 调整逐段缩放 → 预览 → 导出。
+原始视频和手动录制算法保持不变；剪辑只影响单独的新项目。
 
-另有一个不涉及付费生成的 skill：`focus-studio-mcp`（Focus Studio 1.12+），教 Claude Code 通过 MCP 工具直接操作 Focus Studio 录制、编辑和导出，见下文。
+一句话示例：**“录制这个产品的核心流程，剪掉操作间的空等，延长重点展示，导出 1080p。”**
+使用 `focus-demo-editing` 串联流程，`focus-studio-mcp` 提供录制及编辑工具约定。它们不需要 Ark 密钥或付费素材。
+需要片头、片尾、复杂转场或营销视频组装时，再使用分镜与合成 Skills；AI 素材生成是可选的付费步骤。
 
-> English summary at the end of this file.
+## 安装到 Codex / Claude Code
 
-## 四个 skill 分别做什么
+```bash
+bash skills/install.sh --codex --skill focus-studio-mcp --skill focus-demo-editing
+bash skills/install.sh --codex   # 所有 Skills（默认目标是 Codex）
+bash skills/install.sh --claude  # 安装到 Claude Code
+bash skills/install.sh --all --copy  # 两个客户端都安装，使用副本
+```
+
+默认软链到 `${CODEX_HOME:-$HOME/.codex}/skills` 或 `${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}`。
+已有同名内容会保留到技能目录外的 `skill-backups`，不会删除。软链会跟随仓库更新；副本需再次运行安装器。
+安装后重新打开客户端会话以刷新技能发现。Focus Studio 中仍需启用 **设置 › AI 工具** 的 `focus-studio` MCP 连接。
+
+## Skills 分工
+
+| skill | 作用 |
+| --- | --- |
+| `focus-demo-editing` | 将录制、空等分析、非破坏剪辑、单段缩放、预览和导出连成一个任务；保存策略与验证报告 |
+| `focus-studio-mcp` | 通过真实工具控制 Focus Studio 录制、项目、缩放、字幕、音频与导出 |
+| `demo-storyboard` | 为需要片头、章节和片尾的成片创建分镜 |
+| `product-demo-composer` | 按分镜用 ffmpeg 合成已导出的片段、字幕、转场和音轨 |
+| `ark-still-image` / `ark-video-clip` | 按需生成可选的付费图片或视频素材 |
+
+`focus-demo-editing` 使用的是新的原生剪辑工具；如果已安装的 Focus Studio 还没有这些工具，请先更新应用。
+`get_project` 和实际工具 schema 是当前版本的依据；不能用启用自动缩放代替补回缺失的鼠标轨迹。
+
+## 可选：分镜与营销视频合成
+
+### 分镜与合成 Skills
 
 | skill | 作用 | 入口脚本 |
 | --- | --- | --- |
@@ -22,11 +50,7 @@ Seedance 视频生成、Seedream 图片生成结合起来，产出企业级科�
 `probe-activation` 模型开通检测。各 skill 的脚本通过相对路径 `../../_shared` 或 `./_shared` 引入它，因此**单独复制某个 skill
 时请连同 `_shared` 目录一起复制**（或设置 `FOCUS_SKILLS_SHARED=/path/to/_shared`）。
 
-## focus-studio-mcp：通过 MCP 使用 Focus Studio（1.12）
-
-`focus-studio-mcp/SKILL.md` 说明何时、如何调用 Focus Studio 的 24 个 MCP 工具（`mcp__focus-studio__*`）：录制窗口或显示器（`duration` 自动停止，`wait_for_recording` 等待结束）、按 `project_id` 加缩放、章节字幕、背景和配乐、导出到当前工作目录；导入视频或截图 Demo；列出、搜索、重命名和删除项目。也写明约定（坐标 0–1、从左上角算起，时间以秒为单位，`overwrite`）和礼仪（录制前告知录什么、要不要声音，对方可以随时取消；要录的声音录制器里没开时 Focus Studio 会先问对方；不直接改 `project.json`、删除前先问）。它只有 `SKILL.md`，不需要 `_shared`、Python 或密钥，但需要先在 Focus Studio 的 **设置 › AI 工具** 里接入 Claude Code（或手动运行 `claude mcp add`，见仓库根目录 README）。
-
-## 环境要求
+### 可选合成环境要求
 
 * macOS，Python 3.9+（只用标准库 + 可选 Pillow，用于压缩本地参考图），**不需要** `requests`。
 * ffmpeg 7.x（`brew install ffmpeg`），需要 libx264、aac、drawtext、xfade、sidechaincompress、zoompan（Homebrew 版默认包含）。
@@ -34,21 +58,7 @@ Seedance 视频生成、Seedream 图片生成结合起来，产出企业级科�
   Songti → Arial Unicode → Helvetica；也可用 `--font` 指定。
 * 火山方舟 API Key，且**已在控制台开通**要使用的模型（见下文）。
 
-## 安装到 Claude Code
-
-方式一：复制或软链到用户级 skills 目录（对所有项目生效）：
-
-```bash
-bash skills/install.sh            # 软链 5 个 skill + _shared 到 ~/.claude/skills/
-bash skills/install.sh --copy     # 或复制一份
-```
-
-方式二：在本仓库目录里直接运行 `claude`，或在别的目录用 `claude --add-dir /Users/<you>/Desktop/videoRecording` 把仓库加入
-工作区后，让 Claude 读取 `skills/<name>/SKILL.md`（例如："按 skills/demo-storyboard/SKILL.md 的流程帮我做分镜"）。
-
-安装后在 Claude Code 里说 "帮我把这段 Focus Studio 录屏做成带 AI 片头的产品演示视频"，四个 Ark / ffmpeg skill 会按描述自动触发；说 "用 Focus Studio 录一段 Chrome 窗口 20 秒，加缩放后导出到 ./demo.mp4"，会触发 `focus-studio-mcp`。
-
-## 端到端流程
+## 分镜合成流程（可选）
 
 ```text
 Focus Studio 录制 ──导出 MP4──▶ demo-storyboard ──storyboard.json──▶ product-demo-composer ──▶ final.mp4
@@ -59,7 +69,7 @@ Focus Studio 录制 ──导出 MP4──▶ demo-storyboard ──storyboard.j
 
 1. **录制并导出**：在 Focus Studio 里录制、自动缩放、调背景，导出 MP4（1920 或 3840 宽，30/60 fps）。
 2. **分镜**：`storyboard_from_project.py --project <项目目录> --export <导出.mp4> --thumbs thumbs/`，把缩放聚成 3-6 个章节，
-   Claude 看缩略图后把 `TODO` 字幕改成"说明收益"的一句话，决定是否加 AI 镜头（写好 `prompt` / `model` / `seed`）。
+   助手看缩略图后把 `TODO` 字幕改成"说明收益"的一句话，决定是否加 AI 镜头（写好 `prompt` / `model` / `seed`）。
 3. **（可选）生成 AI 素材**：单独用 `generate_still.py` / `generate_clip.py`，或让合成器 `--generate` 一次补齐；先 `--dry-run`
    看请求与预估费用。默认用最便宜的 `doubao-seedance-2-0-mini-260615` 480p/720p 迭代提示词，最后再用 2.0/2.5 出正式片头。
 4. **合成**：`compose_demo.py storyboard.json --dry-run` → `--preview` → 正式渲染 → `probe_media.py --brief final.mp4` 并抽帧检查字幕。
@@ -116,24 +126,19 @@ skills/
 ├── ark-still-image/       SKILL.md  scripts/generate_still.py references/prompting.md
 ├── demo-storyboard/       SKILL.md  scripts/storyboard_from_project.py  references/storyboard-schema.md  examples/*.json
 ├── product-demo-composer/ SKILL.md  scripts/compose_demo.py  scripts/probe_media.py
-└── focus-studio-mcp/      SKILL.md（只有说明，调用 Focus Studio 1.12 的 MCP 工具）
+├── focus-studio-mcp/      SKILL.md（录制与编辑工具约定）
+└── focus-demo-editing/    SKILL.md  agents/openai.yaml  references/editing-tools.md
 ```
 
 ---
 
 ## English summary
 
-Four Claude Code skills that turn a Focus Studio screen recording into an enterprise-grade product demo video with
-optional AI footage from Volcengine Ark: **ark-video-clip** (Seedance text/image-to-video with cost estimates, polling,
-download and a request-hash cache), **ark-still-image** (Seedream title cards, hero backgrounds, icons, screenshot
-restyling), **demo-storyboard** (project.json + product description → `storyboard.json` with chapters cut from the
-zoom timeline, captions, prompts, transitions, BGM), and **product-demo-composer** (ffmpeg: normalise to 1080p/4K,
-CJK captions via drawtext, xfade transitions, BGM ducking, render report; `--generate` fills missing AI assets,
-otherwise placeholders). A fifth skill, **focus-studio-mcp**, needs no key or script: it teaches Claude Code to
-drive Focus Studio 1.12+ through its MCP tools (`mcp__focus-studio__*`) - record with a duration and
-`wait_for_recording`, edit by `project_id`, export into the working directory, import screenshots and videos,
-manage projects - once Focus Studio is connected (Settings > AI tools > Connect). Install with `bash skills/install.sh` (symlinks into `~/.claude/skills/`) or run `claude`
-in this repo / `claude --add-dir <repo>`. The API key lives only in `~/.config/focus-studio/ark.env`; scripts never
-print it. Pricing: Seedance mini ≈ ¥0.023 per 1k tokens (480p·5 s ≈ ¥1.1), Seedream ≈ ¥0.2-0.3 per image. On
-2026-09-21 the API answered `404 ModelNotOpen` for every Seedance/Seedream model on this account - activate them in
-the Ark console before the first paid run; the composer was verified end-to-end with synthetic media at zero cost.
+Install into Codex (default), Claude Code (`--claude`), or both (`--all`) using `skills/install.sh`.
+`focus-demo-editing` runs the native record–analyze–cut–zoom–preview–export workflow through Focus Studio;
+`focus-studio-mcp` documents its recording and editing tools. The original take is retained and the edit is
+a separate project. Existing installed skills are backed up rather than deleted.
+
+The optional `demo-storyboard` and `product-demo-composer` skills assemble exported chapters with captions,
+title cards, transitions and audio. `ark-still-image` and `ark-video-clip` generate paid assets only when
+requested; these optional tools need an Ark key. Native demo editing does not.

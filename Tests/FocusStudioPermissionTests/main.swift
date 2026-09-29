@@ -8,6 +8,7 @@ private var failures: [String] = []
 failures.append(contentsOf: typingActivityCaptureFailures())
 failures.append(contentsOf: zoomMotionFailures())
 failures.append(contentsOf: cursorMotionFailures())
+failures.append(contentsOf: interactionTraceFailures())
 failures.append(contentsOf: zoomBoundaryFailures())
 failures.append(contentsOf: cursorStyleFailures())
 failures.append(contentsOf: chapterFailures())

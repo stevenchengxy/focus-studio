@@ -20,6 +20,9 @@ public struct AIAssistantMessage: Identifiable, Equatable, Codable, Sendable {
     public var text: String
     public var attachments: [URL]
     public var toolName: String?
+    /// A concise UI receipt. The full text remains available to the model and
+    /// in an expandable activity log; older saved conversations omit this key.
+    public var displayText: String?
     public var timestamp: Date
 
     init(
@@ -28,6 +31,7 @@ public struct AIAssistantMessage: Identifiable, Equatable, Codable, Sendable {
         text: String,
         attachments: [URL] = [],
         toolName: String? = nil,
+        displayText: String? = nil,
         timestamp: Date = Date()
     ) {
         self.id = id
@@ -35,14 +39,75 @@ public struct AIAssistantMessage: Identifiable, Equatable, Codable, Sendable {
         self.text = text
         self.attachments = attachments
         self.toolName = toolName
+        self.displayText = displayText
         self.timestamp = timestamp
     }
+}
+
+/// Created by the explicit Start demo button after an exact window is prepared.
+/// This value is never inferred from model output or restored from chat history.
+public struct AIDemoTaskRequest: Equatable, Sendable {
+    public enum Mode: String, Sendable { case interactive, manual }
+    public var sourceID: String
+    public var sourceTitle: String
+    public var instructions: String
+    public var maximumDuration: TimeInterval
+    public var maximumActions: Int
+    public var mode: Mode
+    public var allowsTextInput: Bool
+
+    public init(sourceID: String, sourceTitle: String, instructions: String,
+                maximumDuration: TimeInterval = 120, maximumActions: Int = 6, mode: Mode = .interactive, allowsTextInput: Bool = false) {
+        self.sourceID = sourceID
+        self.sourceTitle = sourceTitle
+        self.instructions = instructions
+        self.maximumDuration = maximumDuration
+        self.maximumActions = maximumActions
+        self.mode = mode
+        self.allowsTextInput = allowsTextInput
+    }
+}
+
+public struct AIDemoTaskProgress: Equatable, Sendable {
+    public enum Stage: String, Sendable {
+        case preparing, checking, starting, observing, thinking, acting, recording, reviewing, completed, cancelled, failed
+        public var isTerminal: Bool { [.completed, .cancelled, .failed].contains(self) }
+    }
+    public let id: UUID
+    public let sourceTitle: String
+    public let maximumActions: Int
+    public var stage: Stage
+    public var detail: String
+    public var completedActions: Int
+    public var recordingID: UUID?
+    public var projectID: UUID?
+    public var startedAt: Date?
+    public var lastActivityAt: Date?
 }
 
 /// Providers with hidden server-side context must discard it when the local
 /// conversation or selected provider changes. Stateless HTTP providers need no hook.
 public protocol AssistantConversationResetting: TextCompletionProviding {
     func resetConversation() async
+}
+
+/// Providers with remote threads may prepare the exact next conversation
+/// before screen capture starts. Preparation must not run a model turn.
+public protocol AssistantConversationPreparing: TextCompletionProviding {
+    func prepareConversation(system: String) async throws
+}
+
+/// A provider that can inspect explicit image attachments. Text-only providers
+/// never gain permission to act on coordinates from image paths alone.
+public protocol AssistantVisualCompletionProviding: TextCompletionProviding {
+    func complete(system: String, user: String, json: Bool, imageURLs: [URL]) async throws -> String
+}
+
+/// An explicitly live, observed interaction can use a provider's supported
+/// lower-latency reasoning mode without changing the chosen model or the
+/// effort used for planning, editing, or ordinary conversation.
+public protocol AssistantInteractiveCompletionProviding: AssistantVisualCompletionProviding {
+    func completeInteraction(system: String, user: String, json: Bool, imageURLs: [URL]) async throws -> String
 }
 
 /// Shown before a paid call runs. Prices are budgeting estimates in 人民币;

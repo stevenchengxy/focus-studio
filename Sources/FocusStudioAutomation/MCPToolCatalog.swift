@@ -16,7 +16,7 @@ public enum MCPToolScope: String, Sendable {
 }
 
 /// MCP tool annotations: hints a client uses to decide how carefully to
-/// treat a call. None of these tools reach outside the Mac.
+/// treat a call. Tracked input can affect the recorded website; openWorld discloses that.
 public struct MCPToolAnnotations: Equatable, Sendable {
     public var readOnly: Bool
     public var destructive: Bool
@@ -242,7 +242,7 @@ public struct MCPToolCatalog: Sendable {
         ),
         MCPToolSpec(
             tool: GetProjectTool(), title: "Get project",
-            description: "Describe one project without opening it: title, duration and source size; look, zoom style and audio settings under the argument names update_settings, set_zoom_style and set_sound_effects take; export_width and frame_rate (change them with update_settings' exportWidth and frameRate, or for one export with export_project's width and frame_rate); the zooms with their ids and numbers (the first 100 in time order, with zoom_count); the chapters (the first 50, with chapter_count; long text is shortened with …); and the recorded clicks and typing moments (at most 200 of each, spread evenly over the recording, with their totals), as times in seconds and positions from 0 to 1 measured from the top-left corner of the recording. Use it to plan zooms and chapters.",
+            description: "Describe one project without opening it: title, duration and source size; look, zoom style and audio settings under the argument names update_settings, set_zoom_style and set_sound_effects take; export_width and frame_rate (change them with update_settings' exportWidth and frameRate, or for one export with export_project's width and frame_rate); the zooms with their ids and numbers (the first 80 in time order, with zoom_count); the chapters (the first 50, with chapter_count; long text is shortened with …); and the recorded clicks and typing moments (at most 200 of each, spread evenly over the recording, with their totals), as times in seconds and positions from 0 to 1 measured from the top-left corner of the recording. Use it to plan zooms and chapters.",
             scope: .projectReadOnly, annotations: .reads
         ),
         MCPToolSpec(
@@ -277,12 +277,27 @@ public struct MCPToolCatalog: Sendable {
         ),
         MCPToolSpec(
             tool: StartRecordingTool(), title: "Start recording",
-            description: "Start recording a display or window. The person sees a 3-second countdown, which names you, in a floating control bar (Pause, Finish, Cancel) that stays for the whole recording, and may pause, resume or cancel at any time. The call returns as soon as the recording is live: state \"recording\" with started_at. Meanwhile, let the person perform the demo, or operate the recorded app yourself with your own tools (computer use, browser automation); then call wait_for_recording, or stop_recording to stop at once. The control bar floats above every app at the bottom centre of each display, just above the Dock (about 324 to 392 x 46 points while recording; the person can expand it to about 760 x 116), and is not in the video: mouse clicks there land on the bar, and its x discards the recording (it moves to the Trash). When you click the recorded app yourself, keep its controls out of that area (move or resize its window, or scroll), and stop with stop_recording, never with the bar's buttons. With duration, Focus Studio stops by itself once that many seconds are recorded (auto_stop_at); time the person spends paused is not recorded and does not count, so a pause moves the stop later. Capture settings given here apply to this recording only. Sound: when microphone or system_audio turns on sound that the person's own recorder settings leave off, Focus Studio asks the person before the countdown (every time, never remembered). They may allow it for this recording, record without sound (the recording then has no sound at all; audio_consent and options in the result say so), or cancel, and no answer within 60 seconds also cancels: then nothing records and the call returns isError. Recordings that add no sound start without asking. Microphone: macOS must also allow Focus Studio to use it. If macOS has never asked, it asks the person before the countdown (no answer to it within 60 seconds cancels too). If that access is off (System Settings › Privacy & Security › Microphone), nothing records and the call returns isError with status \"microphone_unavailable\": to record without the microphone, call again with microphone false. Clicks and typing sent over a browser's DevTools protocol (Playwright, Chrome automation) are not real mouse or key events and make no automatic zooms: add zooms afterwards with add_zoom.",
+            description: "Start recording a display or window. The person sees a 3-second countdown, which names you, in a floating control bar (Pause, Finish, Cancel) that stays for the whole recording, and may pause, resume or cancel at any time. The call returns as soon as the recording is live: state \"recording\" with started_at. Meanwhile, let the person perform the demo, or operate the recorded app yourself with your own tools (computer use, browser automation); then call wait_for_recording, or stop_recording to stop at once. The control bar floats above every app at the bottom centre of each display, just above the Dock (about 324 to 392 x 46 points while recording; the person can expand it to about 760 x 116), and is not in the video: mouse clicks there land on the bar, and its x discards the recording (it moves to the Trash). When you click the recorded app yourself, keep its controls out of that area (move or resize its window, or scroll), and stop with stop_recording, never with the bar's buttons. With duration, Focus Studio stops by itself once that many seconds are recorded (auto_stop_at); time the person spends paused is not recorded and does not count, so a pause moves the stop later. Capture settings given here apply to this recording only. Sound: when microphone or system_audio turns on sound that the person's own recorder settings leave off, Focus Studio asks the person before the countdown (every time, never remembered). They may allow it for this recording, record without sound (the recording then has no sound at all; audio_consent and options in the result say so), or cancel, and no answer within 60 seconds also cancels: then nothing records and the call returns isError. Recordings that add no sound start without asking. Microphone: macOS must also allow Focus Studio to use it. If macOS has never asked, it asks the person before the countdown (no answer to it within 60 seconds cancels too). If that access is off (System Settings › Privacy & Security › Microphone), nothing records and the call returns isError with status \"microphone_unavailable\": to record without the microphone, call again with microphone false. For automated pointer demos, set interaction_mode codex, then capture_recording_frame and perform_recording_action for each observed action. This records a synchronized cursor path and click zooms without depending on the physical pointer. Clicks and typing sent independently over a browser's DevTools protocol (Playwright, Chrome automation) are not intercepted; unreported actions still need add_zoom afterwards.",
             scope: .global, annotations: MCPToolAnnotations(readOnly: false),
             propertyDescriptions: [
                 "system_audio": "Capture the Mac's audio output in this recording. If the person's recorder settings leave it off, Focus Studio asks the person first.",
                 "microphone": "Capture the microphone in this recording. If the person's recorder settings leave it off, Focus Studio asks the person first; macOS must also allow Focus Studio to use the microphone.",
             ]
+        ),
+        MCPToolSpec(
+            tool: CaptureRecordingFrameTool(), title: "Observe recording window",
+            description: "Capture a fresh image of the current uncropped recorded window and return its recording_id, observation_id and pixel dimensions. Requires a live unpaused recording with interaction_mode codex. Use this image to choose normalized x/y before every perform_recording_action or perform_recording_text. The single-use observation expires after 60 seconds, a window move/resize, or an action. The image excludes Focus Studio recording controls.",
+            scope: .global, annotations: MCPToolAnnotations(readOnly: false), returnsImage: true, detaches: false
+        ),
+        MCPToolSpec(
+            tool: PerformRecordingActionTool(), title: "Perform tracked recording action",
+            description: "Execute an observed move, click or scroll in the live recorded window and record the dispatched path for cursor animation, click highlights and automatic zooms. Requires start_recording interaction_mode codex, its recording_id, a fresh single-use observation_id from capture_recording_frame, and a unique action_id. Coordinates are normalized to the full uncropped source image from its top-left. Refuses stale, moved, obscured, paused or stopped targets. Never guess a control or click outside the user's authorized demo. Clicks can affect the recorded website, including submitting forms: use only actions the user requested. Reusing action_id returns its receipt and never repeats input. Manual recordings keep system event tracking. Arbitrary browser or accessibility actions outside this tool are not intercepted.",
+            scope: .global, annotations: MCPToolAnnotations(readOnly: false, destructive: true, idempotent: true, openWorld: true), detaches: false
+        ),
+        MCPToolSpec(
+            tool: PerformRecordingTextTool(), title: "Type observed demo text",
+            description: "Type a single line of user-authorized demo text into the focused editable field inside the recorded webpage. First focus that field with perform_recording_action, then inspect a fresh capture_recording_frame. Requires the live codex recording_id, a fresh single-use observation_id and a unique action_id. Refuses password fields, browser chrome, missing focus and stale or changed windows. Up to 1000 characters; control characters and newlines are rejected. Does not press Enter or submit. Reusing action_id returns its receipt without typing twice. Text may affect the website through autosave; only enter content authorized by the user.",
+            scope: .global, annotations: MCPToolAnnotations(readOnly: false, destructive: true, idempotent: true, openWorld: true), detaches: false
         ),
         MCPToolSpec(
             tool: StopRecordingTool(), title: "Stop recording",
@@ -296,6 +311,103 @@ public struct MCPToolCatalog: Sendable {
             scope: .global, annotations: .reads, detaches: false
         ),
         // Editing a project (opened in the editor first).
+        MCPToolSpec(
+            tool: AnalyzeDemoPacingTool(), title: "Analyze demo pacing",
+            description: "Suggest source-time keep ranges and candidate waits from the project's recorded actions. This does not change the project or detect visual inactivity: inspect frames around proposed cuts and preserve page loading, generated answers, reading time and audio. Returns keep_ranges for create_demo_cut. Without usable actions there is no automatic cut proposal.",
+            scope: .projectReadOnly, annotations: .reads
+        ),
+        MCPToolSpec(
+            tool: CreateDemoCutTool(), title: "Create edited demo copy",
+            description: "Create and open a new editable project from ordered source-time keep_ranges. The original project and recording are preserved. The source video, recorded cursor/actions, typing, zooms and chapters are cut and remapped together; appearance and media are copied. Use analyze_demo_pacing and inspect frames before selecting ranges. Afterward use the returned new project_id and its new timeline for all edits, previews and export.",
+            scope: .project, annotations: MCPToolAnnotations(readOnly: false)
+        ),
+        MCPToolSpec(
+            tool: GetTimelineTool(), title: "Read video timeline",
+            description: "Read every clip in the project's video track with stable clip IDs, ordered zero-based indices, source in/out points, output timeline positions, source-audio gain and outgoing transitions. This does not edit or open the project. Use its IDs and current times before split, trim, delete, reorder, transition or clip-audio calls.",
+            scope: .projectReadOnly, annotations: .reads
+        ),
+        MCPToolSpec(
+            tool: ListMediaAssetsTool(), title: "List editor media assets",
+            description: "List the reusable image and video assets imported into this project's editor media library, with stable asset IDs, source paths, dimensions and durations. These are available to drag onto the timeline or to insert_media_asset. Does not open or change the project.",
+            scope: .projectReadOnly, annotations: .reads
+        ),
+        MCPToolSpec(
+            tool: ListGlobalMediaAssetsTool(), title: "List shared media assets",
+            description: "List reusable images and videos in the app-wide shared media library. These do not belong to any project until explicitly copied with add_global_media_to_project.",
+            scope: .global, annotations: .reads
+        ),
+        MCPToolSpec(
+            tool: ImportGlobalMediaAssetTool(), title: "Import shared media asset",
+            description: "Copy a local image or video into Focus Studio's app-wide shared library. No project or timeline changes. Use the returned global asset ID to add it to a project later.",
+            scope: .global, annotations: MCPToolAnnotations(readOnly: false),
+            propertyDescriptions: ["path": "Absolute local image/video path, or relative to your working directory."]
+        ),
+        MCPToolSpec(
+            tool: AddGlobalMediaToProjectTool(), title: "Add shared media to project",
+            description: "Copy a shared asset into this project's private media library. The first project edit may create a working copy; use its returned project_id and local asset_id. Does not insert a timeline clip.",
+            scope: .project, annotations: MCPToolAnnotations(readOnly: false)
+        ),
+        MCPToolSpec(
+            tool: ImportMediaAssetTool(), title: "Import editor media asset",
+            description: "Copy a local image or video into the current project's reusable media library without placing it on the timeline. A first media edit may create and open a working copy; use the returned project_id and asset_id for subsequent insertion. The original file remains untouched.",
+            scope: .project, annotations: MCPToolAnnotations(readOnly: false),
+            propertyDescriptions: ["path": "Absolute local image/video path, or relative to your working directory."]
+        ),
+        MCPToolSpec(
+            tool: InsertMediaAssetTool(), title: "Insert editor media asset",
+            description: "Insert a previously imported image or video at a zero-based clip position. Images default to three seconds; videos default to their full duration. The asset remains reusable. The edit is reversible with undo_clip_edit and can be reapplied with redo_clip_edit.",
+            scope: .project, annotations: MCPToolAnnotations(readOnly: false)
+        ),
+        MCPToolSpec(
+            tool: SplitClipTool(), title: "Split a video clip",
+            description: "Split a clip at an absolute output-timeline time strictly inside that clip. The first video-track edit creates a separate editable copy and preserves the original recording; use the returned project_id and new clip IDs for subsequent edits. The video, associated source sound and interaction overlays stay synchronized.",
+            scope: .project, annotations: MCPToolAnnotations(readOnly: false)
+        ),
+        MCPToolSpec(
+            tool: TrimClipTool(), title: "Trim clip in/out points",
+            description: "Adjust one clip's source in/out points in seconds, using its stable clip_id from get_timeline. Later output times are recalculated. The first video-track edit makes an editable copy; use the returned project_id thereafter. Original media remains in the library, and invalid ranges are refused without changing the track.",
+            scope: .project, annotations: MCPToolAnnotations(readOnly: false, idempotent: true)
+        ),
+        MCPToolSpec(
+            tool: DeleteClipTool(), title: "Remove a video clip",
+            description: "Remove one clip by stable clip_id from the editable video track, recalculating output timing and associated audio/overlays. It does not trash the source project or original media. The first video-track edit creates a separate working copy; use its returned project_id for later calls.",
+            scope: .project, annotations: MCPToolAnnotations(readOnly: false, destructive: true)
+        ),
+        MCPToolSpec(
+            tool: MoveClipTool(), title: "Reorder a video clip",
+            description: "Move one clip to a zero-based destination index in the project's video track. The output timeline and associated audio/interaction timing follow the new order; stable IDs remain the same. Read get_timeline again after reordering. The first edit creates a separate editable copy.",
+            scope: .project, annotations: MCPToolAnnotations(readOnly: false, idempotent: true)
+        ),
+        MCPToolSpec(
+            tool: SetTransitionTool(), title: "Set clip transition",
+            description: "Set the rendered effect after a clip by stable clip_id: cut (0 seconds), fadeToBlack or flash (0.1–2 seconds). The final clip has no outgoing transition. This affects both preview and MP4 export; get_timeline reports the current preset and duration. The first edit creates a separate editable copy.",
+            scope: .project, annotations: MCPToolAnnotations(readOnly: false, idempotent: true)
+        ),
+        MCPToolSpec(
+            tool: SetClipAudioTool(), title: "Set clip source-audio gain",
+            description: "Set the source-audio gain for one clip by stable clip_id: 0 mutes, 1 keeps the original level, 2 gives 200% gain. Preview and export apply it only to that clip. Background music and click/zoom sounds are separate project controls. The first edit creates an editable copy.",
+            scope: .project, annotations: MCPToolAnnotations(readOnly: false, idempotent: true)
+        ),
+        MCPToolSpec(
+            tool: SetImageDurationTool(), title: "Set still-image clip duration",
+            description: "Set the visible duration of an imported still-image clip in seconds by its stable clip_id from get_timeline. Later clip times are recalculated, and the reusable source image stays in the project's media library. Invalid durations or video clip IDs are refused without changing the timeline.",
+            scope: .project, annotations: MCPToolAnnotations(readOnly: false, idempotent: true)
+        ),
+        MCPToolSpec(
+            tool: UndoClipEditTool(), title: "Undo last video edit",
+            description: "Undo the most recent editor change in the currently open working project, including clip placement, zoom, chapter or project-setting changes. Call repeatedly to walk its finite undo history; no source recording is removed. The undo stack is in memory and may be unavailable after an app restart. Returns the current project_id and complete video timeline.",
+            scope: .project, annotations: MCPToolAnnotations(readOnly: false)
+        ),
+        MCPToolSpec(
+            tool: RedoClipEditTool(), title: "Redo last video edit",
+            description: "Reapply the most recently undone editor change in the open working project, including video clips, zooms and project settings. A new edit clears redo history. Returns the updated complete timeline.",
+            scope: .project, annotations: MCPToolAnnotations(readOnly: false)
+        ),
+        MCPToolSpec(
+            tool: UpdateZoomTool(), title: "Adjust one zoom",
+            description: "Adjust one zoom by its stable zoom_id from get_project or add_zoom: change start/end seconds, target, scale, easing or enabled state without replacing its ID or other zooms. The edited zoom becomes manual so later automatic regeneration preserves this decision. Use the current project's timeline, especially after create_demo_cut, and preview both ends of the adjusted zoom.",
+            scope: .project, annotations: MCPToolAnnotations(readOnly: false, idempotent: true)
+        ),
         MCPToolSpec(
             tool: AddZoomTool(), title: "Add zoom",
             description: "Add a manual zoom to a project: from start to end (seconds into the recording) the camera moves to (x, y), each from 0 to 1 measured from the top-left corner of the recording, magnified by scale (default: the project's zoom scale). Existing zooms stay. Returns the zoom's id and number. Focus Studio opens the project in its editor, so the person sees the change.",
@@ -313,7 +425,7 @@ public struct MCPToolCatalog: Sendable {
         ),
         MCPToolSpec(
             tool: UpdateSettingsTool(), title: "Update settings",
-            description: "Change how a project looks and exports: background (style, preset, colours, image, blur, brightness), padding, corner radius, shadow, screen animation, zoom scale, aspect ratio, motion blur, caption style, the product description, and the export width and frame rate saved with the project. Only the given keys change; numbers out of range are clamped and reported. Focus Studio opens the project in its editor.",
+            description: "Change how a project looks and exports: background (style, preset, colours, image, blur, brightness), padding, corner radius, shadow, screen animation, zoom scale and cursor following, aspect ratio, motion blur, caption style, the product description, and export width/frame rate. zoomFollowsCursor 0 holds authored camera targets for reading; 1 fully follows the cursor. Only supplied keys change; numbers out of range are clamped and reported. Focus Studio opens the project in its editor.",
             scope: .project, annotations: MCPToolAnnotations(readOnly: false, destructive: true, idempotent: true),
             propertyDescriptions: ["backgroundImagePath": "An image file: an absolute path, or relative to your working directory."]
         ),
@@ -388,18 +500,19 @@ public struct MCPToolCatalog: Sendable {
     /// with the rule about project.json in the first paragraph: Claude Code
     /// cuts server instructions at 2,048.
     public static let instructions = """
-    Focus Studio is a macOS app that records the screen and turns the recording into a polished product-demo video (automatic zooms, styled background, chapter captions, music, MP4 export). These tools operate the Focus Studio app on this Mac while a person watches. Only Focus Studio writes its library: never edit a project's files (project.json) directly.
+    Focus Studio records and edits demos. Only Focus Studio writes its library: never edit project.json directly.
 
-    Workflow: get_status (permissions, music) → list_recording_sources → start_recording (a 3-second countdown, then a control bar to pause, finish or cancel; returns once recording) → the person performs the demo, or you operate the app with your own tools → wait_for_recording, or stop_recording to stop now (both return the new project_id) → edit by project_id: get_project, add_zoom, set_chapters, update_settings… → capture_frame to check the look → export_project. import_video and create_screenshot_demo start from files.
+    Record: get_status → list_recording_sources → start_recording (bounded duration, countdown and control bar) → demo → stop_recording. wait_for_recording waits for a manual take. For Codex use interaction_mode codex; call capture_recording_frame before each perform_recording_action or perform_recording_text. observation_id is single-use; x/y use the full image. Text needs a focused webpage field and never presses Enter. Actions from your own tools are not intercepted.
+
+    Edit: get_timeline → split_clip/trim_clip/delete_clip/move_clip. Media: list_global_media_assets or import_global_media_asset → add_global_media_to_project → insert_media_asset (use the returned local ID). import_media_asset imports directly to a project. Adjust transitions, audio and zooms; preview with capture_frame, export_project. First edit creates a copy: use its project_id. Undo/redo with undo_clip_edit/redo_clip_edit. Preserve answers and speech. import_video creates a project from a file.
 
     Conventions:
-    - Times and durations are seconds within the recording.
-    - Positions x and y run from 0 to 1 from the recording's top-left corner.
-    - Paths are absolute or relative to your working directory. An existing file is replaced only with overwrite: true; a project's own recording is never written.
-    - Tools that edit or render a project open it in the editor first (saving any other), so the person sees each change (not get_project, list_assets or assemble_video); they are refused while recording or while the app or its in-app assistant is busy.
-    - Calls that change what Focus Studio shows run one at a time.
+    - Times are seconds in the recording.
+    - x/y run 0–1 from the recording's top-left corner.
+    - Paths are absolute or relative to your working directory. overwrite: true replaces files; never write a project's recording.
+    - Editing/rendering opens the project and runs serially; refused while recording or the app or in-app assistant is busy. get_project, list_assets and assemble_video leave the editor unchanged.
     - Sound the person's recorder leaves off (microphone, system_audio) records only if they allow it when Focus Studio asks.
-    - Clicks and typing sent over a browser's DevTools protocol (Playwright, Chrome automation) make no automatic zooms; use add_zoom.
-    - A call still running about 200 s after reaching Focus Studio (a long export, an unanswered prompt) answers status "running" with a job_id: call wait_for_job. Status "waiting_for_approval" or "waiting_for_turn": it did not run; call it again.
+    - Clicks and typing sent independently over DevTools are untracked; add_zoom adds camera cues but cannot recover a cursor path.
+    - After about 200 s a long call returns status "running" and job_id: call wait_for_job. "waiting_for_approval" or "waiting_for_turn" means it did not run; call it again.
     """
 }

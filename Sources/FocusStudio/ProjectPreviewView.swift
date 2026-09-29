@@ -7,7 +7,10 @@ struct ProjectPreviewView: View {
     let project: RecordingProject
     @Binding var currentTime: Double
     @Binding var isPlaying: Bool
+    var seekRevision: Int
     @Binding var renderError: String?
+    @State private var isSeeking = false
+    @State private var seekGeneration = 0
 
     @State private var player = AVPlayer()
     @State private var isLoading = true
@@ -21,12 +24,17 @@ struct ProjectPreviewView: View {
             PlayerView(player: player)
 
             if isLoading {
-                VStack(spacing: 10) {
-                    ProgressView()
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
                     Text("Rendering preview…")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(StudioTheme.secondaryText)
                 }
+                .padding(10)
+                .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .frame(maxWidth: .infinity, maxHeight: .infinity,
+                       alignment: player.currentItem == nil ? .center : .topTrailing)
+                .padding(12)
             }
 
             if let renderError {
@@ -49,10 +57,12 @@ struct ProjectPreviewView: View {
             RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .stroke(Color.white.opacity(0.09), lineWidth: 1)
         )
-        .task(id: project) {
+        // A name change or a media-library import does not alter visible
+        // frames. Rebuilding the AV composition for either makes the editor
+        // appear to pause while the person is still arranging their project.
+        .task(id: renderKey) {
             let generation = UUID()
             renderGeneration = generation
-            let desiredTime = currentTime
             isLoading = true
             renderError = nil
             do {
@@ -64,7 +74,15 @@ struct ProjectPreviewView: View {
                 let item = try await ProjectVideoRenderer.makePlayerItem(project: project)
                 guard !Task.isCancelled, isVisible, renderGeneration == generation else { return }
                 player.replaceCurrentItem(with: item)
-                await player.seek(to: CMTime(seconds: desiredTime, preferredTimescale: 600))
+                // A composition rebuild follows every clip/audio/transition
+                // edit. The default seek tolerance can land on a nearby key
+                // frame and silently move the editor playhead by ~0.2 s.
+                // Keep the requested output-frame position across rebuilds.
+                await player.seek(
+                    to: CMTime(seconds: currentTime, preferredTimescale: 60_000),
+                    toleranceBefore: .zero,
+                    toleranceAfter: .zero
+                )
                 guard !Task.isCancelled, isVisible, renderGeneration == generation else { return }
                 if isPlaying { player.play() }
             } catch is CancellationError {
@@ -89,24 +107,26 @@ struct ProjectPreviewView: View {
         .onChange(of: isPlaying) { _, playing in
             guard isVisible else { return }
             if playing {
-                if currentTime >= max(0, project.duration - 0.04) {
-                    player.seek(to: .zero)
-                }
                 player.play()
             } else {
                 player.pause()
             }
         }
-        .onChange(of: currentTime) { oldValue, newValue in
+        .onChange(of: seekRevision) { _, _ in
             guard isVisible else { return }
-            guard abs(oldValue - newValue) > 0.08 else { return }
-            let actual = player.currentTime().seconds
-            guard !actual.isFinite || abs(actual - newValue) > 0.12 else { return }
+            seekGeneration += 1
+            let generation = seekGeneration
+            isSeeking = true
             player.seek(
-                to: CMTime(seconds: newValue, preferredTimescale: 600),
+                to: CMTime(seconds: currentTime, preferredTimescale: 60000),
                 toleranceBefore: .zero,
                 toleranceAfter: .zero
-            )
+            ) { _ in
+                Task { @MainActor in
+                    guard generation == seekGeneration else { return }
+                    isSeeking = false
+                }
+            }
         }
     }
 
@@ -123,13 +143,31 @@ struct ProjectPreviewView: View {
         return crop.width / max(1, crop.height)
     }
 
+    private var renderKey: RenderKey {
+        let referencedIDs = Set((project.videoClips ?? []).compactMap(\.mediaAssetID))
+        return RenderKey(
+            id: project.id,
+            sourceVideoPath: project.sourceVideoPath,
+            duration: project.duration,
+            sourceWidth: project.sourceWidth,
+            sourceHeight: project.sourceHeight,
+            videoClips: project.videoClips,
+            videoTransitions: project.videoTransitions,
+            mediaAssets: project.mediaAssets?.filter { referencedIDs.contains($0.id) } ?? [],
+            editCutTimes: project.editCutTimes,
+            zoomSegments: project.zoomSegments,
+            chapters: project.chapters,
+            settings: project.settings
+        )
+    }
+
     private func installTimeObserver() {
         guard observerToken == nil else { return }
         observerToken = player.addPeriodicTimeObserver(
             forInterval: CMTime(value: 1, timescale: 30),
             queue: .main
         ) { time in
-            guard isVisible else { return }
+            guard isVisible, !isSeeking, !isLoading else { return }
             let seconds = time.seconds
             guard seconds.isFinite else { return }
             currentTime = seconds.clamped(to: 0...max(project.duration, 0.001))
@@ -145,6 +183,21 @@ struct ProjectPreviewView: View {
             self.observerToken = nil
         }
     }
+}
+
+private struct RenderKey: Hashable {
+    let id: UUID
+    let sourceVideoPath: String
+    let duration: Double
+    let sourceWidth: Int
+    let sourceHeight: Int
+    let videoClips: [DemoVideoClip]?
+    let videoTransitions: [DemoVideoTransition]?
+    let mediaAssets: [DemoMediaAsset]
+    let editCutTimes: [Double]?
+    let zoomSegments: [ZoomSegment]
+    let chapters: [DemoChapter]?
+    let settings: ProjectSettings
 }
 
 private struct PlayerView: NSViewRepresentable {

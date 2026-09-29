@@ -180,7 +180,21 @@ struct ToolbarSnapshotTests {
                 project: binding,
                 selectedZoomID: .constant(nil),
                 selectedChapterID: .constant(nil),
-                tool: .cursor
+                selectedClipID: .constant(nil),
+                currentTime: .constant(0),
+                tool: .cursor,
+                isVideoEditing: false,
+                canUndoVideoEdit: false,
+                canRedoVideoEdit: false,
+                onVideoEdit: { _ in },
+                onUndoVideoEdit: {},
+                onRedoVideoEdit: {},
+                onImportMedia: {},
+                onCreateMediaWithAI: {},
+                onInsertMedia: { _ in },
+                onImportSharedMedia: { _ in },
+                onSaveMediaToShared: { _ in },
+                isImportingMedia: false
             )
             .environmentObject(model)
             .preferredColorScheme(.dark)
@@ -213,7 +227,21 @@ struct ToolbarSnapshotTests {
                 project: binding,
                 selectedZoomID: .constant(nil),
                 selectedChapterID: .constant(nil),
-                tool: .design
+                selectedClipID: .constant(nil),
+                currentTime: .constant(0),
+                tool: .design,
+                isVideoEditing: false,
+                canUndoVideoEdit: false,
+                canRedoVideoEdit: false,
+                onVideoEdit: { _ in },
+                onUndoVideoEdit: {},
+                onRedoVideoEdit: {},
+                onImportMedia: {},
+                onCreateMediaWithAI: {},
+                onInsertMedia: { _ in },
+                onImportSharedMedia: { _ in },
+                onSaveMediaToShared: { _ in },
+                isImportingMedia: false
             )
             .environmentObject(model)
             .preferredColorScheme(.dark)
