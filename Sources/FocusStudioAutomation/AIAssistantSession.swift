@@ -243,6 +243,8 @@ public final class AIAssistantSession: ObservableObject {
         var startArguments: [String: Any]?
         var startedUptime: TimeInterval?
         var lastActionUptime: TimeInterval?
+        var lastClickUptime: TimeInterval?
+        var postClickCheckpoint = 0
     }
     private var demoScope: DemoScope?
     private var completedDemoScope: DemoScope?
@@ -255,6 +257,9 @@ public final class AIAssistantSession: ObservableObject {
         var readiness: TimeInterval = 45
         var idle: TimeInterval = 45
         var poll: TimeInterval = 0.2
+        /// A click may navigate to a page that is still loading in the first
+        /// frame. Observe it again before allowing the task to finish.
+        var postClickCheckpoints: [TimeInterval] = [2, 5, 10]
     }
     var demoTiming = DemoTiming()
 
@@ -911,6 +916,54 @@ public final class AIAssistantSession: ObservableObject {
         return AIToolSupport.finishedRecording(summary, isOpen: app.openProjectID == projectID)
     }
 
+    /// The first frame after a click can still show the old page or a loading
+    /// shell. Before a model reply or stop closes the take, provide later live
+    /// frames on separate turns so it can judge the destination itself. The
+    /// recording's existing duration watchdog also bounds every wait here.
+    private func observePostClickBeforeFinishing(generation: UUID) async throws -> Bool {
+        guard let scope = demoScope, let clickedAt = scope.lastClickUptime,
+              scope.postClickCheckpoint < demoTiming.postClickCheckpoints.count,
+              let recordingID = scope.recordingID else { return false }
+        let checkpoint = scope.postClickCheckpoint
+        let seconds = demoTiming.postClickCheckpoints[checkpoint]
+        setDemoStage(.observing, demoText("Checking the page after the click…", "正在检查点击后的页面…"))
+        setStatus(demoText("Checking the page after the click…", "正在检查点击后的页面…"))
+        let delay = clickedAt + seconds - ProcessInfo.processInfo.systemUptime
+        if delay > 0 { try await Task.sleep(for: .seconds(delay)) }
+        try Task.checkCancellation()
+        guard turnGeneration == generation, let current = demoScope,
+              current.recordingID == recordingID,
+              let live = context.app?.recordingSession, live.id == recordingID,
+              live.sourceID == current.request.sourceID else { return false }
+        if live.outcome != nil {
+            // The recorder can reach its own duration limit just before the
+            // session watchdog. Close the scope from that factual outcome;
+            // a stale model stop must not turn a saved take into an error.
+            await finishDemoTask(failure: demoFailure, generation: generation)
+            return true
+        }
+        let frame: AIToolResult
+        do {
+            frame = try await CaptureRecordingFrameTool().run(arguments: ["recording_id": recordingID.uuidString], context: context, progress: { _ in })
+        } catch {
+            if turnGeneration == generation, let ended = context.app?.recordingSession,
+               ended.id == recordingID, ended.outcome != nil {
+                await finishDemoTask(failure: demoFailure, generation: generation)
+                return true
+            }
+            throw error
+        }
+        guard turnGeneration == generation else { return false }
+        try Task.checkCancellation()
+        let note = "Post-click observation \(checkpoint + 1) of \(demoTiming.postClickCheckpoints.count), at least \(seconds) seconds after the action. Inspect this page state before deciding whether the destination loaded. A recording action receipt alone does not establish that."
+        messages.append(AIAssistantMessage(role: .tool, text: Self.modelReceipt(frame) + "\n" + note,
+                                           attachments: frame.attachments, toolName: "capture_recording_frame",
+                                           displayText: receiptText(for: "capture_recording_frame", result: frame)))
+        demoScope?.postClickCheckpoint = checkpoint + 1
+        persistHistory(interrupted: true)
+        return true
+    }
+
     // MARK: - Agent loop
 
     private func runTurn(completion: any TextCompletionProviding) async {
@@ -955,7 +1008,33 @@ public final class AIAssistantSession: ObservableObject {
             if Task.isCancelled { appendStopped(); return }
             clearStatus()
 
-            switch AIAssistantProtocol.parse(raw) {
+            let response = AIAssistantProtocol.parse(raw)
+            if let scope = demoScope, scope.request.mode == .interactive {
+                let wantsToFinish: Bool
+                switch response {
+                case .reply, .recordingPlan, .action(tool: "stop_recording", arguments: _, thought: _): wantsToFinish = true
+                case let .action(tool, _, _) where Self.interactionTools.contains(tool) && scope.actionAttempts >= scope.request.maximumActions:
+                    wantsToFinish = true
+                default: wantsToFinish = false
+                }
+                if wantsToFinish {
+                    do {
+                        if try await observePostClickBeforeFinishing(generation: generation) { continue }
+                    } catch is CancellationError {
+                        guard turnGeneration == generation else { return }
+                        appendStopped()
+                        return
+                    } catch {
+                        guard turnGeneration == generation else { return }
+                        demoFailure = error.localizedDescription
+                        messages.append(AIAssistantMessage(role: .error, text: error.localizedDescription, toolName: "capture_recording_frame"))
+                        return
+                    }
+                    guard turnGeneration == generation, !Task.isCancelled else { return }
+                }
+            }
+
+            switch response {
             case let .recordingPlan(plan, reply):
                 if demoScope != nil {
                     messages.append(AIAssistantMessage(role: .error, text: "This demo is already recording. Use its fresh observations instead of drafting another plan."))
@@ -1129,7 +1208,12 @@ public final class AIAssistantSession: ObservableObject {
                         }
                         demoTask?.completedActions += 1
                         demoTask?.lastActivityAt = Date()
-                        demoScope?.lastActionUptime = ProcessInfo.processInfo.systemUptime
+                        let actionUptime = ProcessInfo.processInfo.systemUptime
+                        demoScope?.lastActionUptime = actionUptime
+                        if tool.name == "perform_recording_action", AIToolArguments(effectiveArguments).string("action") == "click" {
+                            demoScope?.lastClickUptime = actionUptime
+                            demoScope?.postClickCheckpoint = 0
+                        }
                     }
                     if tool.name == "stop_recording", demoScope != nil {
                         await finishDemoTask(failure: demoFailure, generation: generation)
@@ -1331,7 +1415,7 @@ public final class AIAssistantSession: ObservableObject {
         - This is a conversation, not a plan generator: answer ordinary questions directly. Discuss and refine product-demo ideas across messages. Never open a URL, take a screenshot, start recording, or operate the computer just to answer or draft a plan.
         - When asked to plan or discuss a demo, answer in an ordinary reply with a concise proposed walkthrough. Do not open pages or start capture for a planning request. When the user then asks to execute, use run_demo_task; do not return a recordingPlan object or refer to a separate Run recording plan button.
         - When explicitly asked to execute an interactive demo, first use prepare_demo_page for a supplied website URL (or list_recording_sources for a specified existing window), then run_demo_task with its exact source_id and the user's goal. This presents ONE task review before any capture, checks the page and model, and owns recording until it saves or fails. Never use raw start_recording or leave a recording running after replying. Never return only a static recordingPlan when the user asks you to execute a demo. Plans remain discussion-only.
-        - During an approved active demo, inspect the latest attached live screenshot and use perform_recording_action with its recording_id and observation_id. Coordinates are normalized to the full uncropped screenshot, including the browser toolbar. The app automatically captures a NEW frame after each successful pointer or text action; inspect that attached frame and choose the next action directly. Request capture_recording_frame yourself only when waiting for a later page state or when no fresh frame is attached. Preflight screenshots are readiness evidence only. Never guess targets. Stop if the target is obscured, unavailable, changed or uncertain.
+        - During an approved active demo, inspect the latest attached live screenshot and use perform_recording_action with its recording_id and observation_id. Coordinates are normalized to the full uncropped screenshot, including the browser toolbar. The app automatically captures a NEW frame after each successful pointer or text action; inspect that attached frame and choose the next action directly. Before finishing after a click, the app supplies later post-click observations. Inspect each one. If the destination still shows a loading shell or spinner, wait and capture another frame within the remaining time; do not claim the destination loaded from a click receipt. Request capture_recording_frame yourself only when waiting for a later page state or when no fresh frame is attached. Preflight screenshots are readiness evidence only. Never guess targets. Stop if the target is obscured, unavailable, changed or uncertain.
         - Text input is unavailable unless the reviewed task explicitly includes allow_text_input=true. Request that capability only when the user's goal needs a short non-sensitive AI/search example. After observing and focusing the actual page text field, capture a new frame and use perform_recording_text. Never credentials, payment/account data, address bars or implicit submission. A separate visible Send/Search click is allowed only when the user explicitly asked to demonstrate that submission to this product; never send messages to other people, buy, delete, or change accounts.
         - Current image capability: \(canInspectImages ? "Images attached to this turn can be inspected. Only the latest capture_recording_frame is a live coordinate reference; user uploads and project capture_frame images are not." : "This model cannot inspect image attachments. Do not call perform_recording_action. Select Codex for visual control, or record the user's manual interactions.")
         - Preparing a requested URL opens its visible browser window but never records. run_demo_task requires one exact-window task approval with an expiry; nothing records while awaiting it. During that task, only its bounded scoped actions are approved, so do not ask again for routine actions or stop. Paid generation and external output files are not included. Tool receipts are authoritative: never repeat an already attempted action in the same request, including after Retry. If an outcome is unknown, stop and explain it.

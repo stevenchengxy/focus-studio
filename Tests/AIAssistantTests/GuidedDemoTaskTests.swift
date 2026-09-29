@@ -83,6 +83,13 @@ extension AIAssistantTests {
         func pointer(_ app: FakeApp, _ number: Int, recordingID: UUID? = nil) -> String {
             action("perform_recording_action", "{\"recording_id\":\"\((recordingID ?? app.recordingSession!.id).uuidString)\",\"observation_id\":\"\(UUID().uuidString)\",\"action_id\":\"step-\(number)\",\"action\":\"click\",\"x\":0.4,\"y\":0.5}")
         }
+        func immediateSession(_ context: AIAssistantContext, _ completion: any TextCompletionProviding) -> AIAssistantSession {
+            let session = AIAssistantSession(context: context, completion: completion)
+            // Existing task cases exercise their own scripted model sequence.
+            // The focused settle cases below use scaled checkpoints instead.
+            session.demoTiming.postClickCheckpoints = []
+            return session
+        }
 
         // A Start button authorizes one exact recording; routine steps no
         // longer interrupt it, while visual observation remains compulsory.
@@ -103,7 +110,7 @@ extension AIAssistantTests {
             default: return reply("The demo is saved.")
             }
         }
-        let session = AIAssistantSession(context: context, completion: provider)
+        let session = immediateSession(context, provider)
         var prompts = 0
         session.configureConfirmationPresentation(onRequest: { prompts += 1 }, onResolution: {})
         session.send("Record an unrelated old request")
@@ -151,7 +158,7 @@ extension AIAssistantTests {
             if step == 2 { return action("stop_recording") }
             return reply("Saved after two observed actions.")
         }
-        let direct = AIAssistantSession(context: directContext, completion: directProvider)
+        let direct = immediateSession(directContext, directProvider)
         try direct.startDemoTask(request(actions: 2))
         try await waitUntil("direct observed actions") { !direct.isRunning }
         check(directApp.recordingActionCalls.count == 2 && directProvider.calls == 4 && directProvider.interactiveCalls == 3
@@ -159,12 +166,103 @@ extension AIAssistantTests {
               && directApp.recordingFrameCalls.count == 3 && directApp.finalizeCount == 1,
               "each consecutive action receives an actual new observation without a screenshot-only completion")
 
+        // A model may try to finish from the immediate post-click frame while
+        // the destination is still loading. Its premature reply is discarded,
+        // and later frames must be sent on distinct turns before saving.
+        let (_, settleApp, settleContext) = fixture("guided-post-click-settle")
+        let settleProvider = DemoCompletion { step, _ in
+            switch step {
+            case 0: return pointer(settleApp, 0)
+            case 1...3: return reply("Premature claim that the destination loaded.")
+            case 4: return action("stop_recording")
+            default: return reply("The recording is saved; page content remains unverified by this scripted test.")
+            }
+        }
+        let settle = AIAssistantSession(context: settleContext, completion: settleProvider)
+        check(settle.demoTiming.postClickCheckpoints == [2, 5, 10], "production observes a click beyond the six-second loading shell seen in the live take")
+        settle.demoTiming.postClickCheckpoints = [0.05, 0.12, 0.25]
+        let settleStart = ContinuousClock.now
+        try settle.startDemoTask(request(actions: 1))
+        try await waitUntil("later post-click frames before save") { !settle.isRunning }
+        let settleElapsed = ContinuousClock.now - settleStart
+        let observedImages = settleProvider.images[1...4]
+        check(settleElapsed >= .seconds(0.23)
+              && settleProvider.calls == 6 && observedImages.allSatisfy { $0.count == 1 }
+              && Set(observedImages.compactMap { $0.first }).count == 4,
+              "the model gets distinct live images across the entire post-click observation window (elapsed: \(settleElapsed), calls: \(settleProvider.calls), image counts: \(observedImages.map(\.count)), unique: \(Set(observedImages.compactMap { $0.first }).count))")
+        check(settleApp.recordingFrameCalls.count == 5 && settleApp.finalizeCount == 1
+              && settle.messages.filter { $0.role == .tool && $0.toolName == "capture_recording_frame" && $0.text.contains("Post-click observation") }.count == 3
+              && !settle.messages.contains { $0.role == .assistant && $0.text.contains("Premature claim") }
+              && settle.demoTask?.stage == .completed,
+              "an early reply cannot close the recording or appear as verified page success")
+
+        // An attempted extra click at the action cap must still wait for the
+        // prior click's destination before the bounded task saves its take.
+        let (_, settleCapApp, settleCapContext) = fixture("guided-post-click-action-cap")
+        let settleCapProvider = DemoCompletion { step, _ in pointer(settleCapApp, step) }
+        let settleCap = AIAssistantSession(context: settleCapContext, completion: settleCapProvider)
+        settleCap.demoTiming.postClickCheckpoints = [0.02, 0.05, 0.09]
+        try settleCap.startDemoTask(request(actions: 1))
+        try await waitUntil("action cap waits for later frames") { !settleCap.isRunning }
+        check(settleCapProvider.calls == 5 && settleCapApp.recordingFrameCalls.count == 5
+              && settleCapApp.recordingActionCalls.count == 1 && settleCapApp.finalizeCount == 1
+              && settleCap.messages.filter { $0.role == .tool && $0.toolName == "capture_recording_frame" && $0.text.contains("Post-click observation") }.count == 3
+              && settleCap.demoTask?.stage == .completed,
+              "the action cap cannot close a just-clicked take before all later page observations")
+
+        // An unexpected planning object is a terminal protocol error, but it
+        // must not bypass those same post-click observations before saving.
+        let (_, settlePlanApp, settlePlanContext) = fixture("guided-post-click-unexpected-plan")
+        let settlePlanProvider = DemoCompletion { step, _ in
+            step == 0 ? pointer(settlePlanApp, step)
+                : "{\"recordingPlan\":\(oldPlanJSON),\"reply\":\"Unexpected plan.\"}"
+        }
+        let settlePlan = AIAssistantSession(context: settlePlanContext, completion: settlePlanProvider)
+        settlePlan.demoTiming.postClickCheckpoints = [0.02, 0.05, 0.09]
+        try settlePlan.startDemoTask(request(actions: 1))
+        try await waitUntil("unexpected plan waits for later frames") { !settlePlan.isRunning }
+        check(settlePlanProvider.calls == 5 && settlePlanApp.recordingFrameCalls.count == 5
+              && settlePlanApp.recordingActionCalls.count == 1 && settlePlanApp.finalizeCount == 1
+              && settlePlan.messages.filter { $0.role == .tool && $0.toolName == "capture_recording_frame" && $0.text.contains("Post-click observation") }.count == 3
+              && settlePlan.demoTask?.stage == .failed,
+              "an unexpected plan cannot close a just-clicked take before all later page observations")
+
+        let (_, settleFailureApp, settleFailureContext) = fixture("guided-post-click-settle-failure")
+        let settleFailureProvider = DemoCompletion { step, _ in
+            if step == 0 { return pointer(settleFailureApp, 0) }
+            settleFailureApp.recordingFrameError = AIToolError.failed("The recorded window became unavailable.")
+            return action("stop_recording")
+        }
+        let settleFailure = AIAssistantSession(context: settleFailureContext, completion: settleFailureProvider)
+        settleFailure.demoTiming.postClickCheckpoints = [0.02]
+        try settleFailure.startDemoTask(request(actions: 1))
+        try await waitUntil("failed later observation saves") { !settleFailure.isRunning }
+        check(settleFailure.demoTask?.stage == .failed && settleFailureApp.finalizeCount == 1
+              && settleFailureApp.recordingFrameCalls.count == 3,
+              "a failed later frame saves the partial take without claiming the destination loaded")
+
+        let (_, settleLimitApp, settleLimitContext) = fixture("guided-post-click-duration")
+        let settleLimitProvider = DemoCompletion { step, _ in
+            step == 0 ? pointer(settleLimitApp, 0) : action("stop_recording")
+        }
+        let settleLimit = AIAssistantSession(context: settleLimitContext, completion: settleLimitProvider)
+        settleLimit.demoTiming.postClickCheckpoints = [0.05, 2]
+        settleLimit.demoTiming.poll = 0.01
+        let settleLimitStart = ContinuousClock.now
+        try settleLimit.startDemoTask(request(actions: 1, duration: 1))
+        try await waitUntil(timeout: 3, "duration ends a pending post-click wait") { !settleLimit.isRunning }
+        check(ContinuousClock.now - settleLimitStart < .seconds(1.8)
+              && settleLimitApp.finalizeCount == 1 && settleLimit.demoTask?.projectID != nil
+              && settleLimit.demoTask?.completedActions == 1
+              && !settleLimit.messages.contains { $0.role == .error && $0.toolName == "stop_recording" },
+              "the duration watchdog saves once and cannot dispatch a stale stop after its deadline")
+
         let (_, captureFailureApp, captureFailureContext) = fixture("guided-post-action-capture-failure")
         let captureFailureProvider = DemoCompletion { _, _ in
             captureFailureApp.recordingFrameError = AIToolError.failed("The recorded window became unavailable.")
             return pointer(captureFailureApp, 0)
         }
-        let captureFailure = AIAssistantSession(context: captureFailureContext, completion: captureFailureProvider)
+        let captureFailure = immediateSession(captureFailureContext, captureFailureProvider)
         try captureFailure.startDemoTask(request())
         try await waitUntil("post-action frame failure saves") { !captureFailure.isRunning }
         check(captureFailureApp.recordingActionCalls.count == 1 && captureFailureProvider.calls == 1
@@ -185,7 +283,7 @@ extension AIAssistantTests {
             default: return pointer(boundedApp, step)
             }
         }
-        let bounded = AIAssistantSession(context: boundedContext, completion: boundedProvider)
+        let bounded = immediateSession(boundedContext, boundedProvider)
         try bounded.startDemoTask(request(actions: 1))
         try await waitUntil("guided action limit") { !bounded.isRunning }
         check(boundedApp.startedSourceIDs == ["approved-window"] && boundedApp.recordingActionCalls.count == 1 && boundedApp.finalizeCount == 1, "cross-scope actions and extra pointer attempts never run")
@@ -196,7 +294,7 @@ extension AIAssistantTests {
         // cancelling its countdown never leaves an unseen recorder running.
         let (_, cancelApp, cancelContext) = fixture("guided-cancel")
         let slow = DemoCompletion { _, _ in reply("Done.") }; slow.delay = 10
-        let cancelled = AIAssistantSession(context: cancelContext, completion: slow)
+        let cancelled = immediateSession(cancelContext, slow)
         try cancelled.startDemoTask(request())
         try await waitUntil("guided live recording") { cancelled.demoTask?.recordingID != nil && slow.calls == 1 }
         cancelled.stop()
@@ -205,7 +303,7 @@ extension AIAssistantTests {
 
         let (_, countdownApp, countdownContext) = fixture("guided-countdown")
         countdownApp.startBehaviour = .succeed(after: 10)
-        let countdown = AIAssistantSession(context: countdownContext, completion: DemoCompletion { _, _ in reply("Done.") })
+        let countdown = immediateSession(countdownContext, DemoCompletion { _, _ in reply("Done.") })
         try countdown.startDemoTask(request())
         try await waitUntil("guided countdown") { countdownApp.recordingPhase == .countdown }
         countdown.stop()
@@ -215,7 +313,7 @@ extension AIAssistantTests {
         // A separate take can never be stopped by cancellation of this task.
         let (_, changedApp, changedContext) = fixture("guided-replaced")
         let delayed = DemoCompletion { _, _ in reply("Done.") }; delayed.delay = 10
-        let replaced = AIAssistantSession(context: changedContext, completion: delayed)
+        let replaced = immediateSession(changedContext, delayed)
         try replaced.startDemoTask(request())
         try await waitUntil("guided recording before replacement") { replaced.demoTask?.recordingID != nil && delayed.calls == 1 }
         let replacementID = UUID()
@@ -229,13 +327,13 @@ extension AIAssistantTests {
         // tool confirmation remains intact outside this one-task scope.
         let (_, timedApp, timedContext) = fixture("guided-timeout")
         let timedProvider = DemoCompletion { _, _ in reply("Done.") }; timedProvider.delay = 10
-        let timed = AIAssistantSession(context: timedContext, completion: timedProvider)
+        let timed = immediateSession(timedContext, timedProvider)
         try timed.startDemoTask(request(duration: 1))
         try await waitUntil("guided wall time limit") { !timed.isRunning }
         check(timed.demoTask?.stage == .failed && timed.demoTask?.projectID != nil && timedApp.finalizeCount == 1, "time limit saves once and reports incomplete when the model never interacted")
 
         let (_, normalApp, normalContext) = fixture("guided-no-leak")
-        let normal = AIAssistantSession(context: normalContext, completion: ScriptedCompletion([action("start_recording", "{\"source\":\"approved-window\",\"interaction_mode\":\"manual\"}"), reply("Cancelled.")]))
+        let normal = immediateSession(normalContext, ScriptedCompletion([action("start_recording", "{\"source\":\"approved-window\",\"interaction_mode\":\"manual\"}"), reply("Cancelled.")]))
         normal.send("Record this window")
         try await waitUntil("ordinary recording approval remains") { normal.pendingConfirmation != nil }
         check(normalApp.startedSourceIDs.isEmpty, "ordinary chat does not gain guided-task approval")
@@ -256,7 +354,7 @@ extension AIAssistantTests {
                 default: return reply("Saved.")
                 }
             }
-            let chat = AIAssistantSession(context: chatContext, completion: chatProvider)
+            let chat = immediateSession(chatContext, chatProvider)
             var approvals = 0
             chat.configureConfirmationPresentation(onRequest: { approvals += 1 }, onResolution: {})
             chat.send("Record a dashboard demo")
@@ -271,7 +369,7 @@ extension AIAssistantTests {
         }
 
         let (_, expiryApp, expiryContext) = fixture("chat-expiry")
-        let expiry = AIAssistantSession(context: expiryContext, completion: DemoCompletion { _, _ in
+        let expiry = immediateSession(expiryContext, DemoCompletion { _, _ in
             action("run_demo_task", "{\"source_id\":\"approved-window\",\"goal\":\"Show overview\"}")
         })
         expiry.demoTiming.approval = 0.05
@@ -283,7 +381,7 @@ extension AIAssistantTests {
         let (_, blockedApp, blockedContext) = fixture("guided-login")
         let blockedProvider = DemoCompletion { _, _ in reply("Should not run.") }
         blockedProvider.readiness = "{\"ready\":false,\"message\":\"Sign in to this page first.\"}"
-        let blocked = AIAssistantSession(context: blockedContext, completion: blockedProvider)
+        let blocked = immediateSession(blockedContext, blockedProvider)
         try blocked.startDemoTask(request())
         try await waitUntil("login preflight") { !blocked.isRunning }
         check(blocked.demoTask?.stage == .failed && blocked.demoTask?.detail.contains("Sign in") == true && blockedApp.startedSourceIDs.isEmpty,
@@ -304,7 +402,7 @@ extension AIAssistantTests {
             check(warmApp.recordingPhase == .idle && warmApp.startedSourceIDs.isEmpty && warmApp.recordingFrameCalls.isEmpty,
                   "execution thread prepares after readiness but before countdown/capture/live screenshot")
         }
-        let warmSession = AIAssistantSession(context: warmContext, completion: warmProvider)
+        let warmSession = immediateSession(warmContext, warmProvider)
         warmSession.demoTiming.idle = 0.12
         try warmSession.startDemoTask(request())
         try await waitUntil("prepared execution records immediately") { !warmSession.isRunning }
@@ -317,7 +415,7 @@ extension AIAssistantTests {
         let (_, warmFailedApp, warmFailedContext) = fixture("guided-preparation-failure")
         let warmFailedProvider = DemoCompletion { _, _ in reply("Must not run.") }
         warmFailedProvider.preparationError = AIToolError.failed("Fixture warmup failed")
-        let warmFailedSession = AIAssistantSession(context: warmFailedContext, completion: warmFailedProvider)
+        let warmFailedSession = immediateSession(warmFailedContext, warmFailedProvider)
         try warmFailedSession.startDemoTask(request())
         try await waitUntil("warmup failure") { !warmFailedSession.isRunning }
         check(warmFailedSession.demoTask?.stage == .failed && warmFailedApp.startedSourceIDs.isEmpty && warmFailedProvider.calls == 0,
@@ -327,7 +425,7 @@ extension AIAssistantTests {
         let warmExpiredProvider = DemoCompletion { _, _ in reply("Must not run.") }
         warmExpiredProvider.preparationDelay = 0.3
         warmExpiredProvider.preparationIgnoresCancellation = true
-        let warmExpiredSession = AIAssistantSession(context: warmExpiredContext, completion: warmExpiredProvider)
+        let warmExpiredSession = immediateSession(warmExpiredContext, warmExpiredProvider)
         warmExpiredSession.demoTiming.readiness = 0.05
         warmExpiredSession.demoTiming.poll = 0.01
         try warmExpiredSession.startDemoTask(request())
@@ -346,7 +444,7 @@ extension AIAssistantTests {
         }
         warmCancelProvider.preparationDelay = 0.3
         warmCancelProvider.preparationIgnoresCancellation = true
-        let warmCancelSession = AIAssistantSession(context: warmCancelContext, completion: warmCancelProvider)
+        let warmCancelSession = immediateSession(warmCancelContext, warmCancelProvider)
         try warmCancelSession.startDemoTask(request())
         try await waitUntil("cancel during execution warmup") { !warmCancelProvider.preparedSystems.isEmpty }
         warmCancelSession.stop()
@@ -373,7 +471,7 @@ extension AIAssistantTests {
             default: return reply("Saved after two page-settling waits.")
             }
         }
-        let waits = AIAssistantSession(context: waitsContext, completion: waitsProvider)
+        let waits = immediateSession(waitsContext, waitsProvider)
         check(waits.demoTiming.idle == 45, "repeatable waits retain the production 45-second idle limit")
         try waits.startDemoTask(request())
         try await waitUntil("first real wait starts") {
@@ -396,7 +494,7 @@ extension AIAssistantTests {
         let idleWaitProvider = DemoCompletion { step, _ in
             step == 0 ? pointer(idleWaitApp, 1) : action("wait", "{\"seconds\":1}")
         }
-        let idleWaits = AIAssistantSession(context: idleWaitContext, completion: idleWaitProvider)
+        let idleWaits = immediateSession(idleWaitContext, idleWaitProvider)
         idleWaits.demoTiming.idle = 1.5
         idleWaits.demoTiming.poll = 0.01
         let idleWaitStart = ContinuousClock.now
@@ -412,7 +510,7 @@ extension AIAssistantTests {
         let (_, stuckApp, stuckContext) = fixture("guided-stuck-model")
         let stuckProvider = DemoCompletion { _, _ in pointer(stuckApp, 1) }
         stuckProvider.delay = 1; stuckProvider.ignoresCancellation = true
-        let stuck = AIAssistantSession(context: stuckContext, completion: stuckProvider)
+        let stuck = immediateSession(stuckContext, stuckProvider)
         stuck.demoTiming.idle = 0.05; stuck.demoTiming.poll = 0.01
         try stuck.startDemoTask(request())
         let stuckStart = ContinuousClock.now
@@ -424,7 +522,7 @@ extension AIAssistantTests {
 
         let (_, staleApp, staleContext) = fixture("guided-stale-action")
         staleApp.recordingActionError = AIToolError.failed("Stale or changed window observation.")
-        let stale = AIAssistantSession(context: staleContext, completion: DemoCompletion { _, _ in pointer(staleApp, 1) })
+        let stale = immediateSession(staleContext, DemoCompletion { _, _ in pointer(staleApp, 1) })
         try stale.startDemoTask(request())
         try await waitUntil("stale observation stops take") { !stale.isRunning }
         check(stale.demoTask?.stage == .failed && stale.demoTask?.projectID != nil && staleApp.finalizeCount == 1 && staleApp.recordingPhase == .idle,
@@ -437,7 +535,7 @@ extension AIAssistantTests {
                 if step > 3 { return reply("Saved.") }
                 return action("perform_recording_text", "{\"recording_id\":\"\(textApp.recordingSession!.id.uuidString)\",\"observation_id\":\"\(UUID())\",\"action_id\":\"text-\(step)\",\"text\":\"Explain this dashboard\"}")
             }
-            let textSession = AIAssistantSession(context: textContext, completion: textProvider)
+            let textSession = immediateSession(textContext, textProvider)
             var textRequest = request(actions: 2); textRequest.allowsTextInput = allowText
             try textSession.startDemoTask(textRequest)
             try await waitUntil("text capability and fresh frame") { !textSession.isRunning }
@@ -449,7 +547,7 @@ extension AIAssistantTests {
         }
 
         let (_, manualApp, manualContext) = fixture("chat-manual-finite")
-        let manual = AIAssistantSession(context: manualContext, completion: ScriptedCompletion([
+        let manual = immediateSession(manualContext, ScriptedCompletion([
             action("start_recording", "{\"source\":\"approved-window\",\"interaction_mode\":\"manual\",\"duration\":1,\"microphone\":true}"),
         ]))
         manual.send("Record my own demonstration for one second")
@@ -471,7 +569,7 @@ extension AIAssistantTests {
             default: return reply("The demo is saved and styled.")
             }
         }
-        let editingSession = AIAssistantSession(context: editingContext, completion: editingProvider)
+        let editingSession = immediateSession(editingContext, editingProvider)
         var editingRequest = request()
         editingRequest.instructions = "Record dashboard navigation, then polish the video with 42 pixels of padding."
         try editingSession.startDemoTask(editingRequest)
@@ -491,7 +589,7 @@ extension AIAssistantTests {
             default: return reply("The edited demo is ready.")
             }
         }
-        let fallbackSession = AIAssistantSession(context: fallbackContext, completion: fallbackProvider)
+        let fallbackSession = immediateSession(fallbackContext, fallbackProvider)
         var fallbackRequest = request()
         fallbackRequest.instructions = "Record dashboard navigation and then style the demo."
         try fallbackSession.startDemoTask(fallbackRequest)
@@ -511,7 +609,7 @@ extension AIAssistantTests {
                 return reply("The partial recording was saved. Finish login before recording the answer.")
             }
         }
-        let blockerSession = AIAssistantSession(context: blockerContext, completion: blockerProvider)
+        let blockerSession = immediateSession(blockerContext, blockerProvider)
         try blockerSession.startDemoTask(request())
         try await waitUntil("blocked model reply survives recording cleanup") { !blockerSession.isRunning }
         check(blockerSession.messages.contains { $0.role == .assistant && $0.text == blockerReply }, "model blocker remains in visible and model history after automatic save")
