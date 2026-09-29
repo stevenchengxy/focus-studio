@@ -220,7 +220,7 @@ struct AutomationSettingsView: View {
                 connectButton(kind, state: status.state)
                     .disabled(isBusy || connector.isLocating || connector.helperWarning != nil)
             }
-            if case .connected = status.state {
+            if case .connected = status.state, isReadyToControl {
                 Text(LocalizedStringKey(kind == .codex
                     ? "Start a new Codex session to use Focus Studio."
                     : "Start a new Claude Code session to use Focus Studio."))
@@ -277,12 +277,18 @@ struct AutomationSettingsView: View {
         case .notConnected:
             Text("Not connected.")
         case .connected:
-            Text("Connected.")
+            Text(isReadyToControl ? "MCP ready." : "MCP registered; Focus Studio is not accepting calls.")
         case let .connectedElsewhere(registration):
             Text("Connected to another copy: \(registration.command)")
         case let .failed(message):
             Text("The command failed: \(message)")
         }
+    }
+
+    private var isReadyToControl: Bool {
+        guard access.isEnabled else { return false }
+        if case .listening = server.state { return true }
+        return false
     }
 
     @ViewBuilder

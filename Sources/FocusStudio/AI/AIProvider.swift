@@ -7,6 +7,27 @@ enum AITransport: String, Codable, Sendable {
     case anthropicMessages
 }
 
+/// Media-provider choice is independent of the conversational text model.
+enum AIVideoProvider: String, CaseIterable, Codable, Identifiable, Sendable {
+    case ark
+    case gemini
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .ark: return "Seedance · Ark"
+        case .gemini: return "Veo · Gemini"
+        }
+    }
+
+    var gatewayKind: AIProviderKind {
+        switch self {
+        case .ark: return .volcengineArk
+        case .gemini: return .googleGemini
+        }
+    }
+}
+
 /// Providers the gateway knows how to talk to. Raw values are persisted in
 /// preferences and used as Keychain account names, so they must stay stable.
 enum AIProviderKind: String, CaseIterable, Codable, Identifiable, Sendable {
@@ -17,6 +38,7 @@ enum AIProviderKind: String, CaseIterable, Codable, Identifiable, Sendable {
     case kimi
     case openRouter
     case volcengineArk
+    case googleGemini
     case custom
 
     var id: String { rawValue }
@@ -30,6 +52,7 @@ enum AIProviderKind: String, CaseIterable, Codable, Identifiable, Sendable {
         case .kimi: return "Kimi"
         case .openRouter: return "OpenRouter"
         case .volcengineArk: return "Volcengine Ark"
+        case .googleGemini: return "Google Gemini · Veo"
         case .custom: return "Custom"
         }
     }
@@ -43,6 +66,7 @@ enum AIProviderKind: String, CaseIterable, Codable, Identifiable, Sendable {
         case .kimi: return "https://api.moonshot.cn/v1"
         case .openRouter: return "https://openrouter.ai/api/v1"
         case .volcengineArk: return "https://ark.cn-beijing.volces.com/api/v3"
+        case .googleGemini: return "https://generativelanguage.googleapis.com/v1beta"
         case .custom: return ""
         }
     }
@@ -60,6 +84,7 @@ enum AIProviderKind: String, CaseIterable, Codable, Identifiable, Sendable {
         case .kimi: string = "https://platform.moonshot.cn/console/api-keys"
         case .openRouter: string = "https://openrouter.ai/settings/keys"
         case .volcengineArk: string = "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey"
+        case .googleGemini: string = "https://aistudio.google.com/app/apikey"
         case .custom: return nil
         }
         return URL(string: string)
@@ -68,12 +93,15 @@ enum AIProviderKind: String, CaseIterable, Codable, Identifiable, Sendable {
     /// Custom endpoints (a local server, a corporate proxy) may run without a key.
     var requiresAPIKey: Bool { self != .custom }
 
+    /// Veo uses Gemini's asynchronous video API, not chat/completions.
+    var supportsTextChat: Bool { self != .googleGemini }
+
     /// Whether `response_format: {"type": "json_object"}` may be sent. Anthropic
     /// has no such field and unknown custom servers often reject it.
     var supportsJSONResponseFormat: Bool {
         switch self {
         case .openAI, .deepSeek, .glm, .kimi, .openRouter, .volcengineArk: return true
-        case .anthropic, .custom: return false
+        case .anthropic, .googleGemini, .custom: return false
         }
     }
 
@@ -100,6 +128,8 @@ enum AIProviderKind: String, CaseIterable, Codable, Identifiable, Sendable {
                     "anthropic/claude-sonnet-4", "deepseek/deepseek-v4", "deepseek/deepseek-chat", "google/gemini"]
         case .volcengineArk:
             return ["doubao-seed-2.0", "doubao-seed-2-0", "doubao-seed-2", "doubao-seed-1.6", "doubao-seed-1-6", "doubao-seed", "doubao"]
+        case .googleGemini:
+            return []
         case .custom:
             return []
         }
@@ -109,7 +139,7 @@ enum AIProviderKind: String, CaseIterable, Codable, Identifiable, Sendable {
     static let nonChatModelMarkers = [
         "embed", "whisper", "tts", "dall-e", "image", "audio", "realtime", "moderation", "transcri", "rerank",
         "sora", "seedance", "seedream", "cogview", "cogvideo", "babbage", "davinci", "instruct", "computer-use",
-        "codex", "guard", "vision", "search-preview"
+        "codex", "guard", "vision", "search-preview", "veo-"
     ]
 
     func recommendedModelID(from ids: [String]) -> String? {

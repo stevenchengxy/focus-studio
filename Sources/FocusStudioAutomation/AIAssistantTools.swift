@@ -56,6 +56,7 @@ public enum AIAssistantToolCatalog {
             // Generated media and output.
             GenerateImageTool(),
             GenerateVideoTool(),
+            PrepareClipAIReferenceTool(),
             CaptureFrameTool(),
             ListAssetsTool(),
             ExportProjectTool(),
@@ -533,6 +534,23 @@ struct GenerateImageTool: AIAssistantTool {
         ]
     }
 
+    func costEstimate(arguments raw: [String: Any]) -> AIToolCostEstimate? {
+        let arguments = AIToolArguments(raw)
+        guard let prompt = arguments.string("prompt"), !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        let model = arguments.string("model") ?? ArkMediaClient.defaultImageModel
+        guard let price = ArkMediaClient.estimateImageCost(model: model),
+              (try? arguments.choice("ratio", in: ["16:9", "9:16", "1:1", "4:3", "3:4"], default: "16:9")) != nil,
+              arguments.stringList("reference_images").count <= 3 else {
+            return nil
+        }
+        return AIToolCostEstimate(
+            yuan: price,
+            summary: "\(ArkMediaClient.displayName(forModel: model)) · 1 image · CNY estimate"
+        )
+    }
+
     func run(
         arguments raw: [String: Any],
         context: AIAssistantContext,
@@ -543,6 +561,9 @@ struct GenerateImageTool: AIAssistantTool {
         let purpose = try arguments.choice("purpose", in: ["background", "title_card", "asset"], default: "asset") ?? "asset"
         let ratio = try arguments.choice("ratio", in: ["16:9", "9:16", "1:1", "4:3", "3:4"], default: "16:9") ?? "16:9"
         let model = arguments.string("model") ?? ArkMediaClient.defaultImageModel
+        guard ArkMediaClient.imageModelInfo(for: model) != nil else {
+            throw AIToolError.invalidArgument("Unknown Seedream model \(model). Choose an exact model ID from Settings before generating.")
+        }
         let references = arguments.stringList("reference_images")
         guard references.count <= 3 else { throw AIToolError.invalidArgument("reference_images accepts at most 3 images.") }
         let client = try await AIToolSupport.requireArkClient(context)
@@ -589,7 +610,7 @@ struct GenerateImageTool: AIAssistantTool {
 
 struct GenerateVideoTool: AIAssistantTool {
     let name = "generate_video"
-    let summary = "Generate a short video clip with Seedance (Volcengine Ark), e.g. an intro or outro. Saves it to the shared media library; adding it to a project is separate. Optional first/last frames and reference media. Paid: the user confirms a cost estimate first. Prefer the mini model and 4–6 s while iterating."
+    let summary = "Generate a short video clip with the explicitly selected Seedance (Ark) or Veo 3.1 (Gemini) model. Saves it to the shared media library; adding it to a project is separate. First/last frames are supported by both providers; arbitrary reference video/audio is Ark-only. Paid: review the exact model, currency and cost before generation."
 
     var parametersSchema: [String: Any] {
         [
@@ -597,22 +618,25 @@ struct GenerateVideoTool: AIAssistantTool {
             "required": ["prompt"],
             "properties": [
                 "prompt": ["type": "string", "description": "Motion, subject, camera and mood. Refer to attached media as 图片1/视频1/音频1. No on-screen text."],
-                "model": ["type": "string", "description": "Seedance model id. Default \(ArkMediaClient.defaultVideoModel) (cheapest, 480p/720p)."],
-                "duration": ["type": "integer", "minimum": 4, "maximum": 15, "default": 5],
-                "ratio": ["type": "string", "enum": ArkMediaClient.videoRatios, "default": "16:9"],
-                "resolution": ["type": "string", "enum": ArkMediaClient.videoResolutions, "description": "Omit to let the model pick."],
-                "generate_audio": ["type": "boolean", "default": false],
+                "model": ["type": "string", "description": "Exact Seedance or Veo model ID. The in-app model picker is authoritative; if omitted, default is \(ArkMediaClient.defaultVideoModel)."],
+                "duration": ["type": "integer", "minimum": 2, "maximum": 30, "default": 8,
+                             "description": "Veo supports 4, 6 or 8 seconds; 1080p/4k or reference images require 8 seconds. Seedance durations depend on the model."],
+                "ratio": ["type": "string", "enum": ArkMediaClient.videoRatios, "default": "16:9", "description": "Veo supports 16:9 and 9:16 only."],
+                "resolution": ["type": "string", "enum": ArkMediaClient.videoResolutions + ["4k"], "description": "Veo supports 720p/1080p/4k (Lite: no 4k); Seedance capabilities vary. Omit for 720p."],
+                "generate_audio": ["type": "boolean", "description": "Seedance: false by default. Veo: audio is always generated; omit or true."],
                 "first_frame": ["type": "string", "description": "Local path or URL of the first frame image."],
                 "last_frame": ["type": "string", "description": "Local path or URL of the last frame image."],
-                "reference_images": ["type": "array", "items": ["type": "string"], "description": "Up to 4 style/subject reference images."],
-                "reference_video": ["type": "string", "description": "http(s) URL or small local clip whose camera and composition to follow (Seedance 2.x)."],
-                "reference_audio": ["type": "string", "description": "http(s) URL or small local audio file whose rhythm to follow (Seedance 2.x)."],
+                "reference_images": ["type": "array", "items": ["type": "string"], "description": "Seedance: up to 4 images. Veo Standard/Fast: up to 3 local images, 8-second generation only; Veo Lite: unsupported."],
+                "reference_video": ["type": "string", "description": "Seedance 2.x only. Veo does not accept arbitrary video clips for extension."],
+                "reference_audio": ["type": "string", "description": "Seedance 2.x only. Veo generates native audio and cannot take an arbitrary audio reference."],
                 "seed": ["type": "integer"],
             ],
         ]
     }
 
     private struct Plan {
+        enum Provider { case ark, veo }
+        var provider: Provider
         var model: String
         var duration: Int
         var ratio: String
@@ -623,8 +647,47 @@ struct GenerateVideoTool: AIAssistantTool {
 
     private func plan(_ arguments: AIToolArguments, strict: Bool) throws -> Plan {
         let model = arguments.string("model") ?? ArkMediaClient.defaultVideoModel
-        let info = ArkMediaClient.videoModelInfo(for: model)
-        let allowedDurations = info?.durations ?? 2...15
+        if let info = VeoMediaClient.modelInfo(for: model) {
+            let duration = arguments.int("duration") ?? 8
+            let ratio = try arguments.choice("ratio", in: ArkMediaClient.videoRatios, default: "16:9") ?? "16:9"
+            let resolution = try arguments.choice("resolution", in: ArkMediaClient.videoResolutions + ["4k"], default: nil)
+            let references = arguments.stringList("reference_images")
+            if strict {
+                guard [4, 6, 8].contains(duration) else {
+                    throw AIToolError.invalidArgument("Veo duration must be 4, 6 or 8 seconds.")
+                }
+                guard ["16:9", "9:16"].contains(ratio) else {
+                    throw AIToolError.invalidArgument("Veo supports 16:9 or 9:16 only.")
+                }
+                guard info.resolutions.contains(resolution ?? "720p") else {
+                    throw AIToolError.invalidArgument("\(info.name) supports \(info.resolutions.joined(separator: "/")) only.")
+                }
+                guard (resolution ?? "720p") == "720p" || duration == 8 else {
+                    throw AIToolError.invalidArgument("Veo 1080p/4k requires an 8-second clip.")
+                }
+                guard references.count <= 3, references.isEmpty || info.supportsReferenceImages else {
+                    throw AIToolError.invalidArgument("\(info.name) accepts at most 3 reference images; Lite accepts none.")
+                }
+                guard references.isEmpty || duration == 8 else {
+                    throw AIToolError.invalidArgument("Veo reference images require 8 seconds.")
+                }
+                guard !arguments.has("reference_video"), !arguments.has("reference_audio") else {
+                    throw AIToolError.invalidArgument("Veo cannot use an arbitrary reference_video or reference_audio. Use a first_frame image from the clip, or choose Seedance for video/audio references.")
+                }
+                guard arguments.bool("generate_audio") != false else {
+                    throw AIToolError.invalidArgument("Veo always generates audio. Omit generate_audio or set it to true; mute the clip in the editor if needed.")
+                }
+                guard !arguments.has("last_frame") || arguments.has("first_frame") else {
+                    throw AIToolError.invalidArgument("Veo last_frame requires first_frame.")
+                }
+            }
+            return Plan(provider: .veo, model: model, duration: duration, ratio: ratio,
+                        resolution: resolution, generateAudio: true, usesReferenceMedia: !references.isEmpty)
+        }
+        guard let info = ArkMediaClient.videoModelInfo(for: model) else {
+            throw AIToolError.invalidArgument("Unknown video model \(model). Choose an exact model ID from Settings before generating.")
+        }
+        let allowedDurations = info.durations
         var duration = arguments.int("duration") ?? 5
         if strict {
             guard allowedDurations.contains(duration) else {
@@ -634,23 +697,42 @@ struct GenerateVideoTool: AIAssistantTool {
             duration = duration.clamped(to: allowedDurations)
         }
         let ratio = try arguments.choice("ratio", in: ArkMediaClient.videoRatios, default: "16:9") ?? "16:9"
-        let resolution = try arguments.choice("resolution", in: ArkMediaClient.videoResolutions, default: nil)
-        if strict, let resolution, let info, !info.resolutions.contains(resolution) {
+        let resolution = try arguments.choice("resolution", in: ArkMediaClient.videoResolutions + ["4k"], default: nil)
+        if strict, let resolution, !info.resolutions.contains(resolution) {
             throw AIToolError.invalidArgument("\(model) supports \(info.resolutions.joined(separator: "/")) only.")
         }
         let generateAudio = arguments.bool("generate_audio") ?? false
+        if strict, generateAudio, !info.supportsAudio {
+            throw AIToolError.invalidArgument("\(model) does not support generated audio.")
+        }
         let usesReferenceMedia = arguments.has("reference_video") || arguments.has("reference_audio")
-        return Plan(model: model, duration: duration, ratio: ratio, resolution: resolution,
+        return Plan(provider: .ark, model: model, duration: duration, ratio: ratio, resolution: resolution,
                     generateAudio: generateAudio, usesReferenceMedia: usesReferenceMedia)
     }
 
     func costEstimate(arguments raw: [String: Any]) -> AIToolCostEstimate? {
         let arguments = AIToolArguments(raw)
-        let plan = (try? plan(arguments, strict: false)) ?? Plan(model: ArkMediaClient.defaultVideoModel, duration: 5, ratio: "16:9", resolution: nil, generateAudio: false, usesReferenceMedia: false)
+        // Invalid or unknown requests cannot be billed: run() validates the
+        // same arguments before any provider call, and no misleading ¥0
+        // confirmation is shown for a model with no known price.
+        guard let plan = try? self.plan(arguments, strict: true) else { return nil }
+        if case .veo = plan.provider {
+            let effectiveResolution = plan.resolution ?? "720p"
+            guard let price = VeoMediaClient.estimateVideoCostUSD(
+                model: plan.model, resolution: effectiveResolution, duration: plan.duration
+            ) else { return nil }
+            let summary = [
+                VeoMediaClient.displayName(forModel: plan.model),
+                "\(plan.duration)s", effectiveResolution, plan.ratio,
+                "native audio", "USD estimate",
+            ].joined(separator: " · ")
+            return AIToolCostEstimate(yuan: price, summary: summary, currencyCode: "USD")
+        }
         let estimate = ArkMediaClient.estimateVideoCost(
             model: plan.model, resolution: plan.resolution, ratio: plan.ratio,
             duration: Double(plan.duration), usesAudioOrReferenceMedia: plan.generateAudio || plan.usesReferenceMedia
         )
+        guard let price = estimate.yuan else { return nil }
         var parts = [
             ArkMediaClient.displayName(forModel: plan.model),
             L10n.format("%@s", String(plan.duration)),
@@ -658,8 +740,7 @@ struct GenerateVideoTool: AIAssistantTool {
             plan.ratio,
         ]
         if plan.generateAudio || plan.usesReferenceMedia { parts.append(L10n.tr("with audio")) }
-        if estimate.yuan == nil { parts.append(L10n.tr("unknown price")) }
-        return AIToolCostEstimate(yuan: estimate.yuan ?? 0, summary: parts.joined(separator: " · "))
+        return AIToolCostEstimate(yuan: price, summary: parts.joined(separator: " · "))
     }
 
     func run(
@@ -670,6 +751,10 @@ struct GenerateVideoTool: AIAssistantTool {
         let arguments = AIToolArguments(raw)
         let prompt = try arguments.requiredString("prompt")
         let plan = try plan(arguments, strict: true)
+        if case .veo = plan.provider {
+            return try await runVeo(arguments: arguments, plan: plan, prompt: prompt,
+                                    context: context, progress: progress)
+        }
         let referenceImages = arguments.stringList("reference_images")
         guard referenceImages.count <= 4 else { throw AIToolError.invalidArgument("reference_images accepts at most 4 images.") }
         let client = try await AIToolSupport.requireArkClient(context)
@@ -728,7 +813,8 @@ struct GenerateVideoTool: AIAssistantTool {
         ], nextTo: output)
 
         var lines = [context.format("Video saved: %@ (%@ s, %@)", output.lastPathComponent,
-                                    AIToolSupport.seconds(duration ?? Double(plan.duration)), AIToolSupport.bytes(output))]
+                                    AIToolSupport.seconds(duration ?? Double(plan.duration)), AIToolSupport.bytes(output)),
+                     "Model: \(ArkMediaClient.displayName(forModel: plan.model)) (\(plan.model))"]
         if let estimate { lines.append(context.format("Estimated cost ≈ ¥%@", AIToolSupport.yuan(estimate))) }
         lines.append(output.path)
         let registration = await MediaLibraryToolSupport.registerGenerated(output, context: context)
@@ -740,6 +826,98 @@ struct GenerateVideoTool: AIAssistantTool {
         if let issue = registration.issue { lines.append(issue) }
         let data: AIJSONValue = [
             "path": AIJSONValue(output),
+            "model": AIJSONValue(plan.model),
+            "model_name": AIJSONValue(ArkMediaClient.displayName(forModel: plan.model)),
+            "global_asset": registration.globalAsset.map(MediaLibraryToolSupport.data) ?? .null,
+            "global_asset_id": registration.globalAsset.map { AIJSONValue($0.id.uuidString) } ?? .null,
+            "media_import_issue": registration.issue.map { AIJSONValue($0) } ?? .null,
+        ]
+        return AIToolResult(text: lines.joined(separator: "\n"), attachments: [output], data: data)
+    }
+
+    private func runVeo(
+        arguments: AIToolArguments,
+        plan: Plan,
+        prompt: String,
+        context: AIAssistantContext,
+        progress: @escaping @Sendable (String) -> Void
+    ) async throws -> AIToolResult {
+        let stored = await MainActor.run { context.geminiVideoAPIKey() }
+        guard let key = stored?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty else {
+            throw AIToolError.failed(context.isChinese
+                ? "请先在设置中的 Gemini 视频模型网关添加 Google API key，再生成 Veo 视频。"
+                : "Add a Google API key in Settings → Gemini video models before generating with Veo.")
+        }
+        let client = VeoMediaClient(apiKey: key, baseURL: context.geminiVideoBaseURL)
+        var request = VeoMediaClient.VideoTaskRequest(
+            model: plan.model, prompt: prompt, duration: plan.duration,
+            ratio: plan.ratio, resolution: plan.resolution ?? "720p"
+        )
+        if let first = arguments.string("first_frame") {
+            request.firstFrame = try VeoMediaClient.inlineImage(
+                from: AIToolPaths.mediaURL(first, kind: .image, context: context)
+            )
+        }
+        if let last = arguments.string("last_frame") {
+            request.lastFrame = try VeoMediaClient.inlineImage(
+                from: AIToolPaths.mediaURL(last, kind: .image, context: context)
+            )
+        }
+        request.referenceImages = try arguments.stringList("reference_images").map { raw in
+            try VeoMediaClient.inlineImage(
+                from: AIToolPaths.mediaURL(raw, kind: .image, context: context)
+            )
+        }
+        request.seed = arguments.int("seed")
+        // Revalidate the full provider payload before a paid network call.
+        _ = try VeoMediaClient.videoPayload(request)
+
+        progress(context.isChinese ? "正在提交 Veo 任务…" : "Submitting Veo task…")
+        let operation = try await client.createVideoTask(request)
+        let family = VeoMediaClient.displayName(forModel: plan.model)
+        let completed = try await client.waitForTask(name: operation) { elapsed in
+            progress(context.isChinese
+                ? "\(family) 生成中… \(Int(elapsed.rounded())) 秒"
+                : "\(family) generating… \(Int(elapsed.rounded())) s")
+        }
+        progress(context.tr("Downloading…"))
+        let output = try context.newAssetURL(prefix: "video", fileExtension: "mp4")
+        try await client.download(completed.videoURL, to: output)
+
+        let duration = await AIToolSupport.mediaDuration(output)
+        let estimateUSD = VeoMediaClient.estimateVideoCostUSD(
+            model: plan.model, resolution: request.resolution, duration: plan.duration
+        )
+        AIToolSupport.writeSidecar([
+            "kind": "video", "provider": "gemini", "model": plan.model,
+            "prompt": prompt, "task_id": operation,
+            "duration": plan.duration, "ratio": plan.ratio,
+            "resolution": request.resolution, "generate_audio": true,
+            "estimated_usd": estimateUSD ?? 0,
+        ], nextTo: output)
+        var lines = [
+            context.format("Video saved: %@ (%@ s, %@)", output.lastPathComponent,
+                           AIToolSupport.seconds(duration ?? Double(plan.duration)), AIToolSupport.bytes(output)),
+            "Model: \(family) (\(plan.model))",
+        ]
+        if let estimateUSD {
+            lines.append(context.isChinese
+                ? "预估费用约 $\(String(format: "%.2f", estimateUSD)) 美元"
+                : "Estimated cost ≈ $\(String(format: "%.2f", estimateUSD)) USD")
+        }
+        lines.append(output.path)
+        let registration = await MediaLibraryToolSupport.registerGenerated(output, context: context)
+        if let asset = registration.globalAsset {
+            lines.append(context.isChinese
+                ? "已加入通用素材库（素材 \(asset.id.uuidString)）；如需用于当前视频，请先加入项目素材库。"
+                : "Added to the shared media library (asset \(asset.id.uuidString)); copy it into a project before using it on a timeline.")
+        }
+        if let issue = registration.issue { lines.append(issue) }
+        let data: AIJSONValue = [
+            "path": AIJSONValue(output),
+            "provider": AIJSONValue("gemini"),
+            "model": AIJSONValue(plan.model),
+            "model_name": AIJSONValue(family),
             "global_asset": registration.globalAsset.map(MediaLibraryToolSupport.data) ?? .null,
             "global_asset_id": registration.globalAsset.map { AIJSONValue($0.id.uuidString) } ?? .null,
             "media_import_issue": registration.issue.map { AIJSONValue($0) } ?? .null,

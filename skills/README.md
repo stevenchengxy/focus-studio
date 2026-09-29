@@ -28,6 +28,7 @@ bash skills/install.sh --all --copy  # 两个客户端都安装，使用副本
 | `focus-demo-editing` | 将录制、空等分析、非破坏剪辑、单段缩放、预览和导出连成一个任务；保存策略与验证报告 |
 | `focus-studio-mcp` | 通过真实工具控制 Focus Studio 录制、项目、缩放、字幕、音频与导出 |
 | `demo-storyboard` | 为需要片头、章节和片尾的成片创建分镜 |
+| `focus-ai-promo` | 从真实产品收益和录屏出发，规划 AI 宣传镜头与单片段视觉变体 |
 | `product-demo-composer` | 按分镜用 ffmpeg 合成已导出的片段、字幕、转场和音轨 |
 | `ark-still-image` / `ark-video-clip` | 按需生成可选的付费图片或视频素材 |
 
@@ -40,6 +41,7 @@ bash skills/install.sh --all --copy  # 两个客户端都安装，使用副本
 
 | skill | 作用 | 入口脚本 |
 | --- | --- | --- |
+| `focus-ai-promo` | 对照官方产品宣传片，提出可执行分镜、关键帧/运动提示词和真实 UI 的合成方案；指导保留原片段的 AI 变体流程 | `SKILL.md`、`references/shot-recipes.md` |
 | `ark-video-clip` | 用 Seedance（2.5 / 2.0 / 2.0-mini / 1.0-pro）文生视频、图生视频（首帧/尾帧/参考图），Seedance 2.5 还支持参考视频（`--reference-video`）与参考音频（`--reference-audio`）的多模态参考；含成本预估、轮询、下载、缓存 | `scripts/generate_clip.py` |
 | `ark-still-image` | 用 Seedream（5.0-pro / 5.0 / 4.5 / 4.0）生成标题卡、16:9 主视觉背景、功能图标，或把录屏截图重绘成营销主视觉 | `scripts/generate_still.py` |
 | `demo-storyboard` | 把产品描述 + Focus Studio `project.json`（点击 / 缩放时间）变成 `storyboard.json` 分镜：章节切点、字幕占位、AI 镜头提示词、转场、BGM | `scripts/storyboard_from_project.py` |
@@ -71,7 +73,7 @@ Focus Studio 录制 ──导出 MP4──▶ demo-storyboard ──storyboard.j
 2. **分镜**：`storyboard_from_project.py --project <项目目录> --export <导出.mp4> --thumbs thumbs/`，把缩放聚成 3-6 个章节，
    助手看缩略图后把 `TODO` 字幕改成"说明收益"的一句话，决定是否加 AI 镜头（写好 `prompt` / `model` / `seed`）。
 3. **（可选）生成 AI 素材**：单独用 `generate_still.py` / `generate_clip.py`，或让合成器 `--generate` 一次补齐；先 `--dry-run`
-   看请求与预估费用。默认用最便宜的 `doubao-seedance-2-0-mini-260615` 480p/720p 迭代提示词，最后再用 2.0/2.5 出正式片头。
+   看请求与预估费用。明确选择用户指定且账号可用的模型；只有用户主动选择低成本草稿时才使用 mini，正式生成前重新确认模型。
 4. **合成**：`compose_demo.py storyboard.json --dry-run` → `--preview` → 正式渲染 → `probe_media.py --brief final.mp4` 并抽帧检查字幕。
 5. **（可选）重新导入 Focus Studio**："导入现有 MP4/MOV"，再加缩放、光标、音效与内置 BGM；此时合成时不要加 BGM、关闭 loudnorm。
 

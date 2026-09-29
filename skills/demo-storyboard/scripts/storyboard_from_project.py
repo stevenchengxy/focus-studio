@@ -244,7 +244,7 @@ def main(argv=None) -> int:
     ap.add_argument("--no-hero", action="store_true", help="do not add the AI hero opener")
     ap.add_argument("--no-cta", action="store_true", help="do not add the closing CTA title card")
     ap.add_argument("--bgm", help="background music file to reference in the storyboard")
-    ap.add_argument("--video-model", default="doubao-seedance-2-0-mini-260615")
+    ap.add_argument("--video-model", default="doubao-seedance-2-5-260628")
     ap.add_argument("--image-model", default="doubao-seedream-4-5-251128")
     ap.add_argument("--brand-color", help="hex accent color (default: project backgroundColor)")
     ap.add_argument("--thumbs", help="directory: write one JPEG per chapter so the author can look at each step")

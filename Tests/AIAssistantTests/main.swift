@@ -66,6 +66,8 @@ struct AIAssistantTests {
         step("recording sessions: paused"); try await pausedRecording(root: root)
         step("Ark request bodies"); try arkRequestBodies()
         step("Ark fixture round trip"); try await arkFixtureRoundTrip(root: root)
+        step("Veo request bodies"); try veoRequestBodies()
+        step("Veo fixture round trip"); try await veoFixtureRoundTrip(root: root)
         print("AIAssistantTests: PASS (protocol parsing, scripted agent loop, confirmation gate, stop, model resolver, update_settings incl. export width/frame rate, set_chapters, dropped writes, interleaved edits, app control (sources/start/stop/library, permission errors, main display, joined stops), zoom tools, audio tools, export paths, export guard, assemble_video, automation API (JSON values, structured results, result language, working-directory paths, pinned projects, remove_zoom by id, list_projects paging and search, get_project, get_status, per-export width/frame rate with progress and cancellation, assemble_video output), MCP layer (exact v1 catalog with project_id schemas, annotations and instructions, result shape with inline JPEG, jobs with detach/wait_for_job/progress/cancellation/retention, the activity a waiting job names, wait_for_job bounded from its arrival, the one-at-a-time call queue, import/screenshot/rename/delete tools, pinned assembly), recording sessions (start returns once live, per-recording options, duration auto-stop and early Finish, wait_for_recording finished/cancelled/timeout/idle with progress, joined stops, cancellation during the countdown, a start timeout or a cancel as it goes live discards, an untracked recording waited through its save, in-app guidance by duration, the sound prompt: allow/record without sound (no sound at all, the recorder's own included)/cancel/no answer/refused meanwhile/call cancelled/no way to ask, a recorder sound turned off while the prompt is up stays off, none for no sound, the recorder's own sound or the in-app assistant, the recorder's choices unchanged; macOS's microphone access settled after the sound prompt and before the countdown for a recording that will record the microphone (the recorder's own included): denied/Don't Allow/restricted/no answer as isError with structured data and nothing started, a refusal meanwhile, a cancelled check, no check without the microphone, the in-app assistant recording as asked; a paused recording in get_status, wait_for_recording and the in-app summary, wait_for_recording repeatable within one request), the call queue's deadline, Ark request bodies, Ark fixture round trip incl. tools)")
     }
 
@@ -1992,16 +1994,19 @@ struct AIAssistantTests {
         let generatedImage = generated.attachments[0]
         check(generatedImage.lastPathComponent.hasPrefix("image-") && generatedImage.pathExtension == "png" && ArkMediaClient.imagePixelSize(at: generatedImage)! == (64, 36), "generate_image saves image-<ts>.png: \(generated.text)")
         check(FileManager.default.fileExists(atPath: generatedImage.path + ".json") && generated.text.contains(generatedImage.lastPathComponent), "sidecar and result text")
-        check(GenerateImageTool().costEstimate(arguments: [:]) == nil, "images need no confirmation")
+        check(GenerateImageTool().costEstimate(arguments: [:]) == nil
+              && GenerateImageTool().costEstimate(arguments: ["prompt": "subtle gradient"])?.yuan == 0.25,
+              "image generation requires a prompt and quotes the exact Seedream model")
 
         let background = try await SetBackgroundImageTool().run(arguments: ["path": generatedImage.lastPathComponent], context: context, progress: { _ in })
         check(box.project!.settings.backgroundStyle == .image && box.project!.settings.backgroundImagePath == generatedImage.path && background.attachments == [generatedImage], "set_background_image applies the generated file by name")
 
         let videoTool = GenerateVideoTool()
         let estimate = videoTool.costEstimate(arguments: ["prompt": "orbit", "duration": 5])!
-        check(abs(estimate.yuan - 2.484) < 0.001 && estimate.summary.contains("Seedance 2.0 mini") && estimate.summary.contains("16:9"), "generate_video always asks for confirmation with an estimate: \(estimate)")
-        await expectThrows("mini has no 1080p") { _ = try await videoTool.run(arguments: ["prompt": "x", "resolution": "1080p"], context: context, progress: { _ in }) }
-        await expectThrows("duration range") { _ = try await videoTool.run(arguments: ["prompt": "x", "duration": 20], context: context, progress: { _ in }) }
+        check(estimate.yuan > 0 && estimate.summary.contains("Seedance 2.5") && estimate.summary.contains("16:9"), "selected default model has a paid estimate: \(estimate)")
+        await expectThrows("mini has no 1080p") { _ = try await videoTool.run(arguments: ["prompt": "x", "model": "doubao-seedance-2-0-mini-260615", "resolution": "1080p"], context: context, progress: { _ in }) }
+        await expectThrows("duration range") { _ = try await videoTool.run(arguments: ["prompt": "x", "model": "doubao-seedance-2-0-mini-260615", "duration": 20], context: context, progress: { _ in }) }
+        await expectThrows("unknown model") { _ = try await videoTool.run(arguments: ["prompt": "x", "model": "fake-seedance"], context: context, progress: { _ in }) }
         await expectThrows("missing reference") { _ = try await videoTool.run(arguments: ["prompt": "x", "first_frame": "missing.png"], context: context, progress: { _ in }) }
         let keyless = makeContext(root: root, box: box, arkBaseURL: baseURL, key: nil)
         await expectThrows("no key") { _ = try await videoTool.run(arguments: ["prompt": "x"], context: keyless, progress: { _ in }) }
@@ -2014,6 +2019,19 @@ struct AIAssistantTests {
         let frame = try await CaptureFrameTool().run(arguments: ["time": 0.5], context: context, progress: { _ in })
         let frameSize = ArkMediaClient.imagePixelSize(at: frame.attachments[0])!
         check(frame.attachments[0].lastPathComponent.hasPrefix("frame-") && frameSize.width == 1_920, "capture_frame renders a styled 1920-wide PNG: \(frameSize)")
+
+        let originalProject = box.project!
+        let clipID = try DemoVideoTimeline(project: originalProject).clips[0].id
+        let preparedClip = try await PrepareClipAIReferenceTool().run(arguments: ["clip_id": clipID.uuidString], context: context, progress: { _ in })
+        check(preparedClip.attachments.count == 3 && preparedClip.data?["reference_has_audio"]?.boolValue == false,
+              "per-clip AI preparation has first/last frames and a silent video reference: \(preparedClip.text)")
+        if preparedClip.attachments.count == 3 {
+            let refAsset = AVURLAsset(url: preparedClip.attachments[2])
+            let refDuration = try await refAsset.load(.duration).seconds
+            let audioTracks = try await refAsset.loadTracks(withMediaType: .audio)
+            check(abs(refDuration - 1.5) < 0.2 && audioTracks.isEmpty, "reference video is bounded and contains no captured audio")
+        }
+        check(box.project == originalProject, "per-clip AI preparation leaves the source project untouched")
 
         let listed = try await ListAssetsTool().run(arguments: [:], context: context, progress: { _ in })
         check(listed.text.contains(generatedImage.lastPathComponent) && listed.text.contains(generatedVideo.lastPathComponent) && listed.text.contains(frame.attachments[0].lastPathComponent) && !listed.text.contains(".json"), "list_assets lists media only: \(listed.text)")
@@ -2047,10 +2065,13 @@ struct AIAssistantTests {
         session.send("make an intro clip")
         try await waitUntil("real confirmation") { session.pendingConfirmation != nil }
         check(session.pendingConfirmation?.toolName == "generate_video" && (session.pendingConfirmation?.estimate.yuan ?? 0) > 0, "paid tool waits for confirmation")
+        check(session.pendingConfirmation?.selectedVideoModelID == "doubao-seedance-2-5-260628", "confirmation starts with the chosen default model")
+        check(session.setPendingVideoModel("doubao-seedance-2-0-mini-260615") && session.pendingConfirmation?.estimate.summary.contains("Seedance 2.0 mini") == true, "confirmation recalculates the selected model and estimate")
         session.confirmPending()
         try await waitUntil("real generation") { !session.isRunning }
         check(session.messages.map(\.role) == [.user, .tool, .assistant], "session ran the tool after confirmation: \(session.messages.map(\.role)) \(session.messages.map(\.text))")
         check(session.messages[1].attachments.first?.pathExtension == "mp4" && session.suggestions == ["Make an outro too"], "tool row has the clip and suggestions follow")
+        check(session.messages[1].text.contains("doubao-seedance-2-0-mini-260615"), "the paid call used the model selected on the confirmation card")
     }
 }
 

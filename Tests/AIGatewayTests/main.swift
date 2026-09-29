@@ -14,6 +14,8 @@ struct AIGatewayTests {
         try storeRoundTrip()
         try await mockedTransport()
         try await storeTesting()
+        await mediaModelSelections()
+        await geminiMediaModels()
 do {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent("FocusStudioSecrets-\(UUID().uuidString)", isDirectory: true)
     let fileURL = directory.appendingPathComponent("secrets.json")
@@ -58,7 +60,9 @@ do {
             check((kind == .anthropic) == (kind.transport == .anthropicMessages), "\(kind) transport")
             check(AIProviderKind(rawValue: kind.rawValue) == kind, "stable raw value")
         }
-        check(AIProviderKind.allCases.count == 8, "eight providers")
+        check(AIProviderKind.allCases.count == 9, "nine providers, including video-only Gemini")
+        check(!AIProviderKind.googleGemini.supportsTextChat && AIProviderKind.volcengineArk.supportsTextChat,
+              "Gemini Veo cannot be selected as a chat/completions provider")
         check(!AIProviderKind.anthropic.supportsJSONResponseFormat && !AIProviderKind.custom.supportsJSONResponseFormat
               && AIProviderKind.deepSeek.supportsJSONResponseFormat && AIProviderKind.volcengineArk.supportsJSONResponseFormat,
               "json mode support table")
@@ -211,6 +215,9 @@ do {
         let store = AIGatewayStore(defaults: defaults, keychain: keychain)
         check(store.providers.map(\.kind) == AIProviderKind.allCases, "all providers in display order")
         check(store.defaultTextModel == nil && store.providersWithKeys.isEmpty, "fresh store")
+        check(store.preferredVideoModelID == AIGatewayStore.recommendedVideoModelID
+              && store.preferredImageModelID == AIGatewayStore.recommendedImageModelID,
+              "fresh store offers explicit media models")
         check(store.status(for: .deepSeek) == .unconfigured, "no key: unconfigured")
         do {
             _ = try store.resolvedClient()
@@ -252,6 +259,7 @@ do {
         let reloaded = AIGatewayStore(defaults: defaults, keychain: keychain)
         check(reloaded.providers == store.providers, "provider settings survive relaunch")
         check(reloaded.defaultTextModel == store.defaultTextModel, "default model survives relaunch")
+        check(reloaded.preferredVideoModelID == store.preferredVideoModelID, "video preference survives relaunch")
         check(reloaded.providersWithKeys == [.deepSeek] && reloaded.apiKey(for: .deepSeek) == secret, "key presence is read from the keychain")
 
         reloaded.update(.deepSeek) { $0.isEnabled = false }
@@ -282,8 +290,10 @@ do {
 
         defaults.set(Data("{\"providers\":[{\"kind\":\"kimi\",\"defaultModelID\":\"kimi-k2\"}]}".utf8), forKey: AIGatewayStore.defaultsKey)
         let legacy = AIGatewayStore(defaults: defaults, keychain: keychain)
-        check(legacy.providers.count == 8 && legacy.configuration(for: .kimi).defaultModelID == "kimi-k2" && legacy.configuration(for: .kimi).isEnabled,
+        check(legacy.providers.count == 9 && legacy.configuration(for: .kimi).defaultModelID == "kimi-k2" && legacy.configuration(for: .kimi).isEnabled,
               "lenient decoding of older payloads")
+        check(legacy.preferredVideoModelID == AIGatewayStore.recommendedVideoModelID,
+              "old preference payload gains a reviewable Seedance choice")
     }
 
     // MARK: - Mocked HTTP
@@ -421,6 +431,82 @@ do {
         check(store.status(for: .openAI) == .needsTest, "failed test needs attention")
         let payload = String(decoding: defaults.data(forKey: AIGatewayStore.defaultsKey) ?? Data(), as: UTF8.self)
         check(!payload.contains("FAKE-"), "test results never persist secrets")
+    }
+
+    @MainActor
+    static func mediaModelSelections() async {
+        let suiteName = "FocusStudio.AIGatewayTests.media.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let keychain = InMemoryKeychainStore(values: ["volcengineArk": "FAKE-ARK-KEY"])
+        let store = AIGatewayStore(defaults: defaults, keychain: keychain, session: MockURLProtocol.makeSession())
+        check(store.availableVideoModelIDs.isEmpty && store.videoModelChoices.contains(AIGatewayStore.recommendedVideoModelID),
+              "untested Ark preset is selectable but not presented as listed")
+
+        MockURLProtocol.reset { request, _ in
+            guard request.url?.path == "/api/v3/models" else { return (500, Data()) }
+            return (200, Data("{\"data\":[{\"id\":\"doubao-seedance-2-5-260628\"},{\"id\":\"doubao-seedance-2-0-mini-260615\"},{\"id\":\"doubao-seedream-4-5-251128\"},{\"id\":\"doubao-seed-2-0\"}]}".utf8))
+        }
+        await store.test(.volcengineArk)
+        check(store.status(for: .volcengineArk) == .ready, "Ark key and model list were tested")
+        check(store.availableVideoModelIDs == ["doubao-seedance-2-0-mini-260615", "doubao-seedance-2-5-260628"],
+              "video picker uses exact IDs returned by Ark")
+        check(store.availableImageModelIDs == ["doubao-seedream-4-5-251128"], "image picker uses Ark IDs")
+        check(store.preferredVideoModelID == "doubao-seedance-2-5-260628", "test preserves quality-first choice")
+        store.preferredVideoModelID = "doubao-seedance-2-0-mini-260615"
+        let reloaded = AIGatewayStore(defaults: defaults, keychain: keychain)
+        check(reloaded.preferredVideoModelID == "doubao-seedance-2-0-mini-260615", "chosen media model persists exactly")
+
+        store.setDefaultModelID("", for: .volcengineArk)
+        store.defaultTextModel = nil
+        MockURLProtocol.reset { _, _ in
+            (200, Data("{\"data\":[{\"id\":\"doubao-seedance-2-5-260628\"},{\"id\":\"doubao-seedream-4-5-251128\"}]}".utf8))
+        }
+        await store.test(.volcengineArk)
+        check(store.configuration(for: .volcengineArk).lastTestSucceeded == true && store.defaultTextModel == nil,
+              "Ark media-only account does not become an unusable text-chat default")
+
+        try? store.setAPIKey("NEW-FAKE-ARK-KEY", for: .volcengineArk)
+        check(store.availableVideoModelIDs.isEmpty, "changing credentials invalidates listed-model status")
+        check(store.preferredVideoModelID == "doubao-seedance-2-0-mini-260615", "invalidated test does not silently replace model")
+        let payload = String(decoding: defaults.data(forKey: AIGatewayStore.defaultsKey) ?? Data(), as: UTF8.self)
+        check(!payload.contains("FAKE-ARK-KEY"), "media preferences never persist keys")
+    }
+
+    @MainActor
+    static func geminiMediaModels() async {
+        let suiteName = "FocusStudio.AIGatewayTests.veo.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let keychain = InMemoryKeychainStore(values: ["googleGemini": "FAKE-GEMINI-KEY"])
+        let store = AIGatewayStore(defaults: defaults, keychain: keychain, session: MockURLProtocol.makeSession())
+        store.preferredVideoProvider = .gemini
+        check(store.preferredVideoModelID == AIGatewayStore.recommendedGeminiVideoModelID,
+              "switching to Gemini picks a visible Veo model instead of keeping Seedance")
+        check(store.availableVideoModelIDs.isEmpty && !store.isVideoModelListed(store.preferredVideoModelID),
+              "preset Veo ID is not falsely marked as listed before testing")
+
+        MockURLProtocol.reset { request, _ in
+            guard request.url?.host == "generativelanguage.googleapis.com",
+                  request.url?.path == "/v1beta/models",
+                  request.value(forHTTPHeaderField: "x-goog-api-key") == "FAKE-GEMINI-KEY",
+                  request.url?.absoluteString.contains("FAKE-GEMINI-KEY") == false
+            else { return (401, Data()) }
+            return (200, Data("{\"models\":[{\"name\":\"models/veo-3.1-generate-preview\"},{\"name\":\"models/veo-3.1-fast-generate-preview\"},{\"name\":\"models/gemini-2.5-pro\"}]}".utf8))
+        }
+        await store.test(.googleGemini)
+        check(store.status(for: .googleGemini) == .ready, "Gemini key test succeeds without a paid task")
+        check(store.availableVideoModelIDs == ["veo-3.1-fast-generate-preview", "veo-3.1-generate-preview"],
+              "Veo choices retain the exact IDs listed by Gemini")
+        check(store.isVideoModelListed("veo-3.1-generate-preview") && store.videoModelChoices.contains("doubao-seedance-2-5-260628"),
+              "model catalog offers both providers and lists only verified IDs")
+        check(store.defaultTextModel == nil && store.availableDefaultSelections.isEmpty,
+              "Veo-only provider cannot become the conversational default")
+        store.preferredVideoModelID = "doubao-seedance-2-5-260628"
+        check(store.preferredVideoProvider == .ark, "choosing a Seedance ID switches the video provider")
+        let reloaded = AIGatewayStore(defaults: defaults, keychain: keychain)
+        check(reloaded.preferredVideoProvider == .ark && reloaded.preferredVideoModelID == store.preferredVideoModelID,
+              "video provider and exact model ID persist together")
     }
 }
 

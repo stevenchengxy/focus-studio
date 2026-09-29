@@ -109,7 +109,7 @@ IMAGE_MODELS: Dict[str, Dict[str, Any]] = {
     "doubao-seedream-4-0-250828": {"yuan_per_image": 0.20, "pricing_note": "≈0.2 元/张", "tier": "budget"},
 }
 
-DEFAULT_VIDEO_MODEL = "doubao-seedance-2-0-mini-260615"
+DEFAULT_VIDEO_MODEL = "doubao-seedance-2-5-260628"
 DEFAULT_IMAGE_MODEL = "doubao-seedream-4-5-251128"
 
 VIDEO_RATIOS = ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"]

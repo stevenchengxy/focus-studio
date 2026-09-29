@@ -16,6 +16,8 @@ struct EditorMediaLibraryView: View {
     let onImportShared: (UUID) -> Void
     let onSaveShared: (UUID) -> Void
     @State private var showingShared = false
+    @State private var projectPreviewAsset: DemoMediaAsset?
+    @State private var sharedPreviewAsset: DemoMediaAsset?
 
     private let columns = [GridItem(.flexible(), spacing: 7), GridItem(.flexible(), spacing: 7)]
 
@@ -71,6 +73,7 @@ struct EditorMediaLibraryView: View {
                     ForEach(assets) { asset in
                         mediaCard(asset)
                             .contextMenu {
+                                Button("Preview") { projectPreviewAsset = asset }
                                 Button("Save to shared library") { onSaveShared(asset.id) }
                             }
                     }
@@ -92,22 +95,41 @@ struct EditorMediaLibraryView: View {
                     ScrollView {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 12)], spacing: 12) {
                             ForEach(sharedAssets) { asset in
-                                Button {
-                                    onImportShared(asset.id)
-                                    showingShared = false
-                                } label: {
-                                    VStack(alignment: .leading, spacing: 5) {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Button { sharedPreviewAsset = asset } label: {
                                         EditorMediaPoster(asset: asset)
                                             .frame(height: 80)
                                             .clipShape(RoundedRectangle(cornerRadius: 7))
-                                        Text(asset.title).lineLimit(1)
-                                        Text(asset.kind == .image ? L10n.tr("Image") : asset.duration.editorTimecode)
-                                            .foregroundStyle(StudioTheme.secondaryText)
+                                            .overlay {
+                                                if asset.kind == .video {
+                                                    Image(systemName: "play.fill")
+                                                        .font(.system(size: 11, weight: .semibold))
+                                                        .foregroundStyle(.white)
+                                                        .frame(width: 30, height: 30)
+                                                        .background(.black.opacity(0.72), in: Circle())
+                                                }
+                                            }
                                     }
-                                    .font(.system(size: 11))
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel(L10n.format("Preview %@", asset.title))
+                                    Text(asset.title).lineLimit(1)
+                                        .font(.system(size: 11))
+                                    HStack(spacing: 4) {
+                                        Text(asset.kind == .image ? L10n.tr("Image") : asset.duration.editorTimecode)
+                                            .font(.system(size: 10))
+                                            .foregroundStyle(StudioTheme.secondaryText)
+                                        Spacer(minLength: 2)
+                                        Button("Add") {
+                                            onImportShared(asset.id)
+                                            showingShared = false
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                        .controlSize(.mini)
+                                        .accessibilityIdentifier("media.shared.add.\(asset.id.uuidString)")
+                                    }
                                 }
-                                .buttonStyle(.plain)
+                                .padding(6)
+                                .background(StudioTheme.panelRaised, in: RoundedRectangle(cornerRadius: 9))
                                 .accessibilityIdentifier("media.shared.\(asset.id.uuidString)")
                             }
                         }
@@ -116,6 +138,12 @@ struct EditorMediaLibraryView: View {
             }
             .padding(20)
             .frame(minWidth: 480, minHeight: 330)
+            .sheet(item: $sharedPreviewAsset) { asset in
+                AssistantMediaPreviewSheet(url: URL(fileURLWithPath: asset.filePath), title: asset.title)
+            }
+        }
+        .sheet(item: $projectPreviewAsset) { asset in
+            AssistantMediaPreviewSheet(url: URL(fileURLWithPath: asset.filePath), title: asset.title)
         }
     }
 

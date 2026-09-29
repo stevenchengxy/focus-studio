@@ -156,10 +156,12 @@ enum CLIRunner {
         arguments: [String],
         environment: [String: String],
         currentDirectory: String?,
-        timeout: TimeInterval
+        timeout: TimeInterval,
+        inputData: Data? = nil
     ) async -> CLIRunResult {
         await withCheckedContinuation { continuation in
-            CLIRun(executable: executable, arguments: arguments, environment: environment, currentDirectory: currentDirectory, timeout: timeout)
+            CLIRun(executable: executable, arguments: arguments, environment: environment,
+                   currentDirectory: currentDirectory, timeout: timeout, inputData: inputData)
                 .start { continuation.resume(returning: $0) }
         }
     }
@@ -167,6 +169,8 @@ enum CLIRunner {
 
 private final class CLIRun: @unchecked Sendable {
     private let process = Process()
+    private let input: Pipe?
+    private let inputData: Data?
     private let output = Pipe()
     private let error = Pipe()
     private let timeout: TimeInterval
@@ -178,12 +182,15 @@ private final class CLIRun: @unchecked Sendable {
     private var timedOut = false
     private var completion: (@Sendable (CLIRunResult) -> Void)?
 
-    init(executable: String, arguments: [String], environment: [String: String], currentDirectory: String?, timeout: TimeInterval) {
+    init(executable: String, arguments: [String], environment: [String: String], currentDirectory: String?,
+         timeout: TimeInterval, inputData: Data?) {
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         process.environment = environment
         if let currentDirectory { process.currentDirectoryURL = URL(fileURLWithPath: currentDirectory, isDirectory: true) }
-        process.standardInput = FileHandle.nullDevice
+        self.inputData = inputData
+        input = inputData == nil ? nil : Pipe()
+        process.standardInput = input ?? FileHandle.nullDevice
         process.standardOutput = output
         process.standardError = error
         self.timeout = max(0.1, timeout)
@@ -215,6 +222,10 @@ private final class CLIRun: @unchecked Sendable {
         }
         do {
             try process.run()
+            if let input, let inputData {
+                try? input.fileHandleForWriting.write(contentsOf: inputData)
+                try? input.fileHandleForWriting.close()
+            }
         } catch {
             output.fileHandleForReading.readabilityHandler = nil
             self.error.fileHandleForReading.readabilityHandler = nil
@@ -268,11 +279,55 @@ private final class CLIRun: @unchecked Sendable {
     }
 }
 
+/// Check that the bundled MCP executable actually launches and advertises its
+/// tools. Registration in Codex alone is insufficient (a moved app or broken
+/// helper can still appear in `codex mcp get`). The probe never calls an app
+/// tool and forbids the helper from launching Focus Studio.
+enum MCPHelperProbe {
+    private static let input = Data(([
+        #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"focus-studio-setup","version":"1.0"}}}"#,
+        #"{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}"#,
+        #"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#
+    ].joined(separator: "\n") + "\n").utf8)
+
+    /// Nil means the helper answered both MCP requests and includes the
+    /// recording/status tools. Otherwise the returned text is safe for UI.
+    static func failure(helperPath: String, environment: [String: String], homeDirectory: String) async -> String? {
+        var probeEnvironment = environment
+        probeEnvironment["FOCUS_STUDIO_MCP_NO_LAUNCH"] = "1"
+        let result = await CLIRunner.run(
+            helperPath, arguments: [], environment: probeEnvironment,
+            currentDirectory: homeDirectory, timeout: 8, inputData: input
+        )
+        guard result.succeeded else {
+            return "The Focus Studio MCP helper could not start: \(String(result.failureText.prefix(240)))"
+        }
+        var initialized = false
+        var hasTools = false
+        for line in result.standardOutput.split(whereSeparator: \.isNewline) {
+            guard let data = line.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let id = json["id"] as? Int, let response = json["result"] as? [String: Any]
+            else { continue }
+            if id == 1 {
+                let info = response["serverInfo"] as? [String: Any]
+                initialized = info?["name"] as? String == "focus-studio"
+            }
+            if id == 2, let tools = response["tools"] as? [[String: Any]] {
+                let names = Set(tools.compactMap { $0["name"] as? String })
+                hasTools = names.contains("get_status") && names.contains("start_recording")
+            }
+        }
+        return initialized && hasTools ? nil : "The Focus Studio MCP helper did not complete initialize and tools/list. Reinstall the current app build."
+    }
+}
+
 /// Where the CLIs are: the GUI app's own PATH is minimal (/usr/bin:/bin…),
 /// so the user's login shell is asked (`$SHELL -l -c 'command -v …'`, with
 /// a timeout) and the usual install folders are searched. The first
-/// candidate that answers `--version` wins, so a broken install (a Node shim
-/// whose package is gone) is skipped.
+/// candidate that answers `--version` wins for Claude. For Codex, the newest
+/// working version wins: an older CLI may report its version successfully but
+/// be unable to parse config.toml written by the current desktop app.
 struct MCPCLISearch: Sendable {
     /// Plain commands that sh, bash, zsh and fish all run.
     static let loginShellScript = "echo __FOCUS_STUDIO_CLAUDE__; command -v claude; echo __FOCUS_STUDIO_CODEX__; command -v codex; echo __FOCUS_STUDIO_PATH__; printf '%s\\n' $PATH"
@@ -319,6 +374,7 @@ struct MCPCLISearch: Sendable {
             candidates += (appPath + result.shellPath).map { ($0 as NSString).appendingPathComponent(kind.executableName) }
             if searchesStandardLocations { candidates += kind.standardLocations(home: homeDirectory) }
             var seen = Set<String>()
+            var chosenCodex: (path: String, version: CodexVersion?)?
             for candidate in candidates where candidate.hasPrefix("/") && seen.insert(candidate).inserted {
                 guard Self.isExecutableFile(candidate) else { continue }
                 let version = await CLIRunner.run(
@@ -327,10 +383,19 @@ struct MCPCLISearch: Sendable {
                     currentDirectory: homeDirectory, timeout: versionTimeout
                 )
                 if version.succeeded {
-                    result.executables[kind] = candidate
-                    break
+                    if kind == .codex {
+                        let parsed = CodexVersion(parsing: version.standardOutput + "\n" + version.standardError)
+                        if chosenCodex == nil || (parsed ?? CodexVersion(major: 0, minor: 0, patch: 0))
+                            > (chosenCodex?.version ?? CodexVersion(major: 0, minor: 0, patch: 0)) {
+                            chosenCodex = (candidate, parsed)
+                        }
+                    } else {
+                        result.executables[kind] = candidate
+                        break
+                    }
                 }
             }
+            if kind == .codex { result.executables[kind] = chosenCodex?.path }
         }
         return result
     }
@@ -530,13 +595,25 @@ final class MCPClientConnector: ObservableObject {
             if !result.timedOut, result.launchError == nil, text.range(of: "No MCP server", options: .caseInsensitive) != nil {
                 return .notConnected
             }
+            if kind == .codex,
+               text.range(of: "failed to load configuration", options: .caseInsensitive) != nil {
+                return .failed("This Codex CLI cannot read the current configuration. Update Codex, then check again. CLI: \(executable). \(result.failureText)")
+            }
             return .failed(result.failureText)
         }
         guard let registration = Self.parseRegistration(kind, output: result.standardOutput) else {
             return .failed("Could not read what \(kind.executableName) mcp get printed.")
         }
-        return Self.sameFile(registration.command, helperPath) && registration.arguments.isEmpty
-            ? .connected(registration) : .connectedElsewhere(registration)
+        guard Self.sameFile(registration.command, helperPath), registration.arguments.isEmpty else {
+            return .connectedElsewhere(registration)
+        }
+        let environment = search.commandEnvironment(for: helperPath, shellPath: located?.shellPath ?? [])
+        if let failure = await MCPHelperProbe.failure(
+            helperPath: helperPath, environment: environment, homeDirectory: search.homeDirectory
+        ) {
+            return .failed(failure)
+        }
+        return .connected(registration)
     }
 
     /// Reads `claude mcp get` text or `codex mcp get --json`.

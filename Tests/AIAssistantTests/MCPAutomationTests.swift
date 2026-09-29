@@ -42,7 +42,7 @@ extension AIAssistantTests {
         for mcpOnly in ["rename_project", "delete_project", "import_video", "create_screenshot_demo", "wait_for_job"] {
             check(!inAppNames.contains(mcpOnly), "\(mcpOnly) is not in the in-app catalog")
         }
-        check(inApp.count == 50 && Set(["get_project", "get_status", "get_timeline", "split_clip", "set_transition", "set_image_duration", "undo_clip_edit", "redo_clip_edit", "list_media_assets", "list_global_media_assets", "import_global_media_asset", "add_global_media_to_project", "import_media_asset", "insert_media_asset", "wait_for_recording", "prepare_demo_page", "run_demo_task", "perform_recording_text"]).isSubset(of: inAppNames), "the in-app catalog has its shared and project media tools: \(inApp.count)")
+        check(inApp.count == 51 && Set(["get_project", "get_status", "get_timeline", "split_clip", "set_transition", "set_image_duration", "undo_clip_edit", "redo_clip_edit", "list_media_assets", "list_global_media_assets", "import_global_media_asset", "add_global_media_to_project", "import_media_asset", "insert_media_asset", "prepare_clip_ai_reference", "wait_for_recording", "prepare_demo_page", "run_demo_task", "perform_recording_text"]).isSubset(of: inAppNames), "the in-app catalog has its shared and project media tools: \(inApp.count)")
 
         let scopes: [String: MCPToolScope] = [
             "get_status": .global, "list_projects": .global, "import_video": .global, "create_screenshot_demo": .global, "list_global_media_assets": .global, "import_global_media_asset": .global,

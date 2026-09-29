@@ -9,6 +9,7 @@ struct GlobalMediaLibrarySection: View {
     let onImport: () -> Void
     let onCreateWithAI: () -> Void
     @State private var showAll = false
+    @State private var previewAsset: DemoMediaAsset?
 
     private let columns = [GridItem(.adaptive(minimum: 165, maximum: 220), spacing: 14)]
 
@@ -55,24 +56,42 @@ struct GlobalMediaLibrarySection: View {
             } else {
                 LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
                     ForEach(Self.visibleAssets(assets, showAll: showAll)) { asset in
-                        VStack(alignment: .leading, spacing: 7) {
-                            EditorMediaPoster(asset: asset)
-                                .frame(height: 100)
-                                .frame(maxWidth: .infinity)
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
-                            Text(asset.title).lineLimit(1)
-                                .font(.system(size: 11, weight: .semibold))
-                            Text(asset.kind == .image ? L10n.tr("Image") : asset.duration.editorTimecode)
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundStyle(StudioTheme.secondaryText)
+                        Button { previewAsset = asset } label: {
+                            VStack(alignment: .leading, spacing: 7) {
+                                EditorMediaPoster(asset: asset)
+                                    .frame(height: 100)
+                                    .frame(maxWidth: .infinity)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    .overlay {
+                                        if asset.kind == .video {
+                                            Image(systemName: "play.fill")
+                                                .font(.system(size: 13, weight: .semibold))
+                                                .foregroundStyle(.white)
+                                                .frame(width: 34, height: 34)
+                                                .background(.black.opacity(0.72), in: Circle())
+                                        }
+                                    }
+                                Text(asset.title).lineLimit(1)
+                                    .font(.system(size: 11, weight: .semibold))
+                                Text(asset.kind == .image ? L10n.tr("Image") : asset.duration.editorTimecode)
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundStyle(StudioTheme.secondaryText)
+                            }
+                            .padding(7)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(StudioTheme.panelRaised, in: RoundedRectangle(cornerRadius: 11))
                         }
-                        .padding(7)
-                        .background(StudioTheme.panelRaised, in: RoundedRectangle(cornerRadius: 11))
+                        .buttonStyle(.plain)
+                        .help(L10n.format("Preview %@", asset.title))
                         .accessibilityElement(children: .combine)
+                        .accessibilityLabel(L10n.format("Preview %@", asset.title))
                         .accessibilityIdentifier("library.sharedMedia.asset.\(asset.id.uuidString)")
                     }
                 }
             }
+        }
+        .sheet(item: $previewAsset) { asset in
+            AssistantMediaPreviewSheet(url: URL(fileURLWithPath: asset.filePath), title: asset.title)
         }
     }
 }

@@ -18,19 +18,17 @@ pipeline, but works on its own for any short clip.
    `python3 ../_shared/ark_client.py probe-activation` - it is free and reports `activated` / `not-activated`
    per model. A `404 ModelNotOpen` on a real call means the same thing: stop, and ask the user to activate the
    model (火山方舟控制台 → 开通管理).
-3. **Estimate first**: every run supports `--dry-run`, which prints the exact request and the estimated cost
-   (tokens ≈ width × height × 24 fps × seconds / 1024). Show that number to the user before generating anything
-   above ~¥2, and default to the cheapest configuration while iterating on prompts.
+3. **Select and estimate first**: pass the exact user-selected model with `--model`; `--dry-run` prints the request and an estimated cost (tokens ≈ width × height × 24 fps × seconds / 1024). Confirm that exact model and estimate before a paid generation. Do not silently switch to a cheaper model.
 
 ## Quick start
 
 ```bash
 S=skills/ark-video-clip/scripts
 # 1. look at the request and cost, no network
-python3 $S/generate_clip.py --prompt "abstract dark purple glass UI panels, slow camera push-in, no text" \
-  --model doubao-seedance-2-0-mini-260615 --resolution 480p --ratio 16:9 --duration 5 --out ai-clips/hero.mp4 --dry-run
+python3 $S/generate_clip.py --prompt "quiet editorial plate with space for authentic product UI, one subtle guide line, no text or fake charts" \
+  --model doubao-seedance-2-5-260628 --resolution 720p --ratio 16:9 --duration 6 --out ai-clips/hero.mp4 --dry-run
 # 2. generate (creates the task, polls, downloads; writes ai-clips/hero.mp4 + hero.mp4.json + ai-clips/.cache/)
-python3 $S/generate_clip.py --prompt "..." --model doubao-seedance-2-0-mini-260615 --resolution 480p --duration 5 --out ai-clips/hero.mp4
+python3 $S/generate_clip.py --prompt "..." --model doubao-seedance-2-5-260628 --resolution 720p --duration 6 --out ai-clips/hero.mp4
 # 3. verify
 python3 skills/product-demo-composer/scripts/probe_media.py --brief ai-clips/hero.mp4
 ```
