@@ -943,6 +943,9 @@ struct AIAssistantTests {
         func captureRecordingFrame(recordingID: UUID, to url: URL) async throws -> AIJSONValue {
             recordingFrameCalls.append((recordingID, url))
             if let recordingFrameError { throw recordingFrameError }
+            // The real capture writes its image. Reserve this output path so
+            // successive fake observations also have distinct attachments.
+            try Data().write(to: url)
             return ["recording_id": AIJSONValue(recordingID.uuidString), "observation_id": AIJSONValue(UUID().uuidString),
                     "coordinate_space": "normalized_uncropped_source", "path": AIJSONValue(url.path)]
         }
