@@ -32,7 +32,9 @@ swiftc -parse-as-library -g \
   Sources/FocusStudioAutomation/AIAssistantModels.swift \
   Sources/FocusStudioAutomation/CodexRecordingPlan.swift \
   Sources/FocusStudioAutomation/ArkMediaClient.swift \
+  Sources/FocusStudioAutomation/VeoMediaClient.swift \
   Sources/FocusStudioAutomation/AIAssistantTools.swift \
+  Sources/FocusStudioAutomation/ClipAIReferenceTool.swift \
   Sources/FocusStudioAutomation/AIAssistantAppControl.swift \
   Sources/FocusStudioAutomation/RecordingActionTool.swift \
   Sources/FocusStudioAutomation/RecordingTextTool.swift \
@@ -59,7 +61,9 @@ swiftc -parse-as-library -g \
   Tests/AIAssistantTests/TimelineEditingTests.swift \
   Tests/AIAssistantTests/MediaLibraryToolsTests.swift \
   Tests/AIAssistantTests/VideoTimelineTests.swift \
+  Tests/AIAssistantTests/VeoProviderTests.swift \
   "${CORE_OBJECTS[@]}" \
   -o "$TEST_DIR/AIAssistantTests"
 chmod +x Tests/AIAssistantTests/fake-ark.py
+chmod +x Tests/AIAssistantTests/fake-veo.py
 "$TEST_DIR/AIAssistantTests" "$PROJECT_DIR/Tests/AIAssistantTests/fake-ark.py"

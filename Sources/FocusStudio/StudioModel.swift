@@ -391,11 +391,22 @@ final class StudioModel: ObservableObject {
                 try self.applyAssistantEdit(mutate)
             },
             // The env file is a fallback so the skills' key works in-app without re-entering it.
-            arkAPIKey: { [weak self] in self?.aiGateway.apiKey(for: .volcengineArk) ?? Self.arkEnvironmentKey() },
+            arkAPIKey: { [weak self] in
+                guard let self, self.aiGateway.configuration(for: .volcengineArk).isEnabled else { return nil }
+                return self.aiGateway.apiKey(for: .volcengineArk) ?? Self.arkEnvironmentKey()
+            },
             arkBaseURL: arkBase,
             projectsDirectory: store.projectsDirectory,
             app: self
         )
+        context.preferredVideoModelID = { [weak self] in self?.aiGateway.preferredVideoModelID }
+        context.geminiVideoAPIKey = { [weak self] in
+            guard let self, self.aiGateway.configuration(for: .googleGemini).isEnabled else { return nil }
+            return self.aiGateway.apiKey(for: .googleGemini)
+        }
+        context.geminiVideoBaseURL = URL(
+            string: aiGateway.configuration(for: .googleGemini).effectiveBaseURL
+        ) ?? URL(string: "https://generativelanguage.googleapis.com/v1beta")!
         // macOS asks about the microphone before the countdown; the in-app
         // assistant then records as the person asked, whatever the answer,
         // like their own Record. An AI tool's call replaces this

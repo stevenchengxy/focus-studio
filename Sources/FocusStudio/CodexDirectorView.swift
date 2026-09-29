@@ -56,7 +56,7 @@ struct AssistantWorkspaceView: View {
                         .accessibilityLabel("Dismiss")
                 }.padding(14).background(StudioTheme.yellow.opacity(0.07))
             }
-            AIAssistantPanel(session: session, modelLabel: model.assistantModelLabel,
+            AIAssistantPanel(session: session, gateway: model.aiGateway, modelLabel: model.assistantModelLabel,
                              openSettings: openSettings, showsPlan: false,
                              showsHeader: false,
                              onSubmit: { text, attachments in await coordinator.send(text, attachments: attachments) },

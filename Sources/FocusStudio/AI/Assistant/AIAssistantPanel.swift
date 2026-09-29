@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import AVKit
 import FocusStudioAutomation
 import SwiftUI
 import UniformTypeIdentifiers
@@ -10,6 +11,8 @@ import UniformTypeIdentifiers
 /// the library.
 struct AIAssistantPanel: View {
     @ObservedObject var session: AIAssistantSession
+    @ObservedObject var gateway: AIGatewayStore
+    @ObservedObject private var draftRouter = AssistantDraftRouter.shared
     let modelLabel: String
     let onClose: (() -> Void)?
     let openSettings: (() -> Void)?
@@ -29,6 +32,8 @@ struct AIAssistantPanel: View {
     @State private var renameDraft = ""
     @State private var deletingConversationID: UUID?
     @State private var isSubmitting = false
+    @State private var queuedClipDraft: String?
+    @State private var videoModelSelectionError: String?
     @State private var transcriptFollowRequest = UUID()
     @FocusState private var composerFocused: Bool
     /// What was typed before the mic started; partial transcripts append to it.
@@ -47,8 +52,11 @@ struct AIAssistantPanel: View {
         "Create a short, text-free product B-roll clip. Ask about the desired look first, then save it to my shared media library.",
     ]
 
+    private static let promoShotPlanningRequest = "Help me plan 2–3 product-led promo shots for my demo. Separate real product UI from AI-generated effects. For each shot, give me a keyframe prompt, a motion prompt, and how it fits my selected video model. Ask for my product URL or screenshots if needed. Do not generate paid media yet."
+
     init(
         session: AIAssistantSession,
+        gateway: AIGatewayStore,
         modelLabel: String,
         onClose: (() -> Void)? = nil,
         openSettings: (() -> Void)? = nil,
@@ -61,6 +69,7 @@ struct AIAssistantPanel: View {
         hasEditableProject: Bool = false
     ) {
         self.session = session
+        self.gateway = gateway
         self.modelLabel = modelLabel
         self.onClose = onClose
         self.openSettings = openSettings
@@ -153,6 +162,16 @@ struct AIAssistantPanel: View {
         .onAppear {
             lastSpokenTimestamp = Date()
         }
+        .task(id: draftRouter.request?.id) {
+            guard let request = draftRouter.request else { return }
+            if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                draft = request.text
+                composerFocused = isActive
+            } else {
+                queuedClipDraft = request.text
+            }
+            draftRouter.consume(request.id)
+        }
         .onDisappear {
             deactivateComposer()
         }
@@ -162,6 +181,7 @@ struct AIAssistantPanel: View {
         }
         .onChange(of: session.pendingConfirmation?.id) { _, id in
             if id != nil, speechInput.isActive { speechInput.stop() }
+            videoModelSelectionError = nil
         }
         .onChange(of: speechInput.transcript) { _, transcript in
             guard isActive else { return }
@@ -670,13 +690,13 @@ struct AIAssistantPanel: View {
     private func standardConfirmationCard(_ pending: AIAssistantSession.PendingToolCall) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Image(systemName: pending.isPaid ? "yensign.circle.fill" : "record.circle")
+                Image(systemName: pending.isPaid ? Self.costIcon(pending.estimate) : "record.circle")
                     .foregroundStyle(StudioTheme.yellow)
                 Text(LocalizedStringKey(pending.isPaid ? "Confirm generation" : "Confirm recording action"))
                     .font(.system(size: 12, weight: .semibold))
                 Spacer(minLength: 0)
                 if pending.isPaid {
-                    Text(verbatim: "≈ ¥" + String(format: "%.2f", pending.estimate.yuan))
+                    Text(verbatim: Self.formattedCost(pending.estimate))
                         .font(.system(size: 13, weight: .semibold))
                 }
             }
@@ -684,6 +704,9 @@ struct AIAssistantPanel: View {
                 .font(.system(size: 11))
                 .foregroundStyle(StudioTheme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
+            if pending.toolName == "generate_video" {
+                videoModelConfirmation(pending)
+            }
             HStack(spacing: 8) {
                 Spacer(minLength: 0)
                 Button("Cancel") { session.cancelPending() }
@@ -708,6 +731,111 @@ struct AIAssistantPanel: View {
         .pulsingBorder(StudioTheme.purple, cornerRadius: 11)
         .padding(.horizontal, 12)
         .padding(.bottom, 10)
+    }
+
+    private static func formattedCost(_ estimate: AIToolCostEstimate) -> String {
+        let code = estimate.currencyCode.uppercased()
+        let symbol: String
+        switch code {
+        case "USD": symbol = "$"
+        case "CNY": symbol = "¥"
+        default: symbol = ""
+        }
+        return "≈ \(symbol)\(String(format: "%.2f", estimate.yuan)) \(code)"
+    }
+
+    private static func costIcon(_ estimate: AIToolCostEstimate) -> String {
+        switch estimate.currencyCode.uppercased() {
+        case "USD": return "dollarsign.circle.fill"
+        case "CNY": return "yensign.circle.fill"
+        default: return "creditcard.circle.fill"
+        }
+    }
+
+    private func videoModelConfirmation(_ pending: AIAssistantSession.PendingToolCall) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                Text("Video model")
+                    .font(.system(size: 11, weight: .semibold))
+                Spacer(minLength: 4)
+                videoModelMenu(selectedID: pending.selectedVideoModelID ?? gateway.preferredVideoModelID) { id in
+                    if session.setPendingVideoModel(id) {
+                        gateway.preferredVideoModelID = id
+                        videoModelSelectionError = nil
+                    } else {
+                        videoModelSelectionError = L10n.tr("This model cannot use the current generation settings. Choose another model or adjust the request.")
+                    }
+                }
+            }
+            if let videoModelSelectionError {
+                Text(verbatim: videoModelSelectionError)
+                    .font(.system(size: 10))
+                    .foregroundStyle(StudioTheme.yellow)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text("Review the model and updated estimate before paying. Your selection is used for this generation.")
+                .font(.system(size: 10))
+                .foregroundStyle(StudioTheme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            if let selectedID = pending.selectedVideoModelID,
+               !gateway.isVideoModelListed(selectedID) {
+                Label("This model is not listed for your configured video provider. Test the connection in Settings before generating.", systemImage: "exclamationmark.triangle")
+                    .font(.system(size: 10))
+                    .foregroundStyle(StudioTheme.yellow)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(9)
+        .background(StudioTheme.window, in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityIdentifier("assistant.videoModelConfirmation")
+    }
+
+    private func videoModelMenu(selectedID: String, onSelect: @escaping (String) -> Void) -> some View {
+        Menu {
+            ForEach(videoModelMenuIDs(selectedID: selectedID), id: \.self) { id in
+                Button {
+                    onSelect(id)
+                } label: {
+                    Label {
+                        Text(verbatim: videoModelOptionTitle(id))
+                    } icon: {
+                        Image(systemName: id == selectedID ? "checkmark.circle.fill" : "film")
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Text(verbatim: gateway.videoModelDisplayName(selectedID))
+                    .lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+            }
+            .font(.system(size: 11, weight: .medium))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize(horizontal: true, vertical: false)
+        .accessibilityIdentifier("assistant.videoModelPicker")
+    }
+
+    private func videoModelMenuIDs(selectedID: String) -> [String] {
+        var ids = gateway.videoModelChoices
+        if !ids.contains(selectedID) { ids.insert(selectedID, at: 0) }
+        return ids
+    }
+
+    private func videoModelOptionTitle(_ id: String) -> String {
+        let name = gateway.videoModelDisplayName(id)
+        let provider: String?
+        switch gateway.videoModelProvider(for: id) {
+        case .ark: provider = "Ark"
+        case .gemini: provider = "Google"
+        case nil: provider = nil
+        }
+        let detail = session.videoModelChoices.first(where: { $0.id == id })?.detail
+        let verified = gateway.isVideoModelListed(id)
+        return [name, provider, detail, verified ? nil : L10n.tr("Not verified")]
+            .compactMap { $0 }
+            .joined(separator: " · ")
     }
 
     private func demoProgressCard(_ task: AIDemoTaskProgress) -> some View {
@@ -827,18 +955,62 @@ struct AIAssistantPanel: View {
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if hasEditableProject, !session.isRunning, session.pendingConfirmation == nil, draft.isEmpty {
-                Button {
-                    draft = L10n.tr(Self.exampleRequests[2])
-                    composerFocused = true
-                } label: {
-                    Label("Polish current video", systemImage: "scissors")
-                        .font(.system(size: 12, weight: .medium))
+            if let queuedClipDraft {
+                HStack(spacing: 7) {
+                    Image(systemName: "sparkles.rectangle.stack")
+                        .foregroundStyle(StudioTheme.purple)
+                    Text("Selected clip request is ready")
+                        .font(.system(size: 11, weight: .medium))
+                    Spacer(minLength: 2)
+                    Button("Append") {
+                        draft += "\n\n" + queuedClipDraft
+                        self.queuedClipDraft = nil
+                        composerFocused = true
+                    }
+                    .buttonStyle(.link)
+                    Button("Replace") {
+                        draft = queuedClipDraft
+                        self.queuedClipDraft = nil
+                        composerFocused = true
+                    }
+                    .buttonStyle(.link)
+                    Button { self.queuedClipDraft = nil } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Dismiss selected clip request")
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(StudioTheme.purple)
-                .help("Prepare a request to shorten waits and adjust zooms in an editable copy.")
-                .accessibilityIdentifier("assistant.polishVideo")
+                .padding(7)
+                .background(StudioTheme.purpleSoft, in: RoundedRectangle(cornerRadius: 8))
+                .accessibilityIdentifier("assistant.queuedClipDraft")
+            }
+            if !session.isRunning, session.pendingConfirmation == nil, draft.isEmpty {
+                HStack(spacing: 12) {
+                    Button {
+                        draft = L10n.tr(Self.promoShotPlanningRequest)
+                        composerFocused = true
+                    } label: {
+                        Label("Plan promo shots", systemImage: "sparkles.tv")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(StudioTheme.purple)
+                    .help("Draft shot concepts and prompts first; no paid generation starts.")
+                    .accessibilityIdentifier("assistant.planPromoShots")
+                    if hasEditableProject {
+                        Button {
+                            draft = L10n.tr(Self.exampleRequests[2])
+                            composerFocused = true
+                        } label: {
+                            Label("Polish current video", systemImage: "scissors")
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(StudioTheme.purple)
+                        .help("Prepare a request to shorten waits and adjust zooms in an editable copy.")
+                        .accessibilityIdentifier("assistant.polishVideo")
+                    }
+                }
             }
             if !pendingAttachments.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -869,6 +1041,24 @@ struct AIAssistantPanel: View {
                     }
                 }
             }
+            HStack(spacing: 7) {
+                Image(systemName: "film")
+                    .foregroundStyle(StudioTheme.purple)
+                Text("AI video")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(StudioTheme.secondaryText)
+                videoModelMenu(selectedID: gateway.preferredVideoModelID) { id in
+                    gateway.preferredVideoModelID = id
+                }
+                Spacer(minLength: 0)
+                if !gateway.isVideoModelListed(gateway.preferredVideoModelID) {
+                    Button("Set up") { openSettings?() }
+                        .buttonStyle(.link)
+                        .font(.system(size: 10))
+                        .help("Configure and test a video model in Settings.")
+                }
+            }
+            .accessibilityIdentifier("assistant.videoModelPreference")
             composerField
             HStack(spacing: 8) {
                 Button(action: attachFiles) {
@@ -1135,8 +1325,8 @@ struct AIAssistantPanel: View {
 
 // MARK: - Attachments
 
-/// Thumbnails for generated files. Images and videos render a preview; other
-/// files show an icon. A click opens the file with its default app.
+/// Thumbnails for generated files. Video and image attachments preview inside
+/// Focus Studio; audio and other files retain the system-open behavior.
 struct AssistantAttachmentGrid: View {
     let urls: [URL]
 
@@ -1152,32 +1342,57 @@ struct AssistantAttachmentGrid: View {
 struct AssistantAttachmentThumbnail: View {
     let url: URL
     @State private var image: NSImage?
+    @State private var showsPreview = false
+
+    private var kind: AIToolPaths.MediaKind? { AIToolPaths.kind(of: url) }
+    private var exists: Bool { FileManager.default.fileExists(atPath: url.path) }
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(Color.black.opacity(0.35))
-            if let image {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } else {
-                Image(systemName: AIAssistantPanel.attachmentIcon(url))
-                    .font(.system(size: 16))
-                    .foregroundStyle(StudioTheme.secondaryText)
+        Button {
+            if kind == .video || kind == .image {
+                showsPreview = true
+            } else if exists {
+                NSWorkspace.shared.open(url)
             }
+        } label: {
+            ZStack {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Color.black.opacity(0.35))
+                if let image {
+                    Image(nsImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } else {
+                    Image(systemName: exists ? AIAssistantPanel.attachmentIcon(url) : "exclamationmark.triangle")
+                        .font(.system(size: 16))
+                        .foregroundStyle(StudioTheme.secondaryText)
+                }
+                if kind == .video, exists {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 30, height: 30)
+                        .background(.black.opacity(0.72), in: Circle())
+                }
+            }
+            .frame(height: 60)
+            .frame(maxWidth: .infinity)
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(StudioTheme.line, lineWidth: 1)
+            )
         }
-        .frame(height: 60)
-        .frame(maxWidth: .infinity)
-        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .stroke(StudioTheme.line, lineWidth: 1)
-        )
-        .help(url.lastPathComponent)
-        .onTapGesture { NSWorkspace.shared.open(url) }
+        .buttonStyle(.plain)
+        .disabled(!exists)
+        .help(exists ? L10n.format("Preview %@", url.lastPathComponent) : L10n.tr("This media file is no longer available."))
+        .accessibilityLabel(exists ? L10n.format("Preview %@", url.lastPathComponent) : L10n.format("Missing media: %@", url.lastPathComponent))
+        .accessibilityIdentifier("assistant.attachment.preview")
+        .sheet(isPresented: $showsPreview) {
+            AssistantMediaPreviewSheet(url: url, image: image)
+        }
         .task(id: url) {
-            image = await Self.thumbnail(for: url)
+            image = exists ? await Self.thumbnail(for: url) : nil
         }
     }
 
@@ -1205,5 +1420,78 @@ struct AssistantAttachmentThumbnail: View {
         default:
             return nil
         }
+    }
+}
+
+/// The generated asset stays in the assistant while the user checks motion,
+/// pacing and sound before adding it to a project. AVPlayer is paused when the
+/// sheet closes so hidden previews never continue playing audio.
+struct AssistantMediaPreviewSheet: View {
+    let url: URL
+    let title: String?
+    @State private var image: NSImage?
+    @State private var player: AVPlayer
+    @Environment(\.dismiss) private var dismiss
+
+    init(url: URL, image: NSImage? = nil, title: String? = nil) {
+        self.url = url
+        self.title = title
+        _image = State(initialValue: image)
+        _player = State(initialValue: AIToolPaths.kind(of: url) == .video ? AVPlayer(url: url) : AVPlayer())
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: AIAssistantPanel.attachmentIcon(url))
+                    .foregroundStyle(StudioTheme.purple)
+                Text(verbatim: title ?? url.lastPathComponent)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 8)
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                } label: {
+                    Label("Reveal", systemImage: "magnifyingglass")
+                }
+                .buttonStyle(.bordered)
+                Button("Done") { dismiss() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(StudioTheme.purple)
+            }
+            .padding(14)
+            Divider()
+            Group {
+                if !FileManager.default.fileExists(atPath: url.path) {
+                    ContentUnavailableView("Media unavailable", systemImage: "film", description: Text("The file was moved or deleted."))
+                } else if AIToolPaths.kind(of: url) == .video {
+                    VideoPlayer(player: player)
+                        .accessibilityIdentifier("assistant.videoPreview")
+                } else if let image {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFit()
+                } else {
+                    ProgressView("Loading preview…")
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.black)
+        }
+        .frame(minWidth: 600, minHeight: 430)
+        .background(StudioTheme.panel)
+        .task(id: url) {
+            if image == nil, AIToolPaths.kind(of: url) == .image {
+                image = await AssistantAttachmentThumbnail.thumbnail(for: url, maximumSide: 2400)
+            }
+        }
+        .onAppear {
+            if AIToolPaths.kind(of: url) == .video,
+               FileManager.default.fileExists(atPath: url.path) {
+                player.play()
+            }
+        }
+        .onDisappear { player.pause() }
     }
 }

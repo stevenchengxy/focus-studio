@@ -706,6 +706,27 @@ struct EditorInspectorView: View {
                 }
 
                 if selectedAsset?.kind != .image {
+                InspectorSection("AI variation") {
+                    Button {
+                        let request = [
+                            L10n.tr("Visual change I want for this clip: [describe here]"),
+                            L10n.format("Project ID: %@\nClip ID: %@", project.id.uuidString, placement.clip.id.uuidString),
+                            L10n.tr("Use prepare_clip_ai_reference with these exact IDs to prepare a non-destructive reference. Suggest 2–3 visual treatments that keep real product UI and source audio separate from generated visuals. Do not call paid generation or alter the original clip until I confirm the treatment, video model and estimated price."),
+                        ].joined(separator: "\n\n")
+                        AssistantDraftRouter.shared.queue(request)
+                        onCreateMediaWithAI()
+                    } label: {
+                        Label("AI optimize this clip", systemImage: "sparkles.rectangle.stack")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isVideoEditing || model.assistantSession.isRunning || model.assistantSession.pendingConfirmation != nil)
+                    .accessibilityIdentifier("video.aiOptimizeClip")
+                    Text("Opens a draft for this clip. Your recording stays unchanged until you approve an edit.")
+                        .font(.system(size: 9))
+                        .foregroundStyle(StudioTheme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 InspectorSection("Clip sound") {
                     Text("Captured sound for this clip")
                         .font(.system(size: 9))

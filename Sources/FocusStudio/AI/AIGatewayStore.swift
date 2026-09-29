@@ -185,6 +185,39 @@ enum ArkEnvironmentImport: Equatable, Sendable {
 struct AIGatewayPreferences: Codable, Equatable {
     var providers: [AIProviderConfiguration] = []
     var defaultTextModel: AITextModelSelection?
+    var preferredVideoProvider: AIVideoProvider = .ark
+    /// Exact Ark model IDs. Media generation must never silently downgrade to
+    /// a cheaper model when the selected one is unavailable.
+    var preferredVideoModelID = AIGatewayStore.recommendedVideoModelID
+    var preferredImageModelID = AIGatewayStore.recommendedImageModelID
+
+    private enum CodingKeys: String, CodingKey {
+        case providers, defaultTextModel, preferredVideoProvider, preferredVideoModelID, preferredImageModelID
+    }
+
+    init(providers: [AIProviderConfiguration] = [], defaultTextModel: AITextModelSelection? = nil,
+         preferredVideoProvider: AIVideoProvider = .ark,
+         preferredVideoModelID: String = AIGatewayStore.recommendedVideoModelID,
+         preferredImageModelID: String = AIGatewayStore.recommendedImageModelID) {
+        self.providers = providers
+        self.defaultTextModel = defaultTextModel
+        self.preferredVideoProvider = preferredVideoProvider
+        self.preferredVideoModelID = preferredVideoModelID
+        self.preferredImageModelID = preferredImageModelID
+    }
+
+    /// Older installations have no media preferences. Preserve their provider
+    /// and text settings while providing an explicit, quality-first video pick.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        providers = try container.decodeIfPresent([AIProviderConfiguration].self, forKey: .providers) ?? []
+        defaultTextModel = try container.decodeIfPresent(AITextModelSelection.self, forKey: .defaultTextModel)
+        preferredVideoProvider = try container.decodeIfPresent(AIVideoProvider.self, forKey: .preferredVideoProvider) ?? .ark
+        preferredVideoModelID = try container.decodeIfPresent(String.self, forKey: .preferredVideoModelID)
+            ?? AIGatewayStore.recommendedVideoModelID
+        preferredImageModelID = try container.decodeIfPresent(String.self, forKey: .preferredImageModelID)
+            ?? AIGatewayStore.recommendedImageModelID
+    }
 }
 
 enum AIProviderStatus: Equatable {
@@ -202,11 +235,39 @@ enum AIProviderStatus: Equatable {
 final class AIGatewayStore: ObservableObject {
     nonisolated static let defaultsKey = "aiGateway.v1"
     nonisolated static let keychainService = "com.local.focusstudio.ai"
+    /// Exact ID from Ark's model list. Keeping the dated ID visible makes the
+    /// requested model release reviewable before a paid generation task.
+    nonisolated static let recommendedVideoModelID = "doubao-seedance-2-5-260628"
+    nonisolated static let recommendedGeminiVideoModelID = "veo-3.1-generate-preview"
+    nonisolated static let geminiVideoModelIDs = [
+        "veo-3.1-generate-preview", "veo-3.1-fast-generate-preview", "veo-3.1-lite-generate-preview"
+    ]
+    nonisolated static let recommendedImageModelID = "doubao-seedream-4-5-251128"
 
     @Published var providers: [AIProviderConfiguration] {
         didSet { persist() }
     }
     @Published var defaultTextModel: AITextModelSelection? {
+        didSet { persist() }
+    }
+    @Published var preferredVideoProvider: AIVideoProvider {
+        didSet {
+            if videoModelProvider(for: preferredVideoModelID) != preferredVideoProvider {
+                preferredVideoModelID = preferredVideoProvider == .ark
+                    ? Self.recommendedVideoModelID : Self.recommendedGeminiVideoModelID
+            }
+            persist()
+        }
+    }
+    @Published var preferredVideoModelID: String {
+        didSet {
+            if let provider = videoModelProvider(for: preferredVideoModelID), provider != preferredVideoProvider {
+                preferredVideoProvider = provider
+            }
+            persist()
+        }
+    }
+    @Published var preferredImageModelID: String {
         didSet { persist() }
     }
     /// Persisted separately under `assistant.brain`; read by the assistant on every send.
@@ -229,6 +290,9 @@ final class AIGatewayStore: ObservableObject {
         let saved = Self.load(from: defaults)
         providers = Self.completeProviderList(saved.providers)
         defaultTextModel = saved.defaultTextModel
+        preferredVideoProvider = saved.preferredVideoProvider
+        preferredVideoModelID = saved.preferredVideoModelID
+        preferredImageModelID = saved.preferredImageModelID
         assistantBrain = AssistantBrain(rawValue: defaults.string(forKey: AssistantBrain.defaultsKey) ?? "") ?? .gatewayModel
         refreshKeyPresence()
     }
@@ -305,17 +369,119 @@ final class AIGatewayStore: ObservableObject {
     /// An empty or default URL clears the override.
     func setBaseURL(_ url: String, for kind: AIProviderKind) {
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
-        update(kind) { $0.baseURLOverride = trimmed == kind.defaultBaseURL ? "" : trimmed }
+        update(kind) { current in
+            let value = trimmed == kind.defaultBaseURL ? "" : trimmed
+            guard current.baseURLOverride != value else { return }
+            current.baseURLOverride = value
+            current.lastTestedAt = nil
+            current.lastTestSucceeded = nil
+            current.lastTestSummary = nil
+            current.lastTestModelCount = nil
+        }
     }
 
     /// Providers that can serve as the app-wide default: enabled, tested, with
     /// a model. The current default stays listed even if it no longer qualifies.
     var availableDefaultSelections: [AITextModelSelection] {
         var selections = providers
-            .filter { $0.isEnabled && $0.lastTestSucceeded == true && !$0.defaultModelID.isEmpty }
+            .filter { $0.kind.supportsTextChat && $0.isEnabled && $0.lastTestSucceeded == true && !$0.defaultModelID.isEmpty }
             .map { AITextModelSelection(provider: $0.kind, modelID: $0.defaultModelID) }
         if let current = defaultTextModel, !selections.contains(current) { selections.append(current) }
         return selections
+    }
+
+    /// Only IDs returned by the last successful Ark model-list request count
+    /// as listed. A stored or built-in preference alone does not prove access.
+    var availableVideoModelIDs: [String] {
+        listedVideoModels(for: preferredVideoProvider)
+    }
+
+    func listedVideoModels(for provider: AIVideoProvider) -> [String] {
+        let kind = provider.gatewayKind
+        guard status(for: kind) == .ready else { return [] }
+        return configuration(for: kind).cachedModelIDs.filter { id in
+            switch provider {
+            case .ark: return id.localizedCaseInsensitiveContains("seedance")
+            case .gemini: return id.lowercased().hasPrefix("veo-")
+            }
+        }
+    }
+
+    func videoModelProvider(for id: String) -> AIVideoProvider? {
+        let lowered = id.lowercased()
+        if lowered.contains("seedance") { return .ark }
+        if lowered.hasPrefix("veo-") { return .gemini }
+        return nil
+    }
+
+    func isVideoModelListed(_ id: String) -> Bool {
+        guard let provider = videoModelProvider(for: id) else { return false }
+        switch provider {
+        case .ark where !Self.canPriceArkVideoModel(id): return false
+        case .gemini where !Self.geminiVideoModelIDs.contains(id): return false
+        default: break
+        }
+        return listedVideoModels(for: provider).contains(id)
+    }
+
+    var availableImageModelIDs: [String] {
+        guard status(for: .volcengineArk) == .ready else { return [] }
+        return configuration(for: .volcengineArk).cachedModelIDs
+            .filter { $0.localizedCaseInsensitiveContains("seedream") }
+    }
+
+    /// The preset is selectable before connection, but the UI labels it as
+    /// unverified until Ark has returned the exact ID for this account.
+    var videoModelChoices: [String] {
+        Self.uniqueModelIDs(
+            [preferredVideoModelID, Self.recommendedVideoModelID]
+                + listedVideoModels(for: .ark).filter(Self.canPriceArkVideoModel)
+                + Self.geminiVideoModelIDs
+                + listedVideoModels(for: .gemini).filter { Self.geminiVideoModelIDs.contains($0) }
+        )
+    }
+
+    /// A provider may list models that the editor cannot yet price or call.
+    /// Keep those out of the generation picker instead of offering a paid
+    /// selection that later fails validation.
+    private static func canPriceArkVideoModel(_ id: String) -> Bool {
+        let knownFamilies = [
+            "doubao-seedance-2-5", "doubao-seedance-2-0-mini",
+            "doubao-seedance-2-0-fast", "doubao-seedance-2-0",
+            "doubao-seedance-1-0-pro-fast", "doubao-seedance-1-0-pro",
+        ]
+        let lowered = id.lowercased()
+        return knownFamilies.contains { lowered == $0 || lowered.hasPrefix($0 + "-") }
+    }
+
+    var imageModelChoices: [String] {
+        Self.uniqueModelIDs([preferredImageModelID, Self.recommendedImageModelID] + availableImageModelIDs)
+    }
+
+    func videoModelDisplayName(_ id: String) -> String {
+        let normalized = id.lowercased()
+        if normalized.hasPrefix("veo-3.1-fast") { return "Veo 3.1 Fast" }
+        if normalized.hasPrefix("veo-3.1-lite") { return "Veo 3.1 Lite" }
+        if normalized.hasPrefix("veo-3.1") { return "Veo 3.1" }
+        if normalized.contains("seedance-2-5") { return "Seedance 2.5" }
+        if normalized.contains("seedance-2-0-mini") { return "Seedance 2.0 mini" }
+        if normalized.contains("seedance-2-0-fast") { return "Seedance 2.0 fast" }
+        if normalized.contains("seedance-2-0") { return "Seedance 2.0" }
+        return id
+    }
+
+    func imageModelDisplayName(_ id: String) -> String {
+        let normalized = id.lowercased()
+        if normalized.contains("seedream-5-0-pro") { return "Seedream 5.0 pro" }
+        if normalized.contains("seedream-5-0") { return "Seedream 5.0" }
+        if normalized.contains("seedream-4-5") { return "Seedream 4.5" }
+        return id
+    }
+
+    private static func uniqueModelIDs(_ ids: [String]) -> [String] {
+        var seen = Set<String>()
+        return ids.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
     }
 
     func isConfigured(_ kind: AIProviderKind) -> Bool {
@@ -362,6 +528,9 @@ final class AIGatewayStore: ObservableObject {
     /// A client for the default text model, or a clear error about what is missing.
     func resolvedClient() throws -> AIGatewayClient {
         guard let selection = defaultTextModel else { throw AIGatewayError.noDefaultModel }
+        guard selection.provider.supportsTextChat else {
+            throw AIGatewayError.invalidResponse("The selected provider is for video generation only")
+        }
         guard configuration(for: selection.provider).isEnabled else {
             throw AIGatewayError.providerDisabled(selection.provider)
         }
@@ -370,6 +539,9 @@ final class AIGatewayStore: ObservableObject {
     }
 
     func client(for kind: AIProviderKind, modelID: String) throws -> AIGatewayClient {
+        guard kind.supportsTextChat else {
+            throw AIGatewayError.invalidResponse("\(kind.title) is for video generation only")
+        }
         let base = configuration(for: kind).effectiveBaseURL
         guard let url = URL(string: base), let scheme = url.scheme?.lowercased(),
               ["http", "https"].contains(scheme), url.host != nil else {
@@ -389,6 +561,10 @@ final class AIGatewayStore: ObservableObject {
         guard !testingProviders.contains(kind) else { return }
         testingProviders.insert(kind)
         defer { testingProviders.remove(kind) }
+        if kind == .googleGemini {
+            await testGeminiModels()
+            return
+        }
         do {
             let configuration = configuration(for: kind)
             let client = try client(for: kind, modelID: configuration.defaultModelID)
@@ -405,9 +581,15 @@ final class AIGatewayStore: ObservableObject {
                 if !modelIDs.contains(configuration.defaultModelID) { modelIDs.append(configuration.defaultModelID) }
             }
             let ids = modelIDs
+            let textIDs = kind == .volcengineArk
+                ? ids.filter { id in
+                    let lowered = id.lowercased()
+                    return !AIProviderKind.nonChatModelMarkers.contains { lowered.contains($0) }
+                }
+                : ids
             update(kind) { current in
                 current.cachedModelIDs = ids
-                if current.defaultModelID.isEmpty { current.defaultModelID = kind.recommendedModelID(from: ids) ?? "" }
+                if current.defaultModelID.isEmpty { current.defaultModelID = kind.recommendedModelID(from: textIDs) ?? "" }
                 current.lastTestedAt = Date()
                 current.lastTestSucceeded = true
                 current.lastTestSummary = nil
@@ -428,10 +610,78 @@ final class AIGatewayStore: ObservableObject {
         }
     }
 
+    /// Gemini's native API is not OpenAI-compatible. A read-only `/models`
+    /// request checks the key and records exact Veo IDs without starting a
+    /// paid generation task or trying a chat/completions endpoint.
+    private func testGeminiModels() async {
+        let kind: AIProviderKind = .googleGemini
+        do {
+            guard let key = apiKey(for: kind), !key.isEmpty else { throw AIGatewayError.missingAPIKey(kind) }
+            let base = configuration(for: kind).effectiveBaseURL
+            guard let url = URL(string: base), ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else {
+                throw AIGatewayError.invalidBaseURL(base)
+            }
+            var ids: [String] = []
+            var nextPageToken: String?
+            var seenTokens = Set<String>()
+            repeat {
+                var components = URLComponents(url: url.appendingPathComponent("models"), resolvingAgainstBaseURL: false)
+                var query = [URLQueryItem(name: "pageSize", value: "1000")]
+                if let nextPageToken { query.append(URLQueryItem(name: "pageToken", value: nextPageToken)) }
+                components?.queryItems = query
+                guard let endpoint = components?.url else { throw AIGatewayError.invalidBaseURL(base) }
+                var request = URLRequest(url: endpoint)
+                request.timeoutInterval = 20
+                request.setValue(key, forHTTPHeaderField: "x-goog-api-key")
+                request.setValue("application/json", forHTTPHeaderField: "Accept")
+                let (data, response) = try await session.data(for: request)
+                guard let http = response as? HTTPURLResponse else { throw AIGatewayError.invalidResponse("no HTTP response") }
+                guard (200...299).contains(http.statusCode) else {
+                    let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                    let remote = ((object?["error"] as? [String: Any])?["message"] as? String) ?? ""
+                    let message = String(remote.replacingOccurrences(of: key, with: "[redacted]").prefix(200))
+                    throw AIGatewayError.httpStatus(http.statusCode, message)
+                }
+                guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let models = object["models"] as? [[String: Any]] else {
+                    throw AIGatewayError.invalidResponse("Gemini did not return a model list")
+                }
+                ids += models.compactMap { entry in
+                    guard let name = entry["name"] as? String else { return nil }
+                    return name.hasPrefix("models/") ? String(name.dropFirst("models/".count)) : name
+                }
+                nextPageToken = object["nextPageToken"] as? String
+                if let nextPageToken, !seenTokens.insert(nextPageToken).inserted { break }
+            } while nextPageToken != nil && seenTokens.count < 10
+
+            let listed = Array(Set(ids)).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+            update(kind) { current in
+                current.cachedModelIDs = listed
+                current.lastTestedAt = Date()
+                current.lastTestSucceeded = true
+                current.lastTestSummary = nil
+                current.lastTestModelCount = listed.count
+            }
+        } catch {
+            let message = (error as? AIGatewayError)?.errorDescription ?? error.localizedDescription
+            update(kind) { current in
+                current.lastTestedAt = Date()
+                current.lastTestSucceeded = false
+                current.lastTestSummary = message
+                current.lastTestModelCount = nil
+            }
+        }
+    }
+
     // MARK: - Persistence
 
     private func persist() {
-        let preferences = AIGatewayPreferences(providers: providers, defaultTextModel: defaultTextModel)
+        let preferences = AIGatewayPreferences(
+            providers: providers, defaultTextModel: defaultTextModel,
+            preferredVideoProvider: preferredVideoProvider,
+            preferredVideoModelID: preferredVideoModelID,
+            preferredImageModelID: preferredImageModelID
+        )
         guard let data = try? JSONEncoder().encode(preferences) else { return }
         defaults.set(data, forKey: Self.defaultsKey)
     }

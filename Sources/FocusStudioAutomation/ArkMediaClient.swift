@@ -12,7 +12,7 @@ struct ArkMediaClient: Sendable {
     static let defaultBaseURL = URL(string: "https://ark.cn-beijing.volces.com/api/v3")!
     static let userAgent = "focus-studio/1.0 (assistant)"
 
-    static let defaultVideoModel = "doubao-seedance-2-0-mini-260615"
+    static let defaultVideoModel = "doubao-seedance-2-5-260628"
     static let defaultImageModel = "doubao-seedream-4-5-251128"
 
     static let videoRatios = ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"]
@@ -60,7 +60,7 @@ struct ArkMediaClient: Sendable {
     /// Verified with GET /models on 2026-09-21. Keys omit the date suffix so
     /// newer builds of the same model still match.
     static let videoModels: [String: VideoModelInfo] = [
-        "doubao-seedance-2-5": VideoModelInfo(family: "Seedance 2.5", resolutions: ["480p", "720p", "1080p"], durations: 4...15, supportsAudio: true, yuanPerKiloToken: 0.046, tier: "flagship"),
+        "doubao-seedance-2-5": VideoModelInfo(family: "Seedance 2.5", resolutions: ["480p", "720p", "1080p"], durations: 4...30, supportsAudio: true, yuanPerKiloToken: 0.046, tier: "flagship"),
         "doubao-seedance-2-0-mini": VideoModelInfo(family: "Seedance 2.0 mini", resolutions: ["480p", "720p"], durations: 4...15, supportsAudio: true, yuanPerKiloToken: 0.023, tier: "budget"),
         "doubao-seedance-2-0-fast": VideoModelInfo(family: "Seedance 2.0 fast", resolutions: ["480p", "720p", "1080p"], durations: 4...15, supportsAudio: true, yuanPerKiloToken: 0.035, tier: "fast"),
         "doubao-seedance-2-0": VideoModelInfo(family: "Seedance 2.0", resolutions: ["480p", "720p", "1080p"], durations: 4...15, supportsAudio: true, yuanPerKiloToken: 0.046, tier: "quality"),

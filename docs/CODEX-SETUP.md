@@ -18,9 +18,11 @@ Focus Studio 有两种独立的连接：**应用内 AI 助手**使用 Codex 登�
 ## 让外部 Codex 控制 Focus Studio
 
 1. 打开 **设置 → AI 工具**，开启 **允许 AI 工具控制 Focus Studio**，确认状态为“已准备好”。
-2. 在 **接入 AI 工具** 的 **Codex** 行点 **接入**。Focus Studio 用 Codex 自己的 `mcp add` 命令登记随应用提供的 `focus-studio-mcp`，不会覆盖其它 MCP 服务器。若显示“已接入另一个副本”，点 **更新**。
-3. 新开一个 Codex 会话。首次调用 Focus Studio 工具时，在 Focus Studio 弹出的面板中审阅并批准；此后可让 Codex 先调用 `get_status` 或 `list_projects` 查看状态，再执行录制或剪辑。
+2. 在 **接入 AI 工具** 的 **Codex** 行点 **接入**。Focus Studio 用 Codex 自己的 `mcp add` 命令登记随应用提供的 `focus-studio-mcp`，不会覆盖其它 MCP 服务器。若显示“已接入另一个副本”，点 **更新**。显示 **Codex MCP 已就绪** 代表当前 Codex 登记位置正确、helper 已通过 `initialize` / `tools/list` 握手、AI 工具总开关开启，且 Focus Studio 的本机控制服务正在监听。
+3. 新开一个 Codex 会话。首次调用 Focus Studio 工具时，在 Focus Studio 弹出的面板中审阅并批准；此后可让 Codex 先调用 `get_status` 或 `list_projects` 查看状态，再执行录制或剪辑。首次批准前，“MCP 已就绪”并不表示工具调用已获准。
 
 可以在终端用 `codex mcp list` 检查登记，在 Codex 中用 `/mcp` 查看已连接工具。若自动接入不可用，展开页面中的“手动配置”，复制针对当前安装位置生成的命令。官方的 [Codex MCP 说明](https://learn.chatgpt.com/docs/extend/mcp?surface=cli) 介绍了桌面应用、CLI 和 IDE 扩展共用的本地配置。
 
-**两种“已连接”含义不同：**“设置 → Codex”的就绪状态表示应用内 AI 助手可使用 Codex 账户；“设置 → AI 工具”的已接入表示外部 Codex 知道 Focus Studio 的 MCP 地址。`codex mcp list` 只验证配置已登记；工具能否执行还取决于 Focus Studio 正在运行的版本、AI 工具总开关以及首次调用的批准结果。
+如果显示 `failed to load configuration`、`model_reasoning_effort` 或 `unknown variant`，通常是旧版 `codex` 无法读取新版 Codex 写入的配置。Focus Studio 会在可运行的安装中选择版本最高的 Codex；点击 **重新检查** 后再看接入状态。若仍失败，更新 Codex CLI，或使用随新版 ChatGPT 桌面应用提供的 Codex。不要为了让旧版 CLI 启动而删改整个 `~/.codex/config.toml`。这里的外部 MCP 接入和“设置 → Codex”的应用内账户路径各自独立。
+
+**两种“已连接”含义不同：**“设置 → Codex”的就绪状态表示应用内 AI 助手可使用 Codex 账户；“设置 → AI 工具”的 MCP 已就绪表示外部 Codex 的登记、helper 握手和本机控制监听均正常。`codex mcp list` 单独只能验证配置已登记；真正录制或编辑仍取决于首次调用批准和相应的 macOS 权限。需要让 AI 生成片头、空景或图片时，还须分别按 [AI 模型配置](AI-MODEL-SETUP.md) 设置视频或图片提供商及密钥。

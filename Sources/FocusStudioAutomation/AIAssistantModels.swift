@@ -110,14 +110,20 @@ public protocol AssistantInteractiveCompletionProviding: AssistantVisualCompleti
     func completeInteraction(system: String, user: String, json: Bool, imageURLs: [URL]) async throws -> String
 }
 
-/// Shown before a paid call runs. Prices are budgeting estimates in 人民币;
-/// the Volcengine console bill is authoritative.
+/// Shown before a paid call runs. The provider's billing console is
+/// authoritative; estimates preserve its published currency.
 public struct AIToolCostEstimate: Equatable, Sendable {
+    /// Legacy property name retained for Ark callers. For non-CNY providers,
+    /// this holds the numeric estimate in `currencyCode` rather than a
+    /// made-up exchange-rate conversion.
     public var yuan: Double
+    public var currencyCode: String
+    public var amount: Double { yuan }
     public var summary: String
 
-    init(yuan: Double, summary: String) {
+    init(yuan: Double, summary: String, currencyCode: String = "CNY") {
         self.yuan = yuan
+        self.currencyCode = currencyCode
         self.summary = summary
     }
 }
@@ -171,6 +177,13 @@ public struct AIAssistantContext: Sendable {
     /// after the session was created is picked up.
     var arkAPIKey: @MainActor @Sendable () -> String?
     var arkBaseURL: URL
+    /// Gemini's media-only Veo API uses its own key and REST endpoint.
+    /// Resolved when the paid tool runs, so Settings changes apply at once.
+    public var geminiVideoAPIKey: @MainActor @Sendable () -> String? = { nil }
+    public var geminiVideoBaseURL: URL = URL(string: "https://generativelanguage.googleapis.com/v1beta")!
+    /// The in-app video model chosen in Settings or the assistant composer.
+    /// External automation keeps its explicit tool argument instead.
+    public var preferredVideoModelID: @MainActor @Sendable () -> String? = { nil }
     /// The projects library root. Exports never write inside it except into
     /// the open project's `ai/` folder. Nil when unknown (unit tests).
     public var projectsDirectory: URL?

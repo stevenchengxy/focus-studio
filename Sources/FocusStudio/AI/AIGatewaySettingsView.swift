@@ -12,6 +12,7 @@ struct AIGatewaySettingsView: View {
             VStack(spacing: 10) {
                 defaultModelBar
                 assistantBrainBar
+                mediaGenerationBar
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 12)
@@ -24,7 +25,7 @@ struct AIGatewaySettingsView: View {
                     .id(selectedKind)
             }
         }
-        .frame(width: 620, height: 600)
+        .frame(width: 700, height: 650)
         .background(StudioTheme.panel)
         .foregroundStyle(StudioTheme.text)
         .onAppear { store.refreshKeyPresence() }
@@ -66,6 +67,78 @@ struct AIGatewaySettingsView: View {
             .help("Used by AI features. Test a provider to list it here.")
             .accessibilityIdentifier("ai.defaultModel")
         }
+    }
+
+    /// Media generation is a separate service from the assistant's chat model.
+    /// Present the Ark key and exact media model IDs together for first-run setup.
+    private var mediaGenerationBar: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 8) {
+                Image(systemName: "film.stack")
+                    .foregroundStyle(StudioTheme.purple)
+                Text("AI video and images")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Circle()
+                    .fill(Self.color(for: store.status(for: store.preferredVideoProvider.gatewayKind)))
+                    .frame(width: 7, height: 7)
+                Text(mediaStatusLabel)
+                    .font(.system(size: 11))
+                    .foregroundStyle(StudioTheme.secondaryText)
+                Button("Configure video key") { selectedKind = store.preferredVideoProvider.gatewayKind }
+                    .font(.system(size: 11, weight: .medium))
+                    .accessibilityIdentifier("ai.configureMediaKey")
+            }
+
+            HStack(spacing: 12) {
+                Picker("Video provider", selection: $store.preferredVideoProvider) {
+                    ForEach(AIVideoProvider.allCases) { provider in
+                        Text(verbatim: provider.title).tag(provider)
+                    }
+                }
+                .accessibilityIdentifier("ai.preferredVideoProvider")
+                Picker("Video model", selection: $store.preferredVideoModelID) {
+                    ForEach(store.videoModelChoices.filter { store.videoModelProvider(for: $0) == store.preferredVideoProvider }, id: \.self) { id in
+                        Text(verbatim: mediaModelLabel(id, video: true)).tag(id)
+                    }
+                }
+                .accessibilityIdentifier("ai.preferredVideoModel")
+            }
+            .font(.system(size: 11))
+            .controlSize(.small)
+
+            HStack {
+                Picker("Image model · Ark", selection: $store.preferredImageModelID) {
+                    ForEach(store.imageModelChoices, id: \.self) { id in
+                        Text(verbatim: mediaModelLabel(id, video: false)).tag(id)
+                    }
+                }
+                .accessibilityIdentifier("ai.preferredImageModel")
+            }
+            .font(.system(size: 11))
+            .controlSize(.small)
+
+            Text("Seedance and Seedream use an Ark key. Veo uses a separate Gemini key. Test each provider to see listed models.")
+                .font(.system(size: 11))
+                .foregroundStyle(StudioTheme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(11)
+        .background(StudioTheme.window.opacity(0.8), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var mediaStatusLabel: LocalizedStringKey {
+        switch store.status(for: store.preferredVideoProvider.gatewayKind) {
+        case .unconfigured: return "No video key"
+        case .needsTest: return "Test connection"
+        case .ready: return "Video provider connected"
+        }
+    }
+
+    private func mediaModelLabel(_ id: String, video: Bool) -> String {
+        let name = video ? store.videoModelDisplayName(id) : store.imageModelDisplayName(id)
+        let listed = video ? store.isVideoModelListed(id) : store.availableImageModelIDs.contains(id)
+        return "\(name) · \(id)" + (listed ? "" : " · \(L10n.tr("Not listed by provider"))")
     }
 
     private var providerList: some View {
@@ -167,8 +240,9 @@ private struct AIProviderDetailView: View {
                     keyRow
                 }
                 GridRow {
-                    label("Model")
-                    modelPicker
+                    label(kind == .volcengineArk ? "Chat model" : kind == .googleGemini ? "Video model" : "Model")
+                    if kind == .googleGemini { geminiModelPicker }
+                    else { modelPicker }
                 }
                 GridRow {
                     label("Status")
@@ -194,8 +268,8 @@ private struct AIProviderDetailView: View {
                             .onChange(of: baseURLDraft) { _, value in store.setBaseURL(value, for: kind) }
                     }
                     GridRow {
-                        label("Model ID")
-                        TextField("Model ID", text: modelIDBinding, prompt: Text(verbatim: "model"))
+                        label(kind == .volcengineArk ? "Chat model ID" : kind == .googleGemini ? "Video model ID" : "Model ID")
+                        TextField("Model ID", text: kind == .googleGemini ? geminiModelIDBinding : modelIDBinding, prompt: Text(verbatim: "model"))
                             .textFieldStyle(.roundedBorder)
                             .labelsHidden()
                             .font(.system(size: 12, design: .monospaced))
@@ -236,7 +310,7 @@ private struct AIProviderDetailView: View {
                 .accessibilityIdentifier("ai.apiKey")
             Button("Save", action: saveKey)
                 .disabled(trimmedKeyDraft.isEmpty)
-                .help("Store the key in the macOS Keychain")
+                .help("Store the key for this macOS user")
             if hasKey {
                 Button("Remove", action: removeKey)
                     .help("Delete the saved key")
@@ -245,7 +319,12 @@ private struct AIProviderDetailView: View {
     }
 
     @ViewBuilder private var modelPicker: some View {
-        let ids = configuration.cachedModelIDs
+        let ids = kind == .volcengineArk
+            ? configuration.cachedModelIDs.filter { id in
+                let lowered = id.lowercased()
+                return !AIProviderKind.nonChatModelMarkers.contains { lowered.contains($0) }
+            }
+            : configuration.cachedModelIDs
         let current = configuration.defaultModelID
         if ids.isEmpty && current.isEmpty {
             Text("Not loaded")
@@ -267,6 +346,16 @@ private struct AIProviderDetailView: View {
             .frame(maxWidth: 320, alignment: .leading)
             .help("Recommended model picked after the first test")
         }
+    }
+
+    private var geminiModelPicker: some View {
+        Picker("Video model", selection: geminiModelIDBinding) {
+            ForEach(store.videoModelChoices.filter { store.videoModelProvider(for: $0) == .gemini }, id: \.self) { id in
+                Text(verbatim: "\(store.videoModelDisplayName(id)) · \(id)").tag(id)
+            }
+        }
+        .labelsHidden()
+        .frame(maxWidth: 330, alignment: .leading)
     }
 
     private var statusRow: some View {
@@ -367,6 +456,14 @@ private struct AIProviderDetailView: View {
         )
     }
 
+    private var geminiModelIDBinding: Binding<String> {
+        Binding(
+            get: { store.preferredVideoProvider == .gemini
+                ? store.preferredVideoModelID : AIGatewayStore.recommendedGeminiVideoModelID },
+            set: { store.preferredVideoModelID = $0 }
+        )
+    }
+
     private func saveKey() {
         let key = trimmedKeyDraft
         guard !key.isEmpty else { return }
@@ -374,6 +471,9 @@ private struct AIProviderDetailView: View {
         do {
             try store.setAPIKey(key, for: kind)
             keychainMessage = nil
+            if kind == .volcengineArk || kind == .googleGemini {
+                Task { await store.test(kind) }
+            }
         } catch {
             keychainMessage = error.localizedDescription
         }

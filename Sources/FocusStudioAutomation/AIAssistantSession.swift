@@ -145,6 +145,12 @@ public struct AIAssistantConversationSummary: Identifiable, Equatable, Sendable 
     public let messageCount: Int
 }
 
+public struct AIVideoModelChoice: Identifiable, Equatable, Sendable {
+    public let id: String
+    public let displayName: String
+    public let detail: String
+}
+
 /// The selected conversation with the assistant: the transcript, the agent
 /// loop that turns model replies into tool calls, and the confirmation gate.
 @MainActor
@@ -152,15 +158,16 @@ public final class AIAssistantSession: ObservableObject {
     public struct PendingToolCall: Identifiable {
         public let id = UUID()
         let tool: any AIAssistantTool
-        let arguments: [String: Any]
-        public let estimate: AIToolCostEstimate
+        var arguments: [String: Any]
+        public var estimate: AIToolCostEstimate
         /// The call is paid (an estimate in 元); otherwise it is a recording
         /// start or stop that still needs the person's go-ahead.
         public let isPaid: Bool
         public let demoTaskRequest: AIDemoTaskRequest?
         public let expiresAt: Date?
 
-        var toolName: String { tool.name }
+        public var toolName: String { tool.name }
+        public var selectedVideoModelID: String? { arguments["model"] as? String }
     }
 
     static let maximumStepsPerTurn = 48
@@ -177,6 +184,18 @@ public final class AIAssistantSession: ObservableObject {
     @Published public private(set) var messages: [AIAssistantMessage] = []
     @Published public private(set) var isRunning = false
     @Published public private(set) var pendingConfirmation: PendingToolCall?
+    public var videoModelChoices: [AIVideoModelChoice] {
+        [
+            .init(id: "doubao-seedance-2-5-260628", displayName: "Seedance 2.5", detail: "4–30 s · up to 1080p"),
+            .init(id: "doubao-seedance-2-0-260128", displayName: "Seedance 2.0", detail: "4–15 s · up to 1080p"),
+            .init(id: "doubao-seedance-2-0-fast-260128", displayName: "Seedance 2.0 fast", detail: "4–15 s · up to 1080p"),
+            .init(id: "doubao-seedance-2-0-mini-260615", displayName: "Seedance 2.0 mini", detail: "4–15 s · up to 720p"),
+            .init(id: "doubao-seedance-1-0-pro-250528", displayName: "Seedance 1.0 pro", detail: "2–12 s · up to 1080p"),
+            .init(id: "veo-3.1-generate-preview", displayName: "Veo 3.1", detail: "4/6/8 s · 720p–4K · audio"),
+            .init(id: "veo-3.1-fast-generate-preview", displayName: "Veo 3.1 Fast", detail: "4/6/8 s · 720p–4K · audio"),
+            .init(id: "veo-3.1-lite-generate-preview", displayName: "Veo 3.1 Lite", detail: "4/6/8 s · up to 1080p · audio"),
+        ]
+    }
     /// Follow-ups offered by the last reply.
     @Published public private(set) var suggestions: [String] = []
     /// Whether a text model (or Codex) can answer right now. Re-evaluated with
@@ -199,6 +218,7 @@ public final class AIAssistantSession: ObservableObject {
     private let toolCatalogJSON: String
     private var runningTask: Task<Void, Never>?
     private var confirmationContinuation: CheckedContinuation<Bool, Never>?
+    private var confirmedToolArguments: [String: Any]?
     private var presentConfirmation: (@MainActor () -> Void)?
     private var finishConfirmation: (@MainActor () -> Void)?
     private var statusMessageID: UUID?
@@ -377,6 +397,52 @@ public final class AIAssistantSession: ObservableObject {
     public func confirmPending() { resolveConfirmation(true) }
 
     public func cancelPending() { resolveConfirmation(false) }
+
+    /// Changes the model on the paid confirmation itself. The recalculated
+    /// estimate and the arguments used by the eventual API call stay together.
+    @discardableResult
+    public func setPendingVideoModel(_ id: String) -> Bool {
+        guard var pending = pendingConfirmation, pending.toolName == "generate_video" else { return false }
+        var arguments = pending.arguments
+        arguments["model"] = id
+        if let info = VeoMediaClient.modelInfo(for: id) {
+            // Switching providers must not turn an unsupported reference or
+            // silent request into a different paid generation behind the
+            // user's back. The card explains why a model cannot be selected.
+            let input = AIToolArguments(arguments)
+            guard !input.has("reference_video"), !input.has("reference_audio"),
+                  input.bool("generate_audio") != false,
+                  !input.has("last_frame") || input.has("first_frame"),
+                  ["16:9", "9:16"].contains(input.string("ratio") ?? "16:9")
+            else { return false }
+            let images = input.stringList("reference_images")
+            guard images.count <= 3, images.isEmpty || info.supportsReferenceImages else { return false }
+            let resolution = input.string("resolution") ?? "720p"
+            guard info.resolutions.contains(resolution) else { return false }
+            let duration = input.int("duration") ?? 8
+            guard [4, 6, 8].contains(duration),
+                  (resolution == "720p" || duration == 8),
+                  (images.isEmpty || duration == 8)
+            else { return false }
+        } else if let info = ArkMediaClient.videoModelInfo(for: id) {
+            if let resolution = arguments["resolution"] as? String, !info.resolutions.contains(resolution) {
+                arguments.removeValue(forKey: "resolution")
+            }
+            if let duration = AIToolArguments(arguments).int("duration"), !info.durations.contains(duration) {
+                arguments["duration"] = duration.clamped(to: info.durations)
+            }
+            if AIToolArguments(arguments).bool("generate_audio") == true, !info.supportsAudio {
+                return false
+            }
+        } else {
+            return false
+        }
+        guard let estimate = pending.tool.costEstimate(arguments: arguments) else { return false }
+        pending.arguments = arguments
+        pending.estimate = estimate
+        pendingConfirmation = pending
+        return true
+    }
 
     /// Cancels the running step (and any Ark task being polled).
     public func stop() {
@@ -960,7 +1026,16 @@ public final class AIAssistantSession: ObservableObject {
                     ))
                     continue
                 }
-                let fingerprint = Self.fingerprint(tool: toolName, arguments: arguments)
+                var effectiveArguments = arguments
+                if toolName == "generate_video", !context.isExternal {
+                    // The visible model picker is authoritative. The text model
+                    // may omit `model` or suggest a cheaper tier, but it cannot
+                    // silently override the user's selection.
+                    let savedModel = context.preferredVideoModelID()?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let chosenModel = savedModel.flatMap { $0.isEmpty ? nil : $0 } ?? ArkMediaClient.defaultVideoModel
+                    effectiveArguments["model"] = chosenModel
+                }
+                var fingerprint = Self.fingerprint(tool: toolName, arguments: effectiveArguments)
                 if !Self.repeatableTools.contains(toolName), let previous = toolAttempts[fingerprint] {
                     messages.append(AIAssistantMessage(role: .tool, text: L10n.tr("This action was already attempted for this request. It was not run again. Review its earlier result; send a new message to explicitly try the action again.") + " (\(previous))", toolName: toolName))
                     continue
@@ -984,14 +1059,22 @@ public final class AIAssistantSession: ObservableObject {
                         continue
                     }
                 }
-                let cost = tool.costEstimate(arguments: arguments)
+                let cost = tool.costEstimate(arguments: effectiveArguments)
+                if ["generate_video", "generate_image"].contains(toolName), cost == nil {
+                    messages.append(AIAssistantMessage(
+                        role: .error,
+                        text: L10n.tr("This paid generation cannot start because its model, settings, or price could not be verified. Review the model and duration in Settings, then try again."),
+                        toolName: toolName
+                    ))
+                    continue
+                }
                 let controlsRecording = ["start_recording", "stop_recording"].contains(toolName) && demoScope == nil
                 if cost != nil || controlsRecording {
                     let confirmation = toolName == "perform_recording_action"
                         ? L10n.tr("Allow this pointer action in the recorded window? Review the action and coordinates before continuing.")
                         : L10n.format("Allow %@? Recording only changes after you confirm.", toolName)
-                    let estimate = cost ?? AIToolCostEstimate(yuan: 0, summary: confirmation + "\n" + Self.argumentSummary(arguments))
-                    let confirmed = await requestConfirmation(tool: tool, arguments: arguments, estimate: estimate, isPaid: cost != nil)
+                    let estimate = cost ?? AIToolCostEstimate(yuan: 0, summary: confirmation + "\n" + Self.argumentSummary(effectiveArguments))
+                    let confirmed = await requestConfirmation(tool: tool, arguments: effectiveArguments, estimate: estimate, isPaid: cost != nil)
                     if Task.isCancelled { appendStopped(); return }
                     guard confirmed else {
                         let declined = AIAssistantMessage(role: .tool, text: L10n.tr("Cancelled — nothing was generated."), toolName: tool.name)
@@ -1001,6 +1084,16 @@ public final class AIAssistantSession: ObservableObject {
                         persistHistory(interrupted: true)
                         continue
                     }
+                    if toolName == "generate_video", let approvedArguments = confirmedToolArguments {
+                        effectiveArguments = approvedArguments
+                        fingerprint = Self.fingerprint(tool: toolName, arguments: effectiveArguments)
+                        if let previous = toolAttempts[fingerprint] {
+                            messages.append(AIAssistantMessage(role: .tool, text: L10n.tr("This action was already attempted for this request. It was not run again. Review its earlier result; send a new message to explicitly try the action again.") + " (\(previous))", toolName: toolName))
+                            confirmedToolArguments = nil
+                            continue
+                        }
+                    }
+                    confirmedToolArguments = nil
                 }
                 // Persist before invoking a side effect, so interrupted/unknown
                 // outcomes cannot be replayed by a Retry after relaunch.
@@ -1024,7 +1117,7 @@ public final class AIAssistantSession: ObservableObject {
                     if tool.name == "stop_recording", demoScope != nil {
                         result = try await stopApprovedRecording()
                     } else {
-                        result = try await tool.run(arguments: arguments, context: context, progress: progress)
+                        result = try await tool.run(arguments: effectiveArguments, context: context, progress: progress)
                     }
                     guard turnGeneration == generation else { return }
                     clearStatus()
@@ -1097,6 +1190,7 @@ public final class AIAssistantSession: ObservableObject {
         expiresAt: Date? = nil
     ) async -> Bool {
         clearStatus()
+        confirmedToolArguments = nil
         let timeout = expiresAt.map { date in Task { [weak self] in
             do { try await Task.sleep(for: .seconds(max(0, date.timeIntervalSinceNow))) } catch { return }
             guard let self, self.pendingConfirmation?.expiresAt == date else { return }
@@ -1112,6 +1206,7 @@ public final class AIAssistantSession: ObservableObject {
 
     private func resolveConfirmation(_ confirmed: Bool) {
         guard let continuation = confirmationContinuation else { return }
+        confirmedToolArguments = confirmed ? pendingConfirmation?.arguments : nil
         confirmationContinuation = nil
         pendingConfirmation = nil
         finishConfirmation?()
@@ -1242,12 +1337,15 @@ public final class AIAssistantSession: ObservableObject {
         - Preparing a requested URL opens its visible browser window but never records. run_demo_task requires one exact-window task approval with an expiry; nothing records while awaiting it. During that task, only its bounded scoped actions are approved, so do not ask again for routine actions or stop. Paid generation and external output files are not included. Tool receipts are authoritative: never repeat an already attempted action in the same request, including after Retry. If an outcome is unknown, stop and explain it.
         - Think briefly in "thought", then either call exactly one tool or reply to the user.
         - A recording task always finishes and saves before your final reply. Ask the person to finish login or other blocked setup before starting another task. Once saved, fulfill editing/export already requested by the user without asking them to repeat their request. For postproduction use analyze_demo_pacing, inspect capture_frame images around candidate waits, then create_demo_cut with reviewed keep_ranges or get_timeline and the clip-track tools. A first clip edit creates a working copy: use the returned project_id and clip IDs for subsequent changes. Set transitions and clip audio only when requested or useful to the demo, adjust relevant zooms, then preview and export. Preserve generation/loading results, speech and reading time; input silence is not visual inactivity. Do not add paid generation unless explicitly requested and confirmed.
-        - There is a shared media library and a separate media library for each project. Use list_global_media_assets to inspect shared media, import_global_media_asset for a local video/image, or discuss a requested AI clip and call generate_video (Seedance) or generate_image (Seedream). Generation adds the result to shared media only. Do not add it to a project unless the user explicitly asks to use it in that project or timeline. For that requested edit, call add_global_media_to_project with global_asset_id and use its returned project_id and project asset_id. Then call insert_media_asset with that project's asset_id and index, get_timeline, preview and adjust placement/transition. list_media_assets inspects only the current project's library; import_media_asset adds a local file directly to that project. The first project import or clip edit may create a working copy: use its returned project_id thereafter. Use undo_clip_edit/redo_clip_edit when correcting a placement. Never claim a shared or generated asset is in the project or timeline until the respective tool confirms it.
+        - There is a shared media library and a separate media library for each project. Use list_global_media_assets to inspect shared media, import_global_media_asset for a local video/image, or discuss a requested AI clip and call generate_video (the configured Seedance or Veo model) or generate_image (Seedream). Generation adds the result to shared media only. Do not add it to a project unless the user explicitly asks to use it in that project or timeline. For that requested edit, call add_global_media_to_project with global_asset_id and use its returned project_id and project asset_id. Then call insert_media_asset with that project's asset_id and index, get_timeline, preview and adjust placement/transition. list_media_assets inspects only the current project's library; import_media_asset adds a local file directly to that project. The first project import or clip edit may create a working copy: use its returned project_id thereafter. Use undo_clip_edit/redo_clip_edit when correcting a placement. Never claim a shared or generated asset is in the project or timeline until the respective tool confirms it.
         - In manual recording, do not stop until the user says the demo is finished or the requested duration ends. In an explicitly requested automated recording, stop after the authorized demo actions complete. Never start a second recording while one is in progress.
         - When the intent is ambiguous (which window, what the image should show, clip length, mood, which clips to join), ask one short clarifying question instead of guessing.
-        - Prefer cheap choices while iterating: \(ArkMediaClient.defaultVideoModel), 4–6 seconds, 720p; \(ArkMediaClient.defaultImageModel). Say what things cost in 元.
-        - generate_video is paid and the app asks the user to confirm before it runs. If the user declines, do not repeat the same call; ask what to change.
-        - Never ask for words, letters, logos or interface text inside image or video prompts: captions and titles are added by the app.
+        - The user's currently selected video model is \(context.preferredVideoModelID() ?? ArkMediaClient.defaultVideoModel). Use that exact model for video generation; the visible picker and paid confirmation card determine the final model and estimate. Never silently switch to a cheaper tier or claim a model is unavailable solely because it is not the old default. If a model or provider is not configured, explain the precise setting needed. Label estimates with their actual currency (Ark uses CNY; Gemini Veo uses USD), and never equate USD with 元.
+        - Match the requested clip length and media references to that selected model before calling generate_video. Veo 3.1 accepts exactly 4, 6, or 8 seconds; 1080p and 4K require 8 seconds, its audio cannot be disabled, and it cannot extend an arbitrary uploaded video. Seedance capabilities depend on its exact model ID. If the user's request conflicts with the selected model, explain the conflict and let them choose a supported setting; never silently alter the duration, model, or requested source.
+        - For polished product marketing, help the user make a shot brief before generation: product truth/benefit, authentic UI or supplied reference frame, one legible motion beat, camera/framing, light/material, compositing space, duration, and what must remain editable. Offer two or three distinct directions when the visual brief is vague. Generic blue-purple light tunnels, floating glass cards and fake dashboards are not a substitute for the user's real product. Use short abstract transitions only to support a real product scene.
+        - For a requested AI variation of one timeline clip, read get_timeline to obtain its stable clip_id, prepare_clip_ai_reference to capture its actual first/last appearance and bounded silent reference video, discuss the desired change, then call generate_video with those references and the selected model. Generated output is a separate shared-library asset; the original recording and clip stay intact. Show/preview the result before importing it into the project's library or inserting it on the timeline unless the user already requested insertion. Generated UI can distort text/numbers, so retain the real screen recording for factual UI and use generated shots for cutaways, backgrounds and composited accents.
+        - generate_video is paid and the app asks the user to confirm the exact model and estimate before it runs. If the user declines, do not repeat the same call; ask what to change.
+        - Do not rely on generated letters, numbers, logos or interface text for factual product claims: keep authentic screen footage or render titles with the editor after generation.
         - A background image must keep the screen readable: subtle, low-contrast, soft gradients or abstract shapes that match the product's colours.
         - Refer to local files by full path or by a file name from list_assets. Use capture_frame when a clip should match the current look, then pass the frame as first_frame or reference_images.
         - Zoom positions are normalized: x 0–1 from left to right, y 0–1 from top to bottom; times are seconds within the recording (see the project summary for duration, clicks and existing zooms).

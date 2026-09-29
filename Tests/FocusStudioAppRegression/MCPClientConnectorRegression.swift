@@ -26,7 +26,8 @@ enum MCPClientConnectorRegression {
     private static func locating(_ fixture: FakeCLIFixture) async throws {
         let found = await fixture.search().locate()
         try expect(found.executables[.claudeCode] == fixture.claude, "claude comes from the login shell's command -v: \(found.executables)")
-        try expect(found.executables[.codex] == fixture.codex, "The broken codex first on PATH is skipped for the working one: \(found.executables)")
+        try expect(found.executables[.codex] == fixture.codex,
+                   "A broken shim and an old CLI that cannot parse modern config are skipped for the latest Codex: \(found.executables)")
         try expect(found.shellPath.contains("/fake/node/bin") && found.shellPath.contains("/usr/bin"), "The login shell's PATH is read past its startup noise: \(found.shellPath)")
         let shellArguments = fixture.log("shell")
         try expect(shellArguments.first == ["-l", "-c", MCPCLISearch.loginShellScript], "The login shell gets -l -c and the fixed script: \(shellArguments)")
@@ -98,6 +99,22 @@ enum MCPClientConnectorRegression {
     }
 
     private static func failures(_ fixture: FakeCLIFixture) async throws {
+        let noProtocol = await MCPHelperProbe.failure(helperPath: "/bin/true", environment: [:], homeDirectory: "/")
+        try expect(noProtocol != nil,
+                   "An executable with no MCP protocol is not reported as connected: \(String(describing: noProtocol))")
+
+        let outdated = MCPClientConnector(
+            helperPath: fixture.helperPath,
+            search: fixture.search(shell: nil, path: "\(fixture.oldCodexDirectory):/usr/bin:/bin")
+        )
+        await outdated.refresh()
+        if case let .failed(message) = outdated.status(for: .codex).state {
+            try expect(message.contains("Update Codex") && message.contains(fixture.oldCodex),
+                       "An old CLI gives an actionable configuration error: \(message)")
+        } else {
+            throw ServerFailure("Old Codex should fail with a configuration hint")
+        }
+
         fixture.reset()
         let connector = MCPClientConnector(helperPath: fixture.helperPath, search: fixture.search(), commandTimeout: 0.5)
         await connector.refresh()
@@ -198,9 +215,11 @@ final class FakeCLIFixture {
     let directory: String
     let claudeDirectory: String
     let codexDirectory: String
+    let oldCodexDirectory: String
     let brokenDirectory: String
     let claude: String
     let codex: String
+    let oldCodex: String
     let shell: String
     let hangingShell: String
     /// A helper path with a space, which must stay one argument.
@@ -211,13 +230,15 @@ final class FakeCLIFixture {
         directory = root
         claudeDirectory = root + "/claude-bin"
         codexDirectory = root + "/codex-bin"
+        oldCodexDirectory = root + "/old-codex-bin"
         brokenDirectory = root + "/broken-bin"
         claude = claudeDirectory + "/claude"
         codex = codexDirectory + "/codex"
+        oldCodex = oldCodexDirectory + "/codex"
         shell = root + "/login-shell"
         hangingShell = root + "/hanging-shell"
         helperPath = root + "/Focus Studio.app/Contents/MacOS/focus-studio-mcp"
-        for folder in [claudeDirectory, codexDirectory, brokenDirectory, (helperPath as NSString).deletingLastPathComponent] {
+        for folder in [claudeDirectory, codexDirectory, oldCodexDirectory, brokenDirectory, (helperPath as NSString).deletingLastPathComponent] {
             try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
         }
         let log = #"{ for a in "$@"; do printf '%s\037' "$a"; done; printf '\n'; } >> "$state_dir/"#
@@ -294,6 +315,15 @@ final class FakeCLIFixture {
         esac
         exit 64
         """)
+        // An old but runnable CLI can answer --version while failing to read
+        // a config written by a newer Codex (`model_reasoning_effort=xhigh`).
+        try write(oldCodex, """
+        #!/bin/sh
+        if [ "$1" = "--version" ]; then echo "codex-cli 0.42.0"; exit 0; fi
+        echo 'Error: failed to load configuration' >&2
+        echo 'unknown variant `xhigh` in model_reasoning_effort' >&2
+        exit 1
+        """)
         // A Node shim whose package is gone, like a stale npm install.
         try write(brokenDirectory + "/codex", """
         #!/bin/sh
@@ -315,11 +345,19 @@ final class FakeCLIFixture {
         #!/bin/sh
         sleep 30
         """)
-        try write(helperPath, "#!/bin/sh\nexit 0\n")
+        try write(helperPath, """
+        #!/bin/sh
+        while IFS= read -r line; do
+          case "$line" in
+          *'"id":1'*) printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"focus-studio","version":"test"},"protocolVersion":"2025-11-25","capabilities":{}}}';;
+          *'"id":2'*) printf '%s\\n' '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"get_status"},{"name":"start_recording"}]}}';;
+          esac
+        done
+        """)
     }
 
-    /// PATH has the broken codex first, then the working one; claude is only
-    /// found through the fake login shell.
+    /// PATH has a broken shim, then an old runnable Codex that cannot parse a
+    /// modern config, then the working current version.
     func search(shellTimeout: TimeInterval = 5, path: String? = nil) -> MCPCLISearch {
         search(shell: shell, shellTimeout: shellTimeout, path: path)
     }
@@ -327,7 +365,7 @@ final class FakeCLIFixture {
     /// The same with another login shell, or none.
     func search(shell: String?, shellTimeout: TimeInterval = 5, path: String? = nil) -> MCPCLISearch {
         let environment = [
-            "PATH": path ?? "\(brokenDirectory):\(codexDirectory):/usr/bin:/bin",
+            "PATH": path ?? "\(brokenDirectory):\(oldCodexDirectory):\(codexDirectory):/usr/bin:/bin",
             "HOME": directory,
             "FOCUS_STUDIO_TEST_LEAK": "1",
         ]

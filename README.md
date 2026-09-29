@@ -1,8 +1,10 @@
 # Focus Studio
 
-Focus Studio 是一个原生 macOS 产品 Demo 录制与编辑器，核心工作流参考 Screen Studio：录制时保存原始画面、鼠标轨迹和点击坐标；录制后根据点击自动生成可编辑的缩放区块；预览与导出共享同一条 Core Image 与 AVFoundation 渲染管线。
+Focus Studio 是一个面向各类产品的原生 macOS Demo 录制与编辑器。它保存原始画面、鼠标轨迹和点击坐标，把点击转成可编辑的缩放区块，再用同一条 Core Image 与 AVFoundation 管线预览、导出。接入 Codex 后，AI 助手可以协助录制、分析节奏、剪辑和准备宣传镜头；产品网址和 Finlyze 示例都不是固定模板。
 
 所有录屏、截图、音频和项目元数据默认只保存在本机。
+
+新用户可按 [Codex 连接指南](docs/CODEX-SETUP.md) 分别配置应用内助手与外部 MCP 控制；生成视频或图片前按 [AI 模型配置](docs/AI-MODEL-SETUP.md) 设置 Ark、Gemini/Veo 等提供商。录制到剪辑的步骤见 [Demo 工作流](docs/AI-DEMO-WORKFLOW.md)，产品宣传镜头的构思见 [AI Promo Skill](skills/focus-ai-promo/SKILL.md)。
 
 ## 已实现
 
@@ -69,16 +71,17 @@ Focus Studio 是一个原生 macOS 产品 Demo 录制与编辑器，核心工作
 - **麦克风权限先确认**：要录麦克风时（你在上面的询问里允许了，或录制器里本来就开着麦克风），Focus Studio 在倒计时之前先确认 macOS 是否允许它使用麦克风：从没问过时，macOS 的麦克风授权对话框在倒计时之前出现，等你回答后才开始倒计时，不会在录制中弹出；AI 工具的调用最多等 60 秒，没有回答就不录制（对话框可能还开着，之后的回答只由 macOS 记住，不会再开始录制）。如果你在 **系统设置 › 隐私与安全性 › 麦克风** 里关掉了 Focus Studio（或在对话框里选了不允许），AI 工具的这次录制不会开始，调用返回错误（`status` 为 `microphone_unavailable`），AI 可以改用 `microphone: false` 只录画面。你自己点录制和应用内的 AI 助手也在倒计时之前等 macOS 的回答，之后照旧开始录制。
 - **路径与保护**：相对路径按 AI 工具当前的工作目录解析。导出默认不覆盖已有文件（`overwrite: true` 才覆盖），也不会写项目自己的 `raw.mp4` 和素材；项目库只由应用写入，外部工具不能直接改 `project.json`。
 - **长操作**：导出和拼接发送进度通知。一个调用从到达 Focus Studio 算起约 200 秒后仍在进行时返回 `job_id`，用 `wait_for_job` 继续等；这 200 秒还扣除了 helper 启动应用、建立连接已经用掉的时间，等待批准、排队和等你回答声音询问、macOS 麦克风授权的时间也都算在内，所以新 AI 工具的第一次调用同样会在 Codex 的 300 秒超时之内得到回答。批准面板 2 分钟内没人处理时，这次调用不执行，返回错误提示 AI 请你点允许后再调用一次（面板保持打开，再调用会等同一个面板）；极少数情况下（helper 启动和连接应用用了很久）调用的时间会先用完，这时返回 `waiting_for_approval`，处理方式相同。排队时时间用完（例如另一个 AI 工具的调用一直占着），调用同样不执行，返回 `waiting_for_turn`，AI 再调用一次即可；还在等你回答声音询问或 macOS 的麦克风授权时，调用返回 `job_id`，AI 用 `wait_for_job` 取得录制结果。Codex 0.141.0 起默认 300 秒的工具超时足够，一般不需要改配置；更早的 Codex 默认只等 120 秒，请更新，或在 `~/.codex/config.toml` 的 `[mcp_servers.focus-studio]` 下设置 `tool_timeout_sec = 300`，详见 [安装与首次使用](docs/INSTALL.md) 的常见问题。
-- **不开放**：付费生成（`generate_image` / `generate_video`）、点击和键盘输入、Shell 命令。需要 AI 片头片尾时，Claude Code 可以用 `skills/` 里的 Seedream / Seedance skill。
+- **操作边界**：MCP 可在一次录制中执行有边界的点击、滚动与输入，并能读取时间线、分析节奏、编辑片段和素材；这些动作及结果均由 Focus Studio 执行和记录。外部 MCP 不开放付费生成或任意 Shell 命令。应用内助手的付费生成仍需展示所选模型和费用并由用户确认。
 
-24 个工具：
+46 个工具（以下按用途归类）：
 
 | 类别 | 工具 |
 | --- | --- |
 | 状态与项目 | `get_status`、`list_projects`、`get_project`、`rename_project`、`delete_project`（移到废纸篓） |
 | 导入 | `import_video`、`create_screenshot_demo` |
-| 录制 | `list_recording_sources`、`start_recording`、`stop_recording`、`wait_for_recording` |
-| 编辑 | `add_zoom`、`remove_zoom`、`set_zoom_style`、`update_settings`（含导出宽度和帧率）、`set_chapters`、`set_background_image`、`set_background_music`、`set_sound_effects` |
+| 录制与操作 | `list_recording_sources`、`start_recording`、`capture_recording_frame`、`perform_recording_action`、`perform_recording_text`、`stop_recording`、`wait_for_recording` |
+| 剪辑与素材 | `analyze_demo_pacing`、`create_demo_cut`、`get_timeline`、`list_media_assets`、`list_global_media_assets`、`import_global_media_asset`、`add_global_media_to_project`、`import_media_asset`、`insert_media_asset`、`split_clip`、`trim_clip`、`delete_clip`、`move_clip`、`set_transition`、`set_clip_audio`、`set_image_duration`、`undo_clip_edit`、`redo_clip_edit` |
+| 镜头与外观 | `update_zoom`、`add_zoom`、`remove_zoom`、`set_zoom_style`、`update_settings`（含导出宽度和帧率）、`set_chapters`、`set_background_image`、`set_background_music`、`set_sound_effects` |
 | 输出 | `capture_frame`（直接返回图片）、`export_project`、`assemble_video`、`list_assets` |
 | 长任务 | `wait_for_job` |
 
@@ -98,7 +101,7 @@ codex mcp add focus-studio -- "/Applications/Focus Studio.app/Contents/MacOS/foc
 
 ## 可操控应用的 AI 助手、Codex 大脑与语音
 
-- **助手可以操控 Focus Studio**：独立的 AI 助手窗口跨页面存活。对话即可完成整条流程：列出可录制的窗口/显示器 → 开始录制（自动倒计时）→ 停止并进入编辑器 → 增删缩放、调整镜头风格、选择背景音乐/音效、写入章节字幕 → 导出 → 生成 AI 片头/片尾并拼接。
+- **助手可以操控 Focus Studio**：独立的 AI 助手窗口跨页面存活。对话可完成录制、剪辑、镜头调整、章节字幕、音频与导出；录完也可以分析停顿与节奏，再建议保留或裁掉的部分。编辑器选中单个片段后，可用 **AI 优化此片段** 将准确的片段 ID 送入对话，先准备首末帧及短参考视频，再讨论镜头方案；生成和替换不会因点击该按钮而自动发生。
 - **两种大脑**：设置 → AI 模型里选择"默认文本模型"（任意已配置的 API Key 提供商，含 OpenRouter）或 **Codex（ChatGPT 登录）**，后者复用本机 Codex app-server，无需 API Key。工具始终在本地执行，付费生成前必须确认。
 - **开箱即用**：启动时若 `~/.config/focus-studio/ark.env` 里有火山方舟密钥而应用尚未配置，会自动导入、测试并选定默认模型；设置页也有"从 ark.env 导入"。
 - **语音**：麦克风按钮按下即说话（本地语音识别，跟随界面语言，静音自动停止），可选让助手朗读回复。
@@ -110,7 +113,7 @@ codex mcp add focus-studio -- "/Applications/Focus Studio.app/Contents/MacOS/foc
 - **设置 → AI 模型**：为 OpenAI、Anthropic、DeepSeek、GLM（智谱）、Kimi（Moonshot）、OpenRouter、火山方舟或任意 OpenAI 兼容端点填入密钥（保存在 `~/Library/Application Support/FocusStudio/secrets.json`，仅本用户可读，不进入项目或安装包），一键测试并拉取模型列表，选择一个"默认文本模型"。OpenRouter 用一把密钥即可访问多家厂商模型。Codex Director 仍走本机 Codex。
 - **章节与字幕**：时间线新增 Chapters 泳道，检查器新增 Captions 工具；字幕条在预览与导出中一致渲染（可选位置、大小、章节编号），支持导出 SRT。
 - **AI 编辑**：填写"这个 demo 展示什么"，AI 依据录制的点击、缩放与输入时间生成章节与字幕，也可一键润色；所有结果都可以手动修改。没有配置 AI 模型时，这些按钮禁用，其余功能不受影响。
-- **AI 助手（对话式）**：编辑器顶栏 **AI** 按钮打开面板，用自然语言描述意图，助手先理解与推理，再调用工具执行：Seedream 生成背景图/标题卡并直接应用、Seedance 生成片头/片尾/B-roll（付费前显示预估费用并等待确认，支持参考图、参考视频与参考音频）、截取当前画面作参考、修改外观设置、写入章节、导出 demo 并把片头 + demo + 片尾拼接成一个 MP4。生成素材保存在项目的 `ai/` 文件夹，随时可以手动修改。项目库也提供无项目上下文的助手入口。
+- **AI 助手（对话式）**：编辑器顶栏 **AI** 按钮打开面板。助手可准备真实产品画面的参考帧，写分镜与提示词，再用用户所选且已配置的 Seedance 或 Veo 视频模型生成片头、片尾或空景；付费前会展示模型、参数和预估费用。生成结果可在应用内预览，进入通用素材库后由用户明确加入某个项目，再放上时间线。设置方法见 [AI 模型配置](docs/AI-MODEL-SETUP.md)。
 - **界面**：说明性文字改为工具提示，保留控件与状态，降低信息密度。
 
 ## 界面动效（1.2）
@@ -119,7 +122,7 @@ codex mcp add focus-studio -- "/Applications/Focus Studio.app/Contents/MacOS/foc
 
 ## AI 视频与生图 Skills（火山引擎）
 
-`skills/` 目录提供四个 Claude Code Skills：用火山方舟 Seedance 生成片头/转场/片尾镜头、用 Seedream 生成标题卡与主视觉、把 Focus Studio 项目转成分镜 JSON，以及用 ffmpeg 把 AI 片段与录屏导出合成为企业级产品演示视频。AI 片段是可选项，不影响录制与编辑。密钥只从环境变量或 `~/.config/focus-studio/ark.env` 读取，绝不写入仓库。另有 `focus-studio-mcp`（1.12），教 Claude Code 通过 MCP 工具录制、编辑和导出，不涉及付费生成。详见 [`skills/README.md`](skills/README.md)。
+`skills/` 包含产品宣传镜头的分镜与提示词工作流、Seedance / Seedream 生成、无损 Demo 剪辑和 Focus Studio MCP 操作说明。它们适用于不同产品；真实 UI、数据、Logo 和准确文案应来自产品素材，不应让生成模型凭空重画。AI 片段是可选项，不影响录制与编辑。详见 [`skills/README.md`](skills/README.md)。
 
 ## 截图转 Demo
 
@@ -192,7 +195,7 @@ open "dist/Focus Studio.app"
 ./scripts/package-release.sh
 ```
 
-该命令构建通用应用并生成 DMG、ZIP、SHA-256 校验文件。只打包应用及静态素材，不复制个人项目或登录凭据。`verify-release.sh` 同时检查 helper：架构与应用一致、只依赖系统库、签名标识、没有 entitlements，并对每个可运行的架构做一次 stdio 冒烟测试（握手、24 个工具与 `Tests/MCPTests/v1-tools.txt` 一致）。
+该命令构建通用应用并生成 DMG、ZIP、SHA-256 校验文件。只打包应用及静态素材，不复制个人项目或登录凭据。`verify-release.sh` 同时检查 helper：架构与应用一致、只依赖系统库、签名标识、没有 entitlements，并对每个可运行的架构做一次 stdio 冒烟测试（握手、46 个工具与 `Tests/MCPTests/v1-tools.txt` 一致）。
 
 ## macOS 权限
 
@@ -226,7 +229,7 @@ open "dist/Focus Studio.app"
 - 检查输出尺寸、时长、缩放帧差异、裁剪区域与音视频可读性。
 - 用隔离的临时项目库反复测试打开、编辑、返回、旧绑定读取与过期回调，验证最新修改落盘。
 - 验证 MCP 控制通道（`FocusStudioAppRegression`）：按 `project_id` 编辑、首次连接批准与撤销、调用时间从到达应用算起（等批准或排队超过这段时间时返回 `waiting_for_approval` / `waiting_for_turn`，helper 报告的已用时间限制在 0–600 秒）、socket 权限、录制会话（倒计时、`duration`、`wait_for_recording`、取消、声音询问），以及一次真实链路的端到端调用（`focus-studio-mcp` → 控制服务 → 应用模型，使用临时项目库）；一键接入只针对假的 `claude` / `codex`，不会改动本机配置。
-- 运行 `scripts/test-mcp.sh`：工具目录（24 个工具，与 `Tests/MCPTests/v1-tools.txt` 一致）、SDK 适配层、协议版本协商、进度、取消、断线重连；用只依赖标准库的 Python MCP 客户端通过真实 stdio 驱动构建出的 helper，并连接一个假的应用。所有 helper 都设置 `FOCUS_STUDIO_MCP_NO_LAUNCH=1` 和临时 socket，不会打开或连接真实的 Focus Studio。
+- 运行 `scripts/test-mcp.sh`：工具目录（46 个工具，与 `Tests/MCPTests/v1-tools.txt` 一致）、SDK 适配层、协议版本协商、进度、取消、断线重连；用只依赖标准库的 Python MCP 客户端通过真实 stdio 驱动构建出的 helper，并连接一个假的应用。所有 helper 都设置 `FOCUS_STUDIO_MCP_NO_LAUNCH=1` 和临时 socket，不会打开或连接真实的 Focus Studio。
 
 端到端产物位于 `.artifacts/e2e/`。
 
