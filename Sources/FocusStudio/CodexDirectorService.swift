@@ -153,11 +153,15 @@ final class CodexDirectorService: ObservableObject {
     private var refreshingAccount = false
     private var connectionGeneration = UUID()
     private var activeModel: CodexAvailableModel?
+    var assistantModel: CodexAvailableModel? { activeModel }
 
     /// One-shot completions for the AI assistant run on their own thread so the
     /// Director's planning thread and its output schema stay untouched.
     private struct AssistantTurn {
         let token = UUID()
+        let startedUptime = ProcessInfo.processInfo.systemUptime
+        var diagnosticCount = 0
+        var observedNotificationKinds: Set<String> = []
         var id: String?
         var continuation: CheckedContinuation<String, Error>?
         var streamed = ""
@@ -169,8 +173,42 @@ final class CodexDirectorService: ObservableObject {
 
     static let assistantTurnTimeout: TimeInterval = 180
 
+    /// The app-server's structured output requires closed object schemas.
+    /// A transport envelope keeps arbitrary tool arguments/generic JSON valid
+    /// without weakening that contract or enumerating every consumer's keys.
+    static let assistantOutputSchema: CodexJSONValue = .object([
+        "type": .string("object"),
+        "additionalProperties": .bool(false),
+        "properties": .object([
+            "response_json": .object([
+                "type": .string("string"),
+                "description": .string("The complete JSON object requested by the developer instructions, serialized as a JSON string. Preserve its original keys and nested tool arguments inside this string.")
+            ])
+        ]),
+        "required": .array([.string("response_json")])
+    ])
+
+    private static let assistantTransportInstructions = """
+
+    Transport format: when the turn output schema requests response_json, put the complete JSON object requested above inside that field as a serialized JSON string. The schema wrapper is only the transport; keep the requested reply, action, tool arguments, recordingPlan, or other JSON structure inside response_json. When no output schema is supplied, answer in the format requested above without this wrapper.
+    Focus Studio executes the action returned in your final JSON. Return one requested action or reply directly. Do not invoke Codex shell, browser, computer-use, MCP, search, planning, or delegation tools: they are not the app's recorded action channel. Inspect the image supplied with this turn; an older image is never a current coordinate reference. Updated app state replaces preceding app state, and new conversation entries continue the existing conversation.
+    """
+
+    private static func unwrapAssistantJSON(_ response: String) throws -> String {
+        guard let envelope = try? JSONDecoder().decode(CodexJSONValue.self, from: Data(response.utf8)).objectValue,
+              Set(envelope.keys) == ["response_json"],
+              let json = envelope["response_json"]?.stringValue, json.utf8.count <= 1_000_000,
+              let decoded = try? JSONDecoder().decode(CodexJSONValue.self, from: Data(json.utf8)),
+              decoded.objectValue != nil else {
+            throw CodexDirectorServiceError.malformedResponse("The assistant's structured response did not contain a valid JSON object.")
+        }
+        return json
+    }
+
+
     private var assistantThreadID: String?
     private var assistantThreadInstructions: String?
+    private var assistantLastTranscript: String?
     private var assistantContextGeneration = UUID()
     private var completingAssistantRequest = false
     private var assistantRequestID: UUID?
@@ -216,9 +254,17 @@ final class CodexDirectorService: ObservableObject {
         }
     }
 
+    private var hasFailedConnection: Bool {
+        if case .failed = connectionState { return true }
+        return false
+    }
+
     func connect() async {
         guard !connectionState.isBusy else { return }
-        if isServerConnected {
+        // Some discovery failures are cached inside a still-running server.
+        // A deliberate retry must recreate that transport, even when the saved
+        // executable/account did not change. Healthy connections can refresh.
+        if isServerConnected, !hasFailedConnection {
             await refreshConnection()
             return
         }
@@ -543,14 +589,15 @@ final class CodexDirectorService: ObservableObject {
     /// when needed; a missing sign-in is reported as a clear error. `json`
     /// asks for any JSON object via `outputSchema`. Times out after
     /// ``assistantTurnTimeout``; cancelling the calling task interrupts the turn.
-    func completeText(developerInstructions: String, prompt: String, json: Bool) async throws -> String {
+    func completeText(developerInstructions: String, prompt: String, json: Bool, imageURLs: [URL] = [], conversationSnapshot: Bool = false, interactive: Bool = false) async throws -> String {
         guard assistantRequestID == nil else { throw CodexDirectorServiceError.turnAlreadyRunning }
         let requestID = UUID()
         assistantRequestID = requestID
         defer { assistantRequestID = nil }
         return try await withTaskCancellationHandler {
             do {
-                return try await performAssistantCompletion(developerInstructions: developerInstructions, prompt: prompt, json: json)
+                let response = try await performAssistantCompletion(developerInstructions: developerInstructions, prompt: prompt, json: json, imageURLs: imageURLs, conversationSnapshot: conversationSnapshot, interactive: interactive)
+                return json ? try Self.unwrapAssistantJSON(response) : response
             } catch {
                 if Task.isCancelled { throw CancellationError() }
                 throw error
@@ -569,40 +616,121 @@ final class CodexDirectorService: ObservableObject {
         }
     }
 
-    private func performAssistantCompletion(developerInstructions: String, prompt: String, json: Bool) async throws -> String {
-        guard assistantTurn == nil, !completingAssistantRequest else { throw CodexDirectorServiceError.turnAlreadyRunning }
+    /// Connect and create the exact execution thread without spending a model
+    /// turn. The session calls this while no recording is active, after its
+    /// readiness check and before starting the countdown.
+    func prepareAssistantConversation(developerInstructions: String) async throws {
+        guard assistantRequestID == nil, assistantTurn == nil, !completingAssistantRequest else {
+            throw CodexDirectorServiceError.turnAlreadyRunning
+        }
+        let requestID = UUID()
+        assistantRequestID = requestID
         completingAssistantRequest = true
-        defer { completingAssistantRequest = false }
+        defer {
+            assistantRequestID = nil
+            completingAssistantRequest = false
+        }
+        try await withTaskCancellationHandler {
+            do {
+                _ = try await ensureAssistantThread(developerInstructions: developerInstructions)
+            } catch {
+                if Task.isCancelled { throw CancellationError() }
+                throw error
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                guard let self, self.assistantRequestID == requestID else { return }
+                // There is no model turn to interrupt. Cancel this dedicated
+                // transport's setup requests without changing authentication.
+                self.disconnect()
+            }
+        }
+    }
+
+    private func ensureAssistantThread(developerInstructions: String) async throws -> String {
         let contextGeneration = assistantContextGeneration
         if syncsPreferencesWithStore { reloadPreferencesFromStore() }
         try await ensureConnectedForCompletion()
         guard contextGeneration == assistantContextGeneration else { throw CancellationError() }
-        if assistantThreadID == nil || assistantThreadInstructions != developerInstructions {
-            try await startAssistantThread(instructions: developerInstructions)
+        let instructions = developerInstructions + "\n" + Self.assistantTransportInstructions
+        if assistantThreadID == nil || assistantThreadInstructions != instructions {
+            try await startAssistantThread(instructions: instructions)
         }
         guard contextGeneration == assistantContextGeneration else { throw CancellationError() }
         guard let threadID = assistantThreadID, process?.isRunning == true else {
             throw CodexDirectorServiceError.processUnavailable
         }
         try Task.checkCancellation()
+        return threadID
 
+    }
+
+    private func performAssistantCompletion(developerInstructions: String, prompt: String, json: Bool, imageURLs: [URL], conversationSnapshot: Bool, interactive: Bool) async throws -> String {
+        guard assistantTurn == nil, !completingAssistantRequest else { throw CodexDirectorServiceError.turnAlreadyRunning }
+        completingAssistantRequest = true
+        defer { completingAssistantRequest = false }
+        var threadID = try await ensureAssistantThread(developerInstructions: developerInstructions)
+        let snapshot = conversationSnapshot ? Self.assistantConversationParts(prompt) : nil
+        if let previous = assistantLastTranscript, let snapshot, !snapshot.transcript.hasPrefix(previous) {
+            // The local conversation was edited or truncated. Rebase once on
+            // its complete current snapshot instead of retaining hidden stale
+            // messages. Ordinary append-only steps reuse the prewarmed thread.
+            try await startAssistantThread(instructions: developerInstructions + "\n" + Self.assistantTransportInstructions)
+            guard let freshID = assistantThreadID else { throw CodexDirectorServiceError.connectionClosed }
+            threadID = freshID
+        }
+        let inputPrompt: String
+        if let snapshot, let previous = assistantLastTranscript {
+            let additions = String(snapshot.transcript.dropFirst(previous.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            inputPrompt = snapshot.header + "\n\n[New conversation entries]\n" + (additions.isEmpty ? "(No new entries; use the updated app state and attached image.)" : additions)
+        } else {
+            inputPrompt = prompt
+        }
+
+        var input: [CodexJSONValue] = [.object(["type": .string("text"), "text": .string(inputPrompt)])]
+        if !imageURLs.isEmpty {
+            guard activeModel?.supportsImages != false else {
+                throw CodexDirectorServiceError.turnFailed("The selected model does not accept screenshots. Choose a model with image support in Connection settings.")
+            }
+            guard imageURLs.count <= 4 else {
+                throw CodexDirectorServiceError.malformedResponse("At most four image attachments are supported per assistant turn.")
+            }
+            for url in imageURLs {
+                let values = try url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+                guard url.isFileURL, values.isRegularFile == true,
+                      (values.fileSize ?? 0) > 0, (values.fileSize ?? 0) <= 25_000_000,
+                      ["png", "jpg", "jpeg", "webp", "gif", "heic", "tiff"].contains(url.pathExtension.lowercased()),
+                      NSImage(contentsOf: url) != nil else {
+                    throw CodexDirectorServiceError.malformedResponse("An attached screenshot is unavailable or is not a supported image.")
+                }
+                input.append(.object(["type": .string("localImage"), "path": .string(url.standardizedFileURL.path), "detail": .string("high")]))
+            }
+        }
         var parameters: [String: CodexJSONValue] = [
             "threadId": .string(threadID),
-            "input": .array([.object(["type": .string("text"), "text": .string(prompt)])])
+            "input": .array(input)
         ]
         if json {
-            parameters["outputSchema"] = .object(["type": .string("object"), "additionalProperties": .bool(true)])
+            parameters["outputSchema"] = Self.assistantOutputSchema
         }
-        if let effort = activeModel?.defaultEffort { parameters["effort"] = .string(effort) }
+        let effort = activeModel?.assistantEffort(interactive: interactive)
+        if let effort { parameters["effort"] = .string(effort) }
 
         // The turn record exists before the request goes out: the completion
         // notification can be processed before the turn/start response resumes us.
+        try Task.checkCancellation()
         assistantTurn = AssistantTurn()
+        assistantDiagnostic("request", fields: [
+            "model": Self.diagnosticToken(activeModel?.id), "effort": Self.diagnosticToken(effort),
+            "interactive": interactive, "input_chars": inputPrompt.count, "snapshot_chars": prompt.count,
+            "image_count": imageURLs.count, "incremental": snapshot != nil && assistantLastTranscript != nil
+        ])
         let generation = connectionGeneration
         let response: CodexJSONValue
         do {
             response = try await request(method: "turn/start", params: .object(parameters))
         } catch {
+            assistantDiagnostic("request_failed")
             if generation == connectionGeneration { assistantTurn = nil }
             throw error
         }
@@ -612,6 +740,8 @@ final class CodexDirectorService: ObservableObject {
             throw CodexDirectorServiceError.malformedResponse("turn/start omitted turn.id")
         }
         assistantTurn?.id = turnID
+        assistantLastTranscript = snapshot?.transcript
+        assistantDiagnostic("accepted")
         if Task.isCancelled {
             await interruptAssistantTurn()
             throw CancellationError()
@@ -635,6 +765,44 @@ final class CodexDirectorService: ObservableObject {
         }
     }
 
+    /// Only the app adapter opts into snapshot input. Direct callers retain
+    /// normal app-server incremental-turn semantics.
+    static func assistantConversationParts(_ prompt: String) -> (header: String, transcript: String)? {
+        guard let marker = prompt.range(of: "\n\n[Conversation]\n") else { return nil }
+        return (String(prompt[..<marker.lowerBound]), String(prompt[marker.upperBound...]))
+    }
+
+    var assistantDiagnosticsURL: URL {
+        configuration.accountDirectoryURL.appendingPathComponent("diagnostics/assistant-turns.jsonl")
+    }
+
+    /// Lifecycle metadata only: never write prompts, images, tool arguments,
+    /// reasoning text, replies, URLs, credentials, or server error messages.
+    private func assistantDiagnostic(_ event: String, fields: [String: Any] = [:]) {
+        guard let turn = assistantTurn, turn.diagnosticCount < 128 else { return }
+        assistantTurn?.diagnosticCount += 1
+        var values = fields
+        values["event"] = event
+        values["time"] = Date().ISO8601Format()
+        values["request_id"] = turn.token.uuidString
+        values["elapsed_ms"] = Int(max(0, ProcessInfo.processInfo.systemUptime - turn.startedUptime) * 1_000)
+        guard var line = try? JSONSerialization.data(withJSONObject: values, options: [.sortedKeys]) else { return }
+        line.append(0x0A)
+        let url = assistantDiagnosticsURL
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let previous = (try? Data(contentsOf: url)) ?? Data()
+        var data = previous.count + line.count <= 64_000 ? previous : Data()
+        data.append(line)
+        try? data.write(to: url, options: .atomic)
+    }
+
+    private static func diagnosticToken(_ value: String?) -> String {
+        guard let value else { return "none" }
+        return String(value.unicodeScalars.filter {
+            CharacterSet.alphanumerics.contains($0) || "_./-".unicodeScalars.contains($0)
+        }.prefix(96).map(Character.init))
+    }
+
     /// Settings › Codex saves through another service instance; pick up its
     /// executable, model and account scope before talking to the server.
     private func reloadPreferencesFromStore() {
@@ -645,7 +813,7 @@ final class CodexDirectorService: ObservableObject {
     }
 
     private func ensureConnectedForCompletion() async throws {
-        if !isServerConnected {
+        if !isServerConnected || hasFailedConnection {
             await connect()
         } else if !canCreatePlan, !connectionState.isBusy {
             await refreshConnection()
@@ -668,12 +836,20 @@ final class CodexDirectorService: ObservableObject {
         guard accountReady else { throw CodexDirectorServiceError.assistantSignInRequired }
         let generation = connectionGeneration
         let contextGeneration = assistantContextGeneration
+        // Read with the same cwd as thread/start so project and account layers
+        // agree. Re-read for each new thread; reused turns incur no extra RPC.
+        let threadConfiguration = try await assistantThreadConfiguration()
+        guard generation == connectionGeneration, contextGeneration == assistantContextGeneration else { throw CancellationError() }
+        try Task.checkCancellation()
         var params: [String: CodexJSONValue] = [
             "cwd": .string(configuration.workingDirectoryURL.path),
             "developerInstructions": .string(instructions),
             "approvalPolicy": .string("never"),
             "sandbox": .string("read-only"),
-            "ephemeral": .bool(true)
+            "ephemeral": .bool(true),
+            // These are thread-local documented config overrides; the user's
+            // Codex settings, account and selected model remain untouched.
+            "config": .object(threadConfiguration)
         ]
         if let activeModel { params["model"] = .string(activeModel.id) }
         let result = try await request(method: "thread/start", params: .object(params))
@@ -683,9 +859,58 @@ final class CodexDirectorService: ObservableObject {
         }
         assistantThreadID = id
         assistantThreadInstructions = instructions
+        assistantLastTranscript = nil
+    }
+
+    private func assistantThreadConfiguration() async throws -> [String: CodexJSONValue] {
+        let unavailable = CodexDirectorServiceError.assistantUnavailable(
+            "Codex configuration could not be read. Reconnect or update Codex and try again. No assistant thread was started."
+        )
+        let response: CodexJSONValue
+        do {
+            response = try await request(method: "config/read", params: .object([
+                "includeLayers": .bool(false),
+                "cwd": .string(configuration.workingDirectoryURL.path)
+            ]))
+        } catch {
+            if Task.isCancelled { throw CancellationError() }
+            // Config RPC errors can include configuration values. Do not expose
+            // them in the conversation or diagnostics, and do not fall back to
+            // starting inherited servers when their names could not be read.
+            throw unavailable
+        }
+        guard let config = response.objectValue?["config"]?.objectValue else { throw unavailable }
+        let servers: [String: CodexJSONValue]
+        if let value = config["mcp_servers"], value != .null {
+            guard let entries = value.objectValue, entries.values.allSatisfy({ $0.objectValue != nil }) else { throw unavailable }
+            servers = entries
+        } else {
+            servers = [:]
+        }
+        // Nested JSON object keys remain literal server IDs, including dots,
+        // quotes and escapes. Never interpolate IDs into config key paths or
+        // copy server commands, arguments, credentials or headers into the
+        // override. Codex merges these enabled flags into this thread only.
+        let disabledServers = servers.mapValues { _ in CodexJSONValue.object(["enabled": .bool(false)]) }
+        return [
+            "features.shell_tool": .bool(false),
+            "features.unified_exec": .bool(false),
+            "features.apps": .bool(false),
+            "features.multi_agent": .bool(false),
+            "features.plugins": .bool(false),
+            "web_search": .string("disabled"),
+            "mcp_servers": .object(disabledServers)
+        ]
     }
 
     private func handleAssistantNotification(method: String, params: [String: CodexJSONValue]) {
+        if assistantTurn != nil, assistantTurnMatches(params["turnId"]?.stringValue ?? params["turn"]?.objectValue?["id"]?.stringValue) {
+            let itemType = params["item"]?.objectValue?["type"]?.stringValue
+            let key = method + ":" + (itemType ?? "")
+            if assistantTurn?.observedNotificationKinds.insert(key).inserted == true || method == "item/started" || method == "item/completed" {
+                assistantDiagnostic("notification", fields: ["method": Self.diagnosticToken(method), "item_type": Self.diagnosticToken(itemType)])
+            }
+        }
         switch method {
         case "turn/started":
             if assistantTurn != nil, assistantTurn?.id == nil,
@@ -723,6 +948,8 @@ final class CodexDirectorService: ObservableObject {
 
     private func finishAssistantTurn(_ turn: [String: CodexJSONValue]) {
         let status = turn["status"]?.stringValue ?? "failed"
+        let itemTypes = turn["items"]?.arrayValue?.compactMap { $0.objectValue?["type"]?.stringValue } ?? []
+        assistantDiagnostic("completed", fields: ["status": Self.diagnosticToken(status), "item_types": itemTypes.prefix(32).map { Self.diagnosticToken($0) }])
         switch status {
         case "interrupted":
             resolveAssistantTurn(.failure(CancellationError()))
@@ -743,6 +970,14 @@ final class CodexDirectorService: ObservableObject {
     /// starts waiting (the notification can precede the turn/start response).
     private func resolveAssistantTurn(_ result: Result<String, Error>) {
         guard var turn = assistantTurn else { return }
+        if turn.pendingResult == nil {
+            let outcome: String
+            switch result {
+            case .success: outcome = "success"
+            case let .failure(error): outcome = error is CancellationError ? "cancelled" : "failed"
+            }
+            assistantDiagnostic("resolved", fields: ["outcome": outcome])
+        }
         turn.deadline?.cancel()
         turn.deadline = nil
         if let continuation = turn.continuation {
@@ -756,8 +991,11 @@ final class CodexDirectorService: ObservableObject {
 
     private func interruptAssistantTurn() async {
         guard let turn = assistantTurn, interruptingAssistantTurns.insert(turn.token).inserted else { return }
+        assistantDiagnostic("interrupt_requested")
         defer { interruptingAssistantTurns.remove(turn.token) }
-        if let threadID = assistantThreadID, let turnID = turn.id, process?.isRunning == true {
+        let interruptedThreadID = assistantThreadID
+        discardAssistantThread(matching: interruptedThreadID)
+        if let threadID = interruptedThreadID, let turnID = turn.id, process?.isRunning == true {
             _ = try? await request(
                 method: "turn/interrupt",
                 params: .object(["threadId": .string(threadID), "turnId": .string(turnID)])
@@ -767,6 +1005,16 @@ final class CodexDirectorService: ObservableObject {
         resolveAssistantTurn(.failure(CancellationError()))
     }
 
+    /// An interrupt acknowledgement may precede the old completed event.
+    /// Retries must get a new thread so that late events cannot resolve a new
+    /// turn whose ID has not arrived yet. Authentication stays connected.
+    private func discardAssistantThread(matching threadID: String?) {
+        guard let threadID, assistantThreadID == threadID else { return }
+        assistantThreadID = nil
+        assistantThreadInstructions = nil
+        assistantLastTranscript = nil
+    }
+
     /// New chat/provider switches must not retain hidden server-side messages.
     /// Authentication remains connected; the next message starts a fresh thread.
     func resetAssistantConversation() async {
@@ -774,11 +1022,14 @@ final class CodexDirectorService: ObservableObject {
         await interruptAssistantTurn()
         assistantThreadID = nil
         assistantThreadInstructions = nil
+        assistantLastTranscript = nil
     }
 
     private func timeoutAssistantTurn() async {
         guard let token = assistantTurn?.token else { return }
-        if let threadID = assistantThreadID, let turnID = assistantTurn?.id, process?.isRunning == true {
+        let interruptedThreadID = assistantThreadID
+        discardAssistantThread(matching: interruptedThreadID)
+        if let threadID = interruptedThreadID, let turnID = assistantTurn?.id, process?.isRunning == true {
             _ = try? await request(
                 method: "turn/interrupt",
                 params: .object(["threadId": .string(threadID), "turnId": .string(turnID)])
@@ -978,6 +1229,18 @@ final class CodexDirectorService: ObservableObject {
 
         guard let method = object["method"]?.stringValue else { return }
         let params = object["params"]?.objectValue ?? [:]
+        if let requestID = object["id"], let assistantThreadID,
+           params["threadId"]?.stringValue == assistantThreadID {
+            // This adapter hosts final JSON actions, not app-server dynamic
+            // tools or approval requests. Never leave an unexpected callback
+            // hanging silently while the recording watchdog keeps running.
+            assistantDiagnostic("unsupported_server_request", fields: ["method": Self.diagnosticToken(method)])
+            try? write(.object([
+                "id": requestID,
+                "error": .object(["code": .number(-32601), "message": .string("Focus Studio accepts final JSON actions only; this app-server callback is unsupported.")])
+            ]))
+            return
+        }
         handleNotification(method: method, params: params)
     }
 
@@ -1007,9 +1270,9 @@ final class CodexDirectorService: ObservableObject {
             handleAssistantNotification(method: method, params: params)
             return
         }
-        if let threadID = params["threadId"]?.stringValue,
-           let activeThreadID,
-           threadID != activeThreadID {
+        if let threadID = params["threadId"]?.stringValue, threadID != activeThreadID {
+            // Retired assistant events must not fall through into the legacy
+            // Director handler when no Director thread is active either.
             return
         }
 
@@ -1255,6 +1518,7 @@ final class CodexDirectorService: ObservableObject {
         activeTurnID = nil
         assistantThreadID = nil
         assistantThreadInstructions = nil
+        assistantLastTranscript = nil
         resolveAssistantTurn(.failure(CodexDirectorServiceError.connectionClosed))
         assistantTurn = nil
         turnDeadlineTask?.cancel()

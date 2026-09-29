@@ -150,9 +150,57 @@ public enum ProjectVideoRenderer {
         let requestedDuration = project.duration.isFinite && project.duration > 0
             ? project.duration
             : sourceVideoDuration
-        let duration = min(requestedDuration, sourceDurationSeconds, sourceVideoDuration)
+        let timeline: DemoVideoTimeline
+        if project.videoClips == nil {
+            // Preserve the old preview/export behavior for pre-editor projects
+            // whose metadata is a little longer than the media track.
+            let legacyDuration = min(requestedDuration, sourceDurationSeconds, sourceVideoDuration)
+            timeline = try DemoVideoTimeline(
+                clips: [.init(id: project.id, sourceStart: 0, sourceEnd: legacyDuration)],
+                transitions: [], sourceDuration: legacyDuration)
+        } else {
+            timeline = try DemoVideoTimeline(project: project)
+            guard timeline.sourceDuration <= sourceVideoDuration + 0.002,
+                  timeline.sourceDuration <= sourceDurationSeconds + 0.002 else {
+                throw ProjectRenderError.invalidSourceDuration
+            }
+        }
+        let duration = timeline.duration
         let durationTime = CMTime(seconds: duration, preferredTimescale: 600)
-        let sourceRange = CMTimeRange(start: sourceVideoTimeRange.start, duration: durationTime)
+
+        // Resolve each imported item once. The project store keeps a local
+        // copy, but a relative path also works for freshly decoded metadata.
+        let usedAssetIDs = Set(timeline.clips.compactMap(\.mediaAssetID))
+        var importedVideos: [UUID: (asset: AVURLAsset, track: AVAssetTrack, range: CMTimeRange,
+                                    transform: CGAffineTransform)] = [:]
+        var importedImages: [UUID: CIImage] = [:]
+        for media in timeline.mediaAssets where usedAssetIDs.contains(media.id) {
+            let url = try resolveMediaURL(path: media.filePath,
+                                          relativeTo: sourceURL.deletingLastPathComponent())
+            switch media.kind {
+            case .video:
+                let asset = AVURLAsset(url: url)
+                guard let track = try await asset.loadTracks(withMediaType: .video).first else {
+                    throw ProjectRenderError.mediaAssetHasNoVideoTrack(url)
+                }
+                let range = try await track.load(.timeRange)
+                let requestedEnd = timeline.clips
+                    .filter { $0.mediaAssetID == media.id }
+                    .map(\.sourceEnd).max() ?? 0
+                guard range.duration.seconds.isFinite,
+                      range.duration.seconds + 0.002 >= requestedEnd else {
+                    throw ProjectRenderError.mediaAssetTooShort(url)
+                }
+                importedVideos[media.id] = (asset, track, range,
+                                            try await track.load(.preferredTransform))
+            case .image:
+                guard let image = CIImage(contentsOf: url),
+                      image.extent.width > 0, image.extent.height > 0 else {
+                    throw ProjectRenderError.mediaAssetInvalidImage(url)
+                }
+                importedImages[media.id] = image
+            }
+        }
 
         let composition = AVMutableComposition()
         guard let videoTrack = composition.addMutableTrack(
@@ -161,32 +209,85 @@ public enum ProjectVideoRenderer {
         ) else {
             throw ProjectRenderError.couldNotCreateCompositionTrack(.video)
         }
-        try videoTrack.insertTimeRange(sourceRange, of: sourceVideoTrack, at: .zero)
-        videoTrack.preferredTransform = try await sourceVideoTrack.load(.preferredTransform)
+        for placement in timeline.placements {
+            let sourceTrack: AVAssetTrack
+            let sourceRange: CMTimeRange
+            if let id = placement.clip.mediaAssetID,
+               let media = timeline.mediaAssets.first(where: { $0.id == id }), media.kind == .image {
+                // Keep the composition clock running through a still. Stretch
+                // one source frame as a placeholder; the CI callback replaces
+                // it with the image without writing a temporary movie.
+                let frameSeconds = min(sourceVideoDuration, 1 / Double(project.settings.frameRate.clamped(to: 1...120)))
+                let frameTime = CMTime(seconds: frameSeconds, preferredTimescale: 60_000)
+                let outputStart = CMTime(seconds: placement.start, preferredTimescale: 60_000)
+                let placeholder = CMTimeRange(start: sourceVideoTimeRange.start, duration: frameTime)
+                try videoTrack.insertTimeRange(placeholder, of: sourceVideoTrack, at: outputStart)
+                videoTrack.scaleTimeRange(CMTimeRange(start: outputStart, duration: frameTime),
+                                          toDuration: CMTime(seconds: placement.duration, preferredTimescale: 60_000))
+                continue
+            } else if let id = placement.clip.mediaAssetID, let imported = importedVideos[id] {
+                sourceTrack = imported.track
+                sourceRange = imported.range
+            } else {
+                sourceTrack = sourceVideoTrack
+                sourceRange = sourceVideoTimeRange
+            }
+            let selected = CMTimeRange(
+                start: sourceRange.start + CMTime(seconds: placement.clip.sourceStart, preferredTimescale: 60_000),
+                duration: CMTime(seconds: placement.duration, preferredTimescale: 60_000)
+            )
+            try videoTrack.insertTimeRange(selected, of: sourceTrack,
+                at: CMTime(seconds: placement.start, preferredTimescale: 60_000))
+        }
+        // One composition track contains clips from multiple assets. Its
+        // preferredTransform would otherwise rotate every clip like the base
+        // recording, irrespective of each imported video's own orientation.
+        // Keep composition coordinates raw and orient each source image in the
+        // shared preview/export CI callback below.
+        videoTrack.preferredTransform = .identity
+        let sourceVideoTransform = try await sourceVideoTrack.load(.preferredTransform)
+        let importedVideoTransforms = importedVideos.mapValues(\.transform)
 
         var includesAudio = false
         var audioMixParameters: [AVAudioMixInputParameters] = []
         let audioSettings = project.settings.resolvedProductDemoAudio
         let sourceAudioVolume = sanitizedVolume(audioSettings.sourceAudioVolume)
-        let sourceAudioTracks = try await sourceAsset.loadTracks(withMediaType: .audio)
-        for sourceAudioTrack in sourceAudioTracks {
+        let audioSources: [(assetID: UUID?, asset: AVURLAsset, videoRange: CMTimeRange)] =
+            [(nil, sourceAsset, sourceVideoTimeRange)]
+            + timeline.mediaAssets.compactMap { media in
+                importedVideos[media.id].map { (Optional(media.id), $0.asset, $0.range) }
+            }
+        for audioSource in audioSources {
+          for sourceAudioTrack in try await audioSource.asset.loadTracks(withMediaType: .audio) {
             guard let audioTrack = composition.addMutableTrack(
                 withMediaType: .audio,
                 preferredTrackID: kCMPersistentTrackID_Invalid
             ) else { continue }
 
             let sourceTimeRange = try await sourceAudioTrack.load(.timeRange)
-            let intersection = CMTimeRangeGetIntersection(sourceTimeRange, otherRange: sourceRange)
-            guard intersection.isValid, !intersection.isEmpty else {
+            var inserted = false
+            for placement in timeline.placements where placement.clip.mediaAssetID == audioSource.assetID {
+                let selected = CMTimeRange(
+                    start: audioSource.videoRange.start + CMTime(seconds: placement.clip.sourceStart, preferredTimescale: 60_000),
+                    duration: CMTime(seconds: placement.duration, preferredTimescale: 60_000)
+                )
+                let intersection = CMTimeRangeGetIntersection(sourceTimeRange, otherRange: selected)
+                guard intersection.isValid, !intersection.isEmpty else { continue }
+                let insertionTime = CMTime(seconds: placement.start, preferredTimescale: 60_000)
+                    + intersection.start - selected.start
+                try audioTrack.insertTimeRange(intersection, of: sourceAudioTrack, at: insertionTime)
+                inserted = true
+            }
+            guard inserted else {
                 composition.removeTrack(audioTrack)
                 continue
             }
-            let insertionTime = CMTimeSubtract(intersection.start, sourceRange.start)
-            try audioTrack.insertTimeRange(intersection, of: sourceAudioTrack, at: insertionTime)
             let parameters = AVMutableAudioMixInputParameters(track: audioTrack)
-            parameters.setVolume(sourceAudioVolume, at: .zero)
+            configureSourceAudio(parameters, timeline: timeline, globalVolume: sourceAudioVolume,
+                                 assetID: audioSource.assetID)
             audioMixParameters.append(parameters)
             includesAudio = true
+          }
         }
 
         if let backgroundMusicPath = normalizedPath(audioSettings.backgroundMusicPath) {
@@ -212,7 +313,7 @@ public enum ProjectVideoRenderer {
             }
         }
 
-        let clickSoundTimes = project.clickEvents.map(\.time)
+        let clickSoundTimes = project.resolvedClickEvents.map(\.time)
         if audioSettings.clickSoundEnabled,
            hasEffectTime(clickSoundTimes, duration: duration) {
             let effectURL = try? resolveSoundEffectURL(
@@ -281,11 +382,27 @@ public enum ProjectVideoRenderer {
             AVMutableVideoComposition.videoComposition(
                 with: composition,
                 applyingCIFiltersWithHandler: { request in
-                    let rendered = frameRenderer.render(
-                        sourceImage: request.sourceImage,
-                        seconds: request.compositionTime.seconds
-                    )
-                    request.finish(with: rendered, context: nil)
+                    let seconds = request.compositionTime.seconds
+                    let clip = timeline.placements.first {
+                        seconds >= $0.start && seconds < $0.end
+                    }?.clip ?? timeline.placements.last?.clip
+                    let rendered: CIImage
+                    if let id = clip?.mediaAssetID, let image = importedImages[id] {
+                        rendered = frameRenderer.renderImported(sourceImage: image, seconds: seconds)
+                    } else if clip?.mediaAssetID != nil {
+                        let transform = clip?.mediaAssetID.flatMap { importedVideoTransforms[$0] } ?? .identity
+                        rendered = frameRenderer.renderImported(
+                            sourceImage: orientedSourceImage(request.sourceImage, using: transform),
+                            seconds: seconds)
+                    } else {
+                        rendered = frameRenderer.render(
+                            sourceImage: orientedSourceImage(request.sourceImage, using: sourceVideoTransform),
+                            seconds: seconds)
+                    }
+                    request.finish(with: applyVideoTransition(
+                        to: rendered, seconds: seconds,
+                        timeline: timeline, canvas: CGRect(origin: .zero, size: geometry.outputSize)
+                    ), context: nil)
                 },
                 completionHandler: { composition, error in
                     if let composition {
@@ -587,6 +704,71 @@ public enum ProjectVideoRenderer {
         times.contains { $0.isFinite && $0 >= 0 && $0 < duration }
     }
 
+    private static func orientedSourceImage(_ image: CIImage,
+                                            using preferredTransform: CGAffineTransform) -> CIImage {
+        let raw = image.extent.standardized
+        guard raw.width > 0, raw.height > 0 else { return image }
+        let atOrigin = image.transformed(by: CGAffineTransform(
+            translationX: -raw.minX, y: -raw.minY))
+        let oriented = atOrigin.transformed(by: preferredTransform)
+        let bounds = oriented.extent.standardized
+        return oriented.transformed(by: CGAffineTransform(
+            translationX: -bounds.minX, y: -bounds.minY))
+    }
+
+    private static func configureSourceAudio(
+        _ parameters: AVMutableAudioMixInputParameters,
+        timeline: DemoVideoTimeline,
+        globalVolume: Float,
+        assetID: UUID?
+    ) {
+        for (index, placement) in timeline.placements.enumerated()
+            where placement.clip.mediaAssetID == assetID {
+            let level = globalVolume * Float(placement.clip.sourceAudioVolume)
+            let incoming = index > 0 ? timeline.transitions[index - 1].duration / 2 : 0
+            let outgoing = index < timeline.transitions.count ? timeline.transitions[index].duration / 2 : 0
+            let start = CMTime(seconds: placement.start, preferredTimescale: 60_000)
+            if incoming > 0 {
+                parameters.setVolume(0, at: start)
+                parameters.setVolumeRamp(fromStartVolume: 0, toEndVolume: level,
+                    timeRange: CMTimeRange(start: start,
+                        duration: CMTime(seconds: incoming, preferredTimescale: 60_000)))
+            } else {
+                parameters.setVolume(level, at: start)
+            }
+            if outgoing > 0 {
+                let fadeStart = CMTime(seconds: placement.end - outgoing, preferredTimescale: 60_000)
+                parameters.setVolume(level, at: fadeStart)
+                parameters.setVolumeRamp(fromStartVolume: level, toEndVolume: 0,
+                    timeRange: CMTimeRange(start: fadeStart,
+                        duration: CMTime(seconds: outgoing, preferredTimescale: 60_000)))
+            }
+        }
+    }
+
+    private static func applyVideoTransition(
+        to frame: CIImage,
+        seconds: Double,
+        timeline: DemoVideoTimeline,
+        canvas: CGRect
+    ) -> CIImage {
+        guard seconds.isFinite else { return frame }
+        for (index, transition) in timeline.transitions.enumerated() where transition.preset != .cut {
+            let join = timeline.placements[index].end
+            let half = transition.duration / 2
+            guard seconds >= join - half, seconds <= join + half else { continue }
+            // The two halves meet on the actual cut frame. This is a full-frame
+            // overlay on the finished canvas, so preview and MP4 match exactly.
+            let opacity = 1 - min(1, abs(seconds - join) / max(half, 0.000_001))
+            let value: CGFloat = transition.preset == .flash ? 1 : 0
+            let color = CIColor(red: value, green: value, blue: value,
+                                alpha: CGFloat(opacity.clamped(to: 0...1)))
+            return CIImage(color: color).cropped(to: canvas)
+                .composited(over: frame).cropped(to: canvas)
+        }
+        return frame
+    }
+
     private static func resolveSoundEffectURL(
         customPath: String?,
         bundledName: String,
@@ -632,6 +814,23 @@ public enum ProjectVideoRenderer {
         return standardizedURL
     }
 
+    private static func resolveMediaURL(path: String, relativeTo directory: URL) throws -> URL {
+        let expanded = NSString(string: path).expandingTildeInPath
+        let url: URL
+        if let fileURL = URL(string: expanded), fileURL.isFileURL {
+            url = fileURL
+        } else if expanded.hasPrefix("/") {
+            url = URL(fileURLWithPath: expanded)
+        } else {
+            url = directory.appendingPathComponent(expanded)
+        }
+        let normalized = url.standardizedFileURL
+        guard FileManager.default.fileExists(atPath: normalized.path) else {
+            throw ProjectRenderError.mediaAssetDoesNotExist(normalized)
+        }
+        return normalized
+    }
+
     private static func normalizedPath(_ path: String?) -> String? {
         guard let value = path?.trimmingCharacters(in: .whitespacesAndNewlines),
               !value.isEmpty else { return nil }
@@ -656,6 +855,10 @@ public enum ProjectVideoRenderer {
 
 public enum ProjectRenderError: LocalizedError, Equatable {
     case sourceDoesNotExist(URL)
+    case mediaAssetDoesNotExist(URL)
+    case mediaAssetInvalidImage(URL)
+    case mediaAssetHasNoVideoTrack(URL)
+    case mediaAssetTooShort(URL)
     case audioAssetDoesNotExist(URL)
     case bundledSoundEffectDoesNotExist(String)
     case audioAssetHasNoAudioTrack(URL)
@@ -673,6 +876,14 @@ public enum ProjectRenderError: LocalizedError, Equatable {
         switch self {
         case .sourceDoesNotExist(let url):
             return "Source video does not exist at \(url.path)."
+        case .mediaAssetDoesNotExist(let url):
+            return "Imported media does not exist at \(url.path)."
+        case .mediaAssetInvalidImage(let url):
+            return "The imported image at \(url.path) could not be decoded."
+        case .mediaAssetHasNoVideoTrack(let url):
+            return "The imported video at \(url.path) has no video track."
+        case .mediaAssetTooShort(let url):
+            return "The imported video at \(url.path) ends before its timeline clip."
         case .audioAssetDoesNotExist(let url):
             return "Audio asset does not exist at \(url.path)."
         case .bundledSoundEffectDoesNotExist(let name):
@@ -705,6 +916,7 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
     private let project: RecordingProject
     private let geometry: RenderGeometry
     private let cursorGraphics: CursorGraphicSet
+    private let interactions: InteractionTraceResolution
     private let sortedCursorSamples: [CursorSample]
     private let cursorSampleTimes: [Double]
     private let cursorMotionTimes: [Double]
@@ -716,6 +928,9 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
     private let sortedClicks: [ClickEvent]
     private let clickTimes: [Double]
     private let effectiveZoomSegments: [ZoomSegment]
+    /// Imported assets may use authored camera moves, but never inherit
+    /// recording clicks, crop coordinates or cursor-follow drift.
+    private let importedZoomSegments: [ZoomSegment]
     private let zoomStartTimes: [Double]
     private let zoomPrefixMaximumEnds: [Double]
     private let timelineSettings: ProjectSettings
@@ -735,13 +950,15 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
         self.project = project
         self.geometry = geometry
         self.cursorGraphics = cursorGraphics
+        let interactions = project.resolvedInteractions
+        self.interactions = interactions
         let sourceCropInsets = project.settings.sourceCropInsets?.sanitized ?? SourceCropInsets()
         self.sourceCropInsets = sourceCropInsets
         self.visibleSourceReferenceWidth = max(
             1,
             Double(project.sourceWidth) * (1 - sourceCropInsets.leading - sourceCropInsets.trailing)
         )
-        let cursorSamples = project.cursorSamples
+        let cursorSamples = project.interactionTrace != nil ? interactions.cursorSamples : project.cursorSamples
             .filter { $0.time.isFinite && $0.x.isFinite && $0.y.isFinite }
             .sorted { $0.time < $1.time }
         self.sortedCursorSamples = cursorSamples
@@ -753,12 +970,21 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
             return abs(lhs.x - rhs.x) + abs(lhs.y - rhs.y) > 0.0005 ? rhs.time : nil
         }
         let smoothingSigma = CursorMotion.smoothingSigma(for: project.settings.cursorAnimation)
-        let rawClicks = project.clickEvents.filter { $0.time.isFinite && $0.x.isFinite && $0.y.isFinite }
-        self.renderCursorSamples = smoothingSigma > 0
-            ? CursorMotion.smoothedPath(samples: cursorSamples, clicks: rawClicks, sigma: smoothingSigma)
-            : cursorSamples
+        if project.interactionTrace?.source == .execution {
+            self.renderCursorSamples = interactions.renderedCursorSamples(sigma: smoothingSigma)
+        } else if !(project.editCutTimes ?? []).isEmpty {
+            self.renderCursorSamples = EditedTimelineMotion.cursorPath(
+                samples: cursorSamples, clicks: project.resolvedClickEvents,
+                duration: project.duration, cutTimes: project.editCutTimes ?? [], sigma: smoothingSigma
+            )
+        } else {
+            let rawClicks = project.resolvedClickEvents.filter { $0.time.isFinite && $0.x.isFinite && $0.y.isFinite }
+            self.renderCursorSamples = smoothingSigma > 0
+                ? CursorMotion.smoothedPath(samples: cursorSamples, clicks: rawClicks, sigma: smoothingSigma)
+                : cursorSamples
+        }
         self.cursorKindChangeIndices = CursorMotion.kindChangeIndices(cursorSamples)
-        let clicks = project.clickEvents
+        let clicks = project.resolvedClickEvents
             .filter { $0.time.isFinite && $0.x.isFinite && $0.y.isFinite }
             .compactMap { click -> ClickEvent? in
                 guard let point = sourceCropInsets.croppedPoint(x: click.x, y: click.y) else {
@@ -797,6 +1023,11 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
             }
             .sorted { $0.start < $1.start }
         self.effectiveZoomSegments = zoomSegments
+        self.importedZoomSegments = project.zoomSegments.filter {
+            $0.kind == .manual && $0.isEnabled && $0.start.isFinite && $0.end.isFinite
+                && $0.targetX.isFinite && $0.targetY.isFinite && $0.scale.isFinite
+                && $0.end >= $0.start
+        }.sorted { $0.start < $1.start }
         self.zoomStartTimes = zoomSegments.map(\.start)
         var maximumEnd = -Double.infinity
         self.zoomPrefixMaximumEnds = zoomSegments.map { segment in
@@ -810,17 +1041,37 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
             guard let point = sourceCropInsets.croppedPoint(x: sample.x, y: sample.y) else { return nil }
             return CursorSample(time: sample.time, x: point.x, y: point.y, cursorKind: sample.cursorKind)
         }
-        // A hidden pointer must render exactly like absent cursor metadata, so
-        // the camera only follows a pointer the viewer can see.
-        self.followOffsets = project.settings.resolvedShowCursor
-            ? CursorFollow.offsets(
+        // Pointer pixels can already be embedded in a browser recording. The
+        // same measured trace still drives the camera without a second arrow.
+        if project.interactionTrace?.source == .execution {
+            self.followOffsets = InteractionCursorFollow.offsets(
                 duration: project.duration,
                 segments: zoomSegments,
                 settings: project.settings,
                 cursor: croppedCursorPath,
-                strength: project.settings.resolvedZoomFollowsCursor
+                strength: project.settings.resolvedZoomFollowsCursor,
+                discontinuities: interactions.discontinuityTimes,
+                cursorIsAvailable: { interactions.cursorIsAvailable(at: $0) }
             )
-            : []
+        } else if !(project.editCutTimes ?? []).isEmpty {
+            self.followOffsets = project.settings.resolvedShowCursor
+                ? EditedTimelineMotion.followOffsets(
+                    duration: project.duration, segments: zoomSegments,
+                    settings: project.settings, cursor: croppedCursorPath,
+                    strength: project.settings.resolvedZoomFollowsCursor,
+                    cutTimes: project.editCutTimes ?? []
+                ) : []
+        } else {
+            self.followOffsets = project.settings.resolvedShowCursor
+                ? CursorFollow.offsets(
+                    duration: project.duration,
+                    segments: zoomSegments,
+                    settings: project.settings,
+                    cursor: croppedCursorPath,
+                    strength: project.settings.resolvedZoomFollowsCursor
+                )
+                : []
+        }
         self.primaryColor = CIColor(hex: project.settings.backgroundColor)
             ?? CIColor(red: 0.427, green: 0.365, blue: 0.984, alpha: 1)
         self.secondaryColor = CIColor(hex: project.settings.secondaryBackgroundColor)
@@ -994,6 +1245,52 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
         return composed.cropped(to: canvasRect)
     }
 
+    /// Imported footage and stills use authored zooms on their own pixels,
+    /// while screen-specific crop and pointer overlays remain with the capture.
+    func renderImported(sourceImage: CIImage, seconds rawSeconds: Double) -> CIImage {
+        let seconds = rawSeconds.isFinite ? max(0, rawSeconds) : 0
+        let canvasRect = CGRect(origin: .zero, size: geometry.outputSize)
+        var canvas = background(in: canvasRect)
+        let source = sourceImage.extent
+        guard source.width > 0, source.height > 0 else { return canvas }
+        let scale = min(geometry.screenFrame.width / source.width,
+                        geometry.screenFrame.height / source.height)
+        let frame = CGRect(
+            x: geometry.screenFrame.midX - source.width * scale / 2,
+            y: geometry.screenFrame.midY - source.height * scale / 2,
+            width: source.width * scale,
+            height: source.height * scale
+        )
+        let normalized = sourceImage
+            .transformed(by: CGAffineTransform(translationX: -source.minX, y: -source.minY))
+        let zoom = TimelineMath.zoomState(at: seconds, segments: importedZoomSegments,
+                                          settings: timelineSettings)
+        let zoomScale = max(1, zoom.scale)
+        let translation = CGAffineTransform(
+            translationX: source.width / 2 - zoom.centerX * source.width * zoomScale,
+            y: source.height / 2 - (1 - zoom.centerY) * source.height * zoomScale
+        )
+        let image = normalized
+            .transformed(by: CGAffineTransform(scaleX: zoomScale, y: zoomScale))
+            .transformed(by: translation)
+            .cropped(to: CGRect(origin: .zero, size: source.size))
+            .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            .transformed(by: CGAffineTransform(translationX: frame.minX, y: frame.minY))
+        let radius = max(0, project.settings.cornerRadius)
+            .clamped(to: 0...min(frame.width, frame.height) / 2)
+        let mask = roundedRectangleMask(frame: frame, radius: radius)
+        let transparent = CIImage(color: .clear).cropped(to: canvasRect)
+        let layer = image.applyingFilter("CIBlendWithMask", parameters: [
+            kCIInputBackgroundImageKey: transparent,
+            kCIInputMaskImageKey: mask
+        ])
+        canvas = layer.composited(over: canvas)
+        if let caption = captionLayer(at: seconds, canvasRect: canvasRect) {
+            canvas = caption.composited(over: canvas)
+        }
+        return canvas.cropped(to: canvasRect)
+    }
+
     private func captionLayer(at seconds: Double, canvasRect: CGRect) -> CIImage? {
         guard let chapter = ChapterMath.activeChapter(at: seconds, chapters: captionChapters),
               let artwork = captionArtwork[chapter.id] else { return nil }
@@ -1165,7 +1462,7 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
     }
 
     private func cursorLayer(at seconds: Double, zoom: ZoomState, canvasRect: CGRect) -> CIImage? {
-        guard project.settings.resolvedShowCursor,
+        guard project.resolvedCursorOverlayVisible,
               let sourcePosition = cursorPosition(at: seconds),
               let croppedPosition = sourceCropInsets.croppedPoint(
                   x: sourcePosition.x,
@@ -1297,6 +1594,7 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
     }
 
     private func cursorPosition(at seconds: Double) -> CursorSample? {
+        guard interactions.cursorIsAvailable(at: seconds) else { return nil }
         guard let first = sortedCursorSamples.first else { return nil }
         if project.settings.cursorAnimation == .none {
             // Raw samples, held until the next one: the pointer teleports as recorded.

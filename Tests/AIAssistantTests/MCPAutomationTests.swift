@@ -10,7 +10,7 @@ import ImageIO
 extension AIAssistantTests {
     static let mcpV1ToolNames = [
         "get_status", "list_projects", "get_project", "rename_project", "delete_project", "import_video", "create_screenshot_demo",
-        "list_recording_sources", "start_recording", "stop_recording", "wait_for_recording", "add_zoom", "remove_zoom", "set_zoom_style", "update_settings",
+        "list_recording_sources", "start_recording", "capture_recording_frame", "perform_recording_action", "perform_recording_text", "stop_recording", "wait_for_recording", "analyze_demo_pacing", "create_demo_cut", "get_timeline", "list_media_assets", "list_global_media_assets", "import_global_media_asset", "add_global_media_to_project", "import_media_asset", "insert_media_asset", "split_clip", "trim_clip", "delete_clip", "move_clip", "set_transition", "set_clip_audio", "set_image_duration", "undo_clip_edit", "redo_clip_edit", "update_zoom", "add_zoom", "remove_zoom", "set_zoom_style", "update_settings",
         "set_chapters", "set_background_image", "set_background_music", "set_sound_effects", "capture_frame", "export_project",
         "assemble_video", "list_assets", "wait_for_job",
     ]
@@ -38,29 +38,29 @@ extension AIAssistantTests {
         for withheld in MCPToolCatalog.withheldToolNames {
             check(catalog.tool(named: withheld) == nil && inAppNames.contains(withheld), "\(withheld) stays in the app only")
         }
-        // MCP-only tools do not leak into the in-app assistant.
-        for mcpOnly in ["get_project", "get_status", "rename_project", "delete_project", "import_video", "create_screenshot_demo", "wait_for_job"] {
+        // Library mutations and the MCP job table remain outside the in-app assistant.
+        for mcpOnly in ["rename_project", "delete_project", "import_video", "create_screenshot_demo", "wait_for_job"] {
             check(!inAppNames.contains(mcpOnly), "\(mcpOnly) is not in the in-app catalog")
         }
-        check(inApp.count == 24 && inAppNames.contains("wait_for_recording"), "the in-app catalog has its 24 tools, wait_for_recording included: \(inApp.count)")
+        check(inApp.count == 50 && Set(["get_project", "get_status", "get_timeline", "split_clip", "set_transition", "set_image_duration", "undo_clip_edit", "redo_clip_edit", "list_media_assets", "list_global_media_assets", "import_global_media_asset", "add_global_media_to_project", "import_media_asset", "insert_media_asset", "wait_for_recording", "prepare_demo_page", "run_demo_task", "perform_recording_text"]).isSubset(of: inAppNames), "the in-app catalog has its shared and project media tools: \(inApp.count)")
 
         let scopes: [String: MCPToolScope] = [
-            "get_status": .global, "list_projects": .global, "import_video": .global, "create_screenshot_demo": .global,
-            "list_recording_sources": .global, "start_recording": .global, "stop_recording": .global, "wait_for_recording": .global, "wait_for_job": .global,
-            "get_project": .projectReadOnly, "list_assets": .projectReadOnly, "assemble_video": .projectReadOnly,
+            "get_status": .global, "list_projects": .global, "import_video": .global, "create_screenshot_demo": .global, "list_global_media_assets": .global, "import_global_media_asset": .global,
+            "list_recording_sources": .global, "start_recording": .global, "capture_recording_frame": .global, "perform_recording_action": .global, "perform_recording_text": .global, "stop_recording": .global, "wait_for_recording": .global, "wait_for_job": .global,
+            "analyze_demo_pacing": .projectReadOnly, "get_project": .projectReadOnly, "get_timeline": .projectReadOnly, "list_media_assets": .projectReadOnly, "list_assets": .projectReadOnly, "assemble_video": .projectReadOnly,
             "rename_project": .library, "delete_project": .library,
-            "add_zoom": .project, "remove_zoom": .project, "set_zoom_style": .project, "update_settings": .project, "set_chapters": .project,
+            "create_demo_cut": .project, "add_global_media_to_project": .project, "import_media_asset": .project, "insert_media_asset": .project, "split_clip": .project, "trim_clip": .project, "delete_clip": .project, "move_clip": .project, "set_transition": .project, "set_clip_audio": .project, "set_image_duration": .project, "undo_clip_edit": .project, "redo_clip_edit": .project, "update_zoom": .project, "add_zoom": .project, "remove_zoom": .project, "set_zoom_style": .project, "update_settings": .project, "set_chapters": .project,
             "set_background_image": .project, "set_background_music": .project, "set_sound_effects": .project, "capture_frame": .project,
             "export_project": .project,
         ]
-        let readOnly: Set<String> = ["get_status", "list_projects", "get_project", "list_assets", "wait_for_recording", "wait_for_job"]
+        let readOnly: Set<String> = ["analyze_demo_pacing", "get_status", "list_projects", "get_project", "get_timeline", "list_media_assets", "list_global_media_assets", "list_assets", "wait_for_recording", "wait_for_job"]
         // Calls that make the app show something else run one at a time.
-        let stayPut: Set<String> = ["get_status", "list_projects", "get_project", "list_assets", "assemble_video", "wait_for_recording", "wait_for_job"]
+        let stayPut: Set<String> = ["analyze_demo_pacing", "get_status", "list_projects", "get_project", "get_timeline", "list_media_assets", "list_global_media_assets", "list_assets", "assemble_video", "wait_for_recording", "wait_for_job"]
         // Tools that bound their own wait are never turned into jobs.
-        let boundedWaits: Set<String> = ["wait_for_recording", "wait_for_job"]
+        let boundedWaits: Set<String> = ["capture_recording_frame", "perform_recording_action", "perform_recording_text", "wait_for_recording", "wait_for_job"]
         // Replacing an existing file (overwrite: true) is destructive too.
-        let destructive: Set<String> = ["delete_project", "remove_zoom", "set_chapters", "update_settings", "set_zoom_style", "export_project", "assemble_video"]
-        let idempotent: Set<String> = ["rename_project", "delete_project", "list_recording_sources", "set_zoom_style", "update_settings", "set_background_image", "set_background_music", "set_sound_effects"]
+        let destructive: Set<String> = ["perform_recording_action", "perform_recording_text", "delete_project", "delete_clip", "remove_zoom", "set_chapters", "update_settings", "set_zoom_style", "export_project", "assemble_video"]
+        let idempotent: Set<String> = ["update_zoom", "trim_clip", "move_clip", "set_transition", "set_clip_audio", "set_image_duration", "perform_recording_action", "perform_recording_text", "rename_project", "delete_project", "list_recording_sources", "set_zoom_style", "update_settings", "set_background_image", "set_background_music", "set_sound_effects"]
         for spec in catalog.tools {
             let name = spec.name
             check(spec.scope == scopes[name], "\(name) scope: \(spec.scope)")
@@ -93,16 +93,16 @@ extension AIAssistantTests {
             let annotations = spec.annotations
             check(annotations.readOnly == readOnly.contains(name), "\(name) readOnlyHint")
             check(annotations.destructive == destructive.contains(name), "\(name) destructiveHint")
-            check(!annotations.openWorld, "\(name) stays on this Mac")
+            check(annotations.openWorld == (["perform_recording_action", "perform_recording_text"].contains(name)), "\(name) external input effects are disclosed")
             if !annotations.readOnly { check(annotations.idempotent == idempotent.contains(name), "\(name) idempotentHint") }
             // Clients skip approval for read-only tools and run them in parallel.
             check(!(spec.navigates && annotations.readOnly), "\(name): a call that changes what Focus Studio shows is not readOnlyHint")
             if schema["properties"]?["overwrite"] != nil { check(annotations.destructive, "\(name) can replace a file, so it is destructive") }
             let json = spec.descriptor["annotations"]
-            check(json?["title"]?.stringValue == spec.title && json?["readOnlyHint"] == AIJSONValue(annotations.readOnly) && json?["openWorldHint"] == false, "\(name) annotation JSON")
+            check(json?["title"]?.stringValue == spec.title && json?["readOnlyHint"] == AIJSONValue(annotations.readOnly) && json?["openWorldHint"] == AIJSONValue(annotations.openWorld), "\(name) annotation JSON")
             // MCP defaults destructiveHint to true, so writers state it; readers omit it.
             check(annotations.readOnly ? json?["destructiveHint"] == nil : json?["destructiveHint"] == AIJSONValue(annotations.destructive), "\(name) destructiveHint is explicit for writers")
-            check(spec.returnsImage == (name == "capture_frame"), "\(name) returnsImage")
+            check(spec.returnsImage == (["capture_frame", "capture_recording_frame"].contains(name)), "\(name) returnsImage")
             check(spec.navigates == !stayPut.contains(name), "\(name) navigates: \(spec.navigates)")
             check(spec.detaches == !boundedWaits.contains(name), "\(name) detaches: \(spec.detaches)")
             check(spec.descriptor["name"]?.stringValue == name && spec.descriptor["inputSchema"] == schema && spec.descriptor["description"]?.stringValue == spec.description, "\(name) descriptor")
@@ -140,6 +140,9 @@ extension AIAssistantTests {
               "wait_for_job names start_recording's prompts as a reason for a job")
         check(catalog.tool(named: "stop_recording")!.description.contains("joined"), "stop_recording says a stop under way is joined")
         check(catalog.tool(named: "get_project")!.inputSchema["required"] == ["project_id"], "get_project's own optional project_id becomes required")
+        let cameraFollow = catalog.tool(named: "update_settings")!.inputSchema["properties"]?["zoomFollowsCursor"]
+        check(cameraFollow?["type"] == "number" && cameraFollow?["minimum"] == 0 && cameraFollow?["maximum"] == 1,
+              "MCP exposes the same project camera-follow control without adding a tool")
         check(catalog.tool(named: "rename_project")!.inputSchema["required"] == ["project_id", "title"], "rename_project requires the id and the title")
         check(catalog.tool(named: "list_assets")!.inputSchema["required"] == nil, "list_assets requires nothing")
         check(catalog.tool(named: "wait_for_job")!.inputSchema["required"] == ["job_id"] && catalog.tool(named: "wait_for_job")!.inputSchema["properties"]?["timeout_seconds"]?["maximum"] == 240, "wait_for_job takes a job id and a bounded timeout")
@@ -157,7 +160,10 @@ extension AIAssistantTests {
         let listing = try catalog.descriptors.jsonData()
         let parsed = try JSONSerialization.jsonObject(with: listing)
         check((parsed as? [Any])?.count == mcpV1ToolNames.count && AIJSONValue(jsonObject: parsed) == catalog.descriptors, "the listing survives JSONSerialization")
-        check(listing.count < 48_000, "the listing is compact: \(listing.count) bytes")
+        // Five media-library and redo tools add schemas and path guidance to
+        // the descriptor set; keep a bounded allowance rather than testing
+        // against the smaller, pre-media catalog size.
+        check(listing.count < 54_000, "the listing is compact: \(listing.count) bytes")
 
         // A custom catalog (tests, later tools) builds specs the same way.
         let custom = MCPToolSpec(tool: SetSoundEffectsTool(), title: "Effects", description: String(repeating: "x", count: 70), scope: .project, requiresProjectID: false, annotations: MCPToolAnnotations(readOnly: false))

@@ -1,7 +1,19 @@
+import CoreGraphics
+import ImageIO
 import FocusStudioAutomation
 import FocusStudioCapture
 import FocusStudioCore
 import Foundation
+
+struct RecordingObservation {
+    var id: UUID
+    var recordingID: UUID
+    var frame: CGRect
+    var uptime: TimeInterval
+    /// Optional field identity observed with this frame; never field contents.
+    var textFocus: RecordedTextInput.Focus? = nil
+    var textFocusFailure: RecordedTextInput.InputError? = nil
+}
 
 /// Where the assistant's generated files go right now. Tools read it off the
 /// main actor, so the open project's folder is mirrored here under a lock
@@ -180,6 +192,9 @@ extension StudioModel: AppControlling {
         // The person's Record waits for macOS's microphone dialog: its
         // countdown starts when they answer, with the source they chose.
         guard !isWaitingForMicrophoneAccess else { throw AIToolError.failed(Self.waitingForMicrophoneRefusal) }
+        guard options.interactionMode != "codex" || target.kind == .window else {
+            throw AIToolError.invalidArgument("Codex interaction mode requires a window source.")
+        }
         if destination == .editor { closeEditor() }
         selectedTargetID = target.id
         recordingSourceKind = target.kind
@@ -198,6 +213,216 @@ extension StudioModel: AppControlling {
             throw AIToolError.failed(lastReportedError ?? "The countdown could not start.")
         }
         return id
+    }
+
+    /// A capture's broad `isRecording` includes preparing and stopping. Native
+    /// automation requires actual recording and must stop as soon as Discard
+    /// starts, before its asynchronous writer flush completes.
+    static func codexInputIsActive(engineState: RecordingState, isBusy: Bool, isPaused: Bool, isTransitioning: Bool) -> Bool {
+        engineState == .recording && !isBusy && !isPaused && !isTransitioning
+    }
+
+    private var canDispatchCodexRecordingInput: Bool {
+        Self.codexInputIsActive(engineState: captureEngine.state, isBusy: isBusy || isFinishingRecording,
+                                isPaused: isRecordingPaused || captureEngine.isPaused,
+                                isTransitioning: isChangingRecordingPause || captureEngine.isChangingPauseState)
+    }
+
+    /// Fixed-size ScreenCaptureKit frames preserve aspect ratio. A resized
+    /// window may therefore be letterboxed; its image coordinates are no longer
+    /// the same normalized coordinates as desktop input. Position changes are
+    /// safe after a new observation, but size changes require a new recording.
+    static func recordingWindowSizeMatches(_ current: CGRect, captured: CaptureRect) -> Bool {
+        CodexPlanRunner.windowSizeMatches(CaptureRect(x: current.minX, y: current.minY, width: current.width, height: current.height), captured: captured)
+    }
+
+    private func liveRecordingFrame(for target: CaptureTargetInfo) throws -> CGRect {
+        guard target.kind == .window,
+              let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[CFString: Any]],
+              let window = info.first(where: { ($0[kCGWindowNumber] as? NSNumber)?.uint32Value == target.nativeID }),
+              let bounds = window[kCGWindowBounds] as? [String: Any],
+              let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary), rect.width > 0, rect.height > 0 else {
+            throw AIToolError.failed("The recorded window is no longer visible. Restore it before capturing a new observation.")
+        }
+        guard let capturedTarget = captureEngine.recordingTarget,
+              capturedTarget.kind == .window, capturedTarget.nativeID == target.nativeID,
+              Self.recordingWindowSizeMatches(rect, captured: capturedTarget.frame) else {
+            throw AIToolError.failed("The recording window was resized. Stop this take and start a new recording before sending more actions.")
+        }
+        return rect
+    }
+
+    func captureRecordingFrame(recordingID: UUID, to url: URL) async throws -> AIJSONValue {
+        guard let attempt = currentRecording, attempt.id == recordingID, attempt.isLive,
+              attempt.settings.interactionMode == "codex", canDispatchCodexRecordingInput,
+              !isPerformingRecordingAction else {
+            throw AIToolError.failed("A live, unpaused Codex window recording is required.")
+        }
+        let before = try liveRecordingFrame(for: attempt.target)
+        let textFocusBefore = RecordedTextInput.observation(targetID: attempt.target.nativeID, frame: before)
+        try await captureEngine.captureScreenshot(to: url, allowLatestFrameFallback: false)
+        guard currentRecording?.id == recordingID, currentRecording?.isLive == true,
+              canDispatchCodexRecordingInput, !isPerformingRecordingAction,
+              try liveRecordingFrame(for: attempt.target) == before else {
+            throw AIToolError.failed("The recording or window changed while observing it. Capture a new frame.")
+        }
+        let imageSource = CGImageSourceCreateWithURL(url as CFURL, nil)
+        let image = imageSource.flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
+        let textFocusAfter = RecordedTextInput.observation(targetID: attempt.target.nativeID, frame: before)
+        let textObservation = textFocusBefore.paired(with: textFocusAfter)
+        let observation = RecordingObservation(id: UUID(), recordingID: recordingID, frame: before,
+                                               uptime: ProcessInfo.processInfo.systemUptime, textFocus: textObservation.focus,
+                                               textFocusFailure: textObservation.failure)
+        recordingObservation = observation
+        return ["recording_id": AIJSONValue(recordingID.uuidString), "observation_id": AIJSONValue(observation.id.uuidString),
+                "width": AIJSONValue(image?.width ?? 0), "height": AIJSONValue(image?.height ?? 0),
+                "text_input_ready": AIJSONValue(textObservation.focus != nil),
+                "text_input_reason": AIJSONValue(textObservation.failure?.diagnosticCode ?? "ready"),
+                "coordinate_space": "normalized_uncropped_source", "path": AIJSONValue(url.path)]
+    }
+
+    /// A recorder-owned execution path: the coordinates used to dispatch input
+    /// are also the coordinates used by the video cursor and automatic camera.
+    func performRecordingAction(recordingID: UUID, actionID: String, observationID: UUID, action: CodexRecordingAction) async throws -> AIJSONValue {
+        guard let attempt = currentRecording, attempt.id == recordingID, attempt.isLive,
+              recordingPhase == .recording, !isBusy, !isFinishingRecording, !isRunningCodexPlan else {
+            throw AIToolError.failed("This recording session is no longer live. No input was sent.")
+        }
+        guard attempt.settings.interactionMode == "codex", recordingInteractionTrace?.sessionID == recordingID else {
+            throw AIToolError.failed("This is a manual recording. Start a new window recording with interaction_mode codex for tracked actions.")
+        }
+        if let receipt = recordingActionReceipts[actionID] {
+            return receipt
+        }
+        guard !isPerformingRecordingAction else { throw AIToolError.failed("Another recording action is still running.") }
+        guard !isRecordingPaused, !isChangingRecordingPause, !captureEngine.isChangingPauseState else {
+            throw AIToolError.failed("Recording is paused. Resume it before sending an action.")
+        }
+        guard [.move, .click, .scroll].contains(action.type) else {
+            throw AIToolError.invalidArgument("Only move, click and scroll are supported during a live recording.")
+        }
+        guard let observation = recordingObservation, observation.id == observationID, observation.recordingID == recordingID,
+              ProcessInfo.processInfo.systemUptime - observation.uptime <= 60,
+              try liveRecordingFrame(for: attempt.target) == observation.frame else {
+            throw AIToolError.failed("Missing, stale or changed window observation. Call capture_recording_frame before each action.")
+        }
+        recordingObservation = nil
+        isPerformingRecordingAction = true
+        defer { isPerformingRecordingAction = false }
+        // A retry after a partially executed or cancelled click must never click twice.
+        recordingActionReceipts[actionID] = ["status": "interrupted", "action_id": AIJSONValue(actionID), "message": "This action was attempted. Observe the target before choosing a new action id."]
+        let previous = recordingInteractionTrace?.events.last(where: { $0.x != nil && $0.y != nil })
+        let initial = previous.flatMap { event in event.x.flatMap { x in event.y.map { CGPoint(x: x, y: $0) } } }
+        try await CodexPlanRunner.run(
+            actions: [action], in: captureEngine.recordingTarget ?? attempt.target,
+            waitUntilReady: { [weak self] in
+                guard let self, self.currentRecording?.id == recordingID, self.currentRecording?.isLive == true,
+                      self.canDispatchCodexRecordingInput else {
+                    throw AIToolError.failed("Recording paused or ended; the remaining input was cancelled.")
+                }
+                guard try self.liveRecordingFrame(for: attempt.target) == observation.frame else {
+                    throw AIToolError.failed("The window moved after observation. Capture a new frame before acting.")
+                }
+                try Task.checkCancellation()
+            },
+            activeClock: { [weak self] in self?.captureEngine.recordingIntervals.elapsed(at: ProcessInfo.processInfo.systemUptime) ?? 0 },
+            initialCursorPosition: initial,
+            onInteraction: { [weak self] event in
+                guard let self, self.recordingInteractionTrace?.sessionID == recordingID else { return }
+                let sequence = self.recordingInteractionTrace?.events.count ?? 0
+                self.recordingInteractionTrace?.events.append(InteractionEvent(
+                    sequence: sequence,
+                    time: event.time, kind: InteractionEventKind(rawValue: event.kind.rawValue)!, x: event.x, y: event.y
+                ))
+            }
+        )
+        let receipt: AIJSONValue = [
+            "status": "performed", "recording_id": AIJSONValue(recordingID.uuidString), "action_id": AIJSONValue(actionID),
+            "action": AIJSONValue(action.type.rawValue), "elapsed": AIJSONValue(captureEngine.recordingIntervals.elapsed(at: ProcessInfo.processInfo.systemUptime)),
+            "trace_events": AIJSONValue(recordingInteractionTrace?.events.count ?? 0),
+        ]
+        recordingActionReceipts[actionID] = receipt
+        return receipt
+    }
+
+    /// Text entry shares the pointer action's recording identity, single-use
+    /// observation and receipt table. The native helper validates real AX focus
+    /// without reading or persisting the field's contents.
+    func performRecordingText(recordingID: UUID, actionID: String, observationID: UUID, text: String) async throws -> AIJSONValue {
+        try AIRecordingText.validate(text)
+        guard let attempt = currentRecording, attempt.id == recordingID, attempt.isLive,
+              recordingPhase == .recording, !isBusy, !isFinishingRecording, !isRunningCodexPlan else {
+            throw AIToolError.failed("This recording session is no longer live. No input was sent.")
+        }
+        guard attempt.settings.interactionMode == "codex", recordingInteractionTrace?.sessionID == recordingID else {
+            throw AIToolError.failed("This is a manual recording. Start a new window recording with interaction_mode codex for tracked actions.")
+        }
+        if let receipt = recordingActionReceipts[actionID] { return receipt }
+        guard !isPerformingRecordingAction, canDispatchCodexRecordingInput else {
+            throw AIToolError.failed("A live, unpaused Codex window recording is required.")
+        }
+        guard let observation = recordingObservation, observation.id == observationID, observation.recordingID == recordingID,
+              ProcessInfo.processInfo.systemUptime - observation.uptime <= 60,
+              try liveRecordingFrame(for: attempt.target) == observation.frame else {
+            throw AIToolError.failed("Missing, stale or changed window observation. Call capture_recording_frame before each action.")
+        }
+        guard let observedTextFocus = observation.textFocus else {
+            throw observation.textFocusFailure ?? RecordedTextInput.InputError.unsupportedField
+        }
+        recordingObservation = nil
+        isPerformingRecordingAction = true
+        defer { isPerformingRecordingAction = false }
+        var typedCharacters = 0
+        func receipt(_ status: String) -> AIJSONValue {
+            ["status": AIJSONValue(status), "action": "type_text", "recording_id": AIJSONValue(recordingID.uuidString),
+             "action_id": AIJSONValue(actionID), "typed_characters": AIJSONValue(typedCharacters),
+             "elapsed": AIJSONValue(captureEngine.recordingIntervals.elapsed(at: ProcessInfo.processInfo.systemUptime)),
+             "trace_events": AIJSONValue(recordingInteractionTrace?.events.count ?? 0),
+             "typing_events": AIJSONValue(recordingInteractionTrace?.typingActivity?.count ?? 0)]
+        }
+        recordingActionReceipts[actionID] = receipt("interrupted")
+        try await RecordedTextInput.run(text: text, targetID: attempt.target.nativeID, frame: observation.frame, observedFocus: observedTextFocus,
+            waitUntilReady: { [weak self] in
+                guard let self, self.currentRecording?.id == recordingID, self.currentRecording?.isLive == true,
+                      self.canDispatchCodexRecordingInput else {
+                    throw AIToolError.failed("Recording paused or ended; the remaining input was cancelled.")
+                }
+                guard try self.liveRecordingFrame(for: attempt.target) == observation.frame else {
+                    throw AIToolError.failed("The window moved after observation. Capture a new frame before acting.")
+                }
+                try Task.checkCancellation()
+            },
+            onCharacters: { count in
+                typedCharacters += count
+                recordingActionReceipts[actionID] = receipt("interrupted")
+            },
+            onActivity: { [weak self] point in
+                guard let self else { return }
+                let time = self.captureEngine.recordingIntervals.elapsed(at: ProcessInfo.processInfo.systemUptime)
+                self.appendCodexTypingActivity(recordingID: recordingID, activity: TypingActivity(time: time, x: point.x, y: point.y))
+            }
+        )
+        let result = receipt("performed")
+        recordingActionReceipts[actionID] = result
+        return result
+    }
+
+    /// Input timing belongs to the recording that actually dispatched it.
+    /// Keep it separate from pointer motion and from the physical key monitor.
+    /// Called synchronously after a native Unicode chunk, so partial input is
+    /// retained even if a later chunk is cancelled or loses its focused field.
+    func appendCodexTypingActivity(recordingID: UUID, activity: TypingActivity) {
+        guard let attempt = currentRecording, attempt.id == recordingID, attempt.isLive,
+              attempt.settings.interactionMode == "codex", recordingPhase == .recording,
+              !isBusy, !isFinishingRecording, !isRecordingPaused, !isChangingRecordingPause,
+              !captureEngine.isChangingPauseState,
+              recordingInteractionTrace?.sessionID == recordingID, recordingInteractionTrace?.source == .execution,
+              activity.time.isFinite, activity.time >= 0,
+              activity.x.isFinite, activity.y.isFinite,
+              (0...1).contains(activity.x), (0...1).contains(activity.y),
+              activity.time >= (recordingInteractionTrace?.typingActivity?.last?.time ?? 0) else { return }
+        if recordingInteractionTrace?.typingActivity == nil { recordingInteractionTrace?.typingActivity = [] }
+        recordingInteractionTrace?.typingActivity?.append(activity)
     }
 
     /// Applies an assistant edit to the project open in the editor through the

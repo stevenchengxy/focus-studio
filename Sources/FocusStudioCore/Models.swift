@@ -789,6 +789,19 @@ public struct RecordingProject: Codable, Hashable, Sendable, Identifiable {
     public var sourceHeight: Int
     public var cursorSamples: [CursorSample]
     public var clickEvents: [ClickEvent]
+    /// Authoritative pointer/click source for recordings with execution traces.
+    /// Optional so projects from earlier versions decode without migration.
+    public var interactionTrace: InteractionTrace?
+    /// Hard edit joins in derived projects. Absent on original/manual captures.
+    public var editCutTimes: [Double]?
+    /// Nil means one implicit clip covering the complete source. Edited projects
+    /// keep the original movie and express their order here; old JSON decodes.
+    public var videoClips: [DemoVideoClip]?
+    public var videoTransitions: [DemoVideoTransition]?
+    /// Project-owned media copied from the library. Nil for old recordings.
+    public var mediaAssets: [DemoMediaAsset]?
+    /// Length of the immutable movie once `duration` becomes edited runtime.
+    public var videoSourceDuration: Double?
     /// Optional so existing projects remain readable without migration.
     public var typingActivity: [TypingActivity]?
     public var zoomSegments: [ZoomSegment]
@@ -807,6 +820,12 @@ public struct RecordingProject: Codable, Hashable, Sendable, Identifiable {
         sourceHeight: Int,
         cursorSamples: [CursorSample] = [],
         clickEvents: [ClickEvent] = [],
+        interactionTrace: InteractionTrace? = nil,
+        editCutTimes: [Double]? = nil,
+        videoClips: [DemoVideoClip]? = nil,
+        videoTransitions: [DemoVideoTransition]? = nil,
+        mediaAssets: [DemoMediaAsset]? = nil,
+        videoSourceDuration: Double? = nil,
         typingActivity: [TypingActivity]? = nil,
         zoomSegments: [ZoomSegment] = [],
         chapters: [DemoChapter]? = nil,
@@ -821,6 +840,12 @@ public struct RecordingProject: Codable, Hashable, Sendable, Identifiable {
         self.sourceHeight = sourceHeight
         self.cursorSamples = cursorSamples
         self.clickEvents = clickEvents
+        self.interactionTrace = interactionTrace
+        self.editCutTimes = editCutTimes
+        self.videoClips = videoClips
+        self.videoTransitions = videoTransitions
+        self.mediaAssets = mediaAssets
+        self.videoSourceDuration = videoSourceDuration
         self.typingActivity = typingActivity
         self.zoomSegments = zoomSegments
         self.chapters = chapters

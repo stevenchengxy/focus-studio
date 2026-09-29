@@ -1,0 +1,4 @@
+interface:
+  display_name: "Focus Studio Demo 剪辑"
+  short_description: "让 Codex 完成演示录屏、压缩等待、调整缩放与导出"
+  default_prompt: "使用 $focus-demo-editing 录制产品演示，保留原始录制，剪掉操作间的空等并调整每段缩放，预览后导出成片。"

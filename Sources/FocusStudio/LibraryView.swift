@@ -41,31 +41,18 @@ struct LibraryView: View {
                 .foregroundStyle(StudioTheme.purple)
                 .font(.system(size: 12, weight: .semibold))
                 .help("Open the AI assistant")
-                Button {
-                    model.showDirector()
-                } label: {
-                    Label("Demo Director", systemImage: "sparkles.rectangle.stack")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(StudioTheme.purple)
-                .font(.system(size: 12, weight: .semibold))
 
-                Button {
-                    Task { await model.importVideo() }
+                Menu {
+                    Button("Open video", systemImage: "folder") {
+                        Task { await model.importVideo() }
+                    }
+                    Button("Screenshot to video", systemImage: "photo.badge.plus") {
+                        Task { await model.importScreenshotDemo() }
+                    }
+                    .help("Create a 12-second editable clip from a PNG or JPEG")
                 } label: {
-                    Label("Import video", systemImage: "square.and.arrow.down")
+                    Label("More", systemImage: "ellipsis.circle")
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(StudioTheme.secondaryText)
-                .font(.system(size: 12, weight: .medium))
-
-                Button {
-                    Task { await model.importScreenshotDemo() }
-                } label: {
-                    Label("Screenshot demo", systemImage: "photo.on.rectangle.angled")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(StudioTheme.secondaryText)
                 .font(.system(size: 12, weight: .medium))
             }
             .padding(.horizontal, 28)
@@ -73,6 +60,7 @@ struct LibraryView: View {
             .background(StudioTheme.panel.opacity(0.7))
             .overlay(alignment: .bottom) { Divider().overlay(StudioTheme.line) }
 
+            ScrollViewReader { scroll in
             ScrollView {
                 VStack(alignment: .leading, spacing: 34) {
                     HStack(spacing: 26) {
@@ -86,7 +74,7 @@ struct LibraryView: View {
 
                             HStack(spacing: 10) {
                                 Button {
-                                    model.showDirector()
+                                    openWindow(id: AssistantWindow.id)
                                 } label: {
                                     Label("Create with AI", systemImage: "sparkles")
                                 }
@@ -109,9 +97,9 @@ struct LibraryView: View {
                                 )
 
                                 Button {
-                                    Task { await model.importVideo() }
+                                    withAnimation { scroll.scrollTo("sharedMedia", anchor: .top) }
                                 } label: {
-                                    Label("Open video", systemImage: "folder")
+                                    Label("Media library", systemImage: "square.stack.3d.up")
                                         .font(.system(size: 13, weight: .semibold))
                                         .frame(height: 34)
                                         .padding(.horizontal, 14)
@@ -124,21 +112,6 @@ struct LibraryView: View {
                                         .stroke(StudioTheme.line, lineWidth: 1)
                                 )
 
-                                Button {
-                                    Task { await model.importScreenshotDemo() }
-                                } label: {
-                                    Label("Animate screenshot", systemImage: "photo.badge.plus")
-                                        .font(.system(size: 13, weight: .semibold))
-                                        .frame(height: 34)
-                                        .padding(.horizontal, 14)
-                                }
-                                .buttonStyle(.plain)
-                                .background(Color.white.opacity(0.065))
-                                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                        .stroke(StudioTheme.line, lineWidth: 1)
-                                )
                             }
                             .padding(.top, 5)
                         }
@@ -176,6 +149,13 @@ struct LibraryView: View {
                             .stroke(StudioTheme.line, lineWidth: 1)
                     )
 
+                    GlobalMediaLibrarySection(
+                        assets: model.globalMediaAssets,
+                        onImport: { Task { await model.chooseGlobalMediaFiles() } },
+                        onCreateWithAI: { openWindow(id: AssistantWindow.id) }
+                    )
+                    .id("sharedMedia")
+
                     libraryControls
 
                     if model.projects.isEmpty {
@@ -209,6 +189,7 @@ struct LibraryView: View {
                 .padding(28)
                 .frame(maxWidth: 1_220)
                 .frame(maxWidth: .infinity)
+            }
             }
             if selection.isSelecting {
                 Divider().overlay(StudioTheme.line)

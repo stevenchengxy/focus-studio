@@ -195,6 +195,13 @@ actor ProjectStore {
             persistedProject.settings.backgroundImagePath,
             in: directory
         )
+        if var assets = persistedProject.mediaAssets {
+            for index in assets.indices {
+                assets[index].filePath = relativeAssetPath(assets[index].filePath, in: directory)
+                    ?? assets[index].filePath
+            }
+            persistedProject.mediaAssets = assets
+        }
         try encoder.encode(persistedProject).write(to: metadataURL, options: .atomic)
     }
 
@@ -354,6 +361,13 @@ actor ProjectStore {
             project.settings.productDemoAudio = audio
         }
         project.settings.backgroundImagePath = resolvedAssetPath(project.settings.backgroundImagePath, in: directory)
+        if var assets = project.mediaAssets {
+            for index in assets.indices {
+                assets[index].filePath = resolvedAssetPath(assets[index].filePath, in: directory)
+                    ?? assets[index].filePath
+            }
+            project.mediaAssets = assets
+        }
         return project
     }
 

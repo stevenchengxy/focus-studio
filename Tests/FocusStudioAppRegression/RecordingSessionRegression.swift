@@ -40,8 +40,7 @@ import UniformTypeIdentifiers
 ///   over the recorded app;
 /// - a saved stop asked for inside Focus Studio (Finish, the in-app
 ///   assistant's stop_recording, the duration of a recording it started)
-///   brings the editor forward; an external AI tool's stop, or the duration
-///   of a recording one started, never activates the app;
+///   brings the editor forward, including external AI tools and timed stops;
 /// - while the person draws a recording area, start_recording and calls
 ///   that change what the window shows are refused, and nothing about the
 ///   recorder's source changes;
@@ -87,7 +86,8 @@ enum RecordingSessionRegression {
         try await stopOrCancelWhilePaused()
         try await countdownNamesTheAITool()
         try await windowStaysBehindTheRecording()
-        try await stopsAskedInAppShowTheEditor()
+        try await targetPreparedBeforeCapture()
+        try await savedStopsShowTheEditor()
         try await drawingAnAreaRefusesAutomation()
         try codexPlanSaveIsStopping()
         try await soundConsent()
@@ -98,7 +98,7 @@ enum RecordingSessionRegression {
         try await microphoneForThePersonsRecord()
         try await automationWaitsForThePersonsRecord()
         try await trackingAlertBeforeTheMicrophone()
-        print("RecordingSessionRegression: PASS (countdown and automatic stop on a manual clock, the duration measured from the first frame, Finish/Cancel cancel the automatic stop and Cancel stops the capture, the automatic stop joined by stop_recording and wait_for_recording with one project, get_status and the call queue free while wait_for_recording waits and no job for it, a late wait_for_recording shortened to its maximum from the call's arrival, Cancel ignored and starts refused while saving, per-recording options (browser_content_only's crop, audio shown) with the recorder's choices unchanged, discarding a countdown, a capture start or a live recording (moved to the Trash like Cancel), pause and resume (paused time left out of the duration, elapsed and remaining; reported by get_status and wait_for_recording, also while the pause flushes; stop and cancel while paused), the countdown naming the AI tool and the control bar's pages (only the countdown and the recording stay when the app is hidden), no main window over a recording, the editor brought forward after a stop asked for in the app (Finish, the in-app assistant, its recording's duration, a Finish joining an external stop) but never after an external AI tool's stop or its recording's duration, automation refused while an area is drawn with the recorder's source unchanged, a Codex plan's save is stopping, the sound prompt before the countdown for sound the recorder leaves off (60 s by default as the catalog says, naming the client and the program that started it; allow, record without sound with no sound at all even when the recorder records some, cancel, no answer closes it, turned off meanwhile, a recorder sound turned off while it is up stays off, cancelled call, heartbeats above the approval's and the turn's; none for no sound, the recorder's own sound or the in-app assistant; the recorder's choices unchanged; its wait detaching as a job from the call's arrival), macOS's microphone permission settled before the countdown (the controller: one dialog for every caller, heartbeats above the sound prompt's, its timeout, a cancelled wait, a late answer only remembered; an AI tool's start_recording: never asked then allowed, Don't Allow, turned off before, restricted, no answer in time with the late answer starting nothing, a cancelled call, AI tools turned off meanwhile, the recorder's own microphone, none for record without sound or without the microphone, the wait detaching as a job; the person's Record and the in-app assistant wait for the answer, then record as before; while the person's Record waits, an AI tool's start_recording (with no sound of its own, or after its sound prompt), the in-app start, delete_project and an edit that opens a project are refused with the recorder's source unchanged, and the person's Record then records the source they chose, never a source changed meanwhile; the interaction-tracking alert comes up before macOS's dialog, while the Record click is handled))")
+        print("RecordingSessionRegression: PASS (countdown and automatic stop on a manual clock, the duration measured from the first frame, Finish/Cancel cancel the automatic stop and Cancel stops the capture, the automatic stop joined by stop_recording and wait_for_recording with one project, get_status and the call queue free while wait_for_recording waits and no job for it, a late wait_for_recording shortened to its maximum from the call's arrival, Cancel ignored and starts refused while saving, per-recording options (browser_content_only's crop, audio shown) with the recorder's choices unchanged, discarding a countdown, a capture start or a live recording (moved to the Trash like Cancel), pause and resume (paused time left out of the duration, elapsed and remaining; reported by get_status and wait_for_recording, also while the pause flushes; stop and cancel while paused), the countdown naming the AI tool and the control bar's pages (only the countdown and the recording stay when the app is hidden), no main window over a recording, the target prepared before the countdown and the editor brought forward once after every saved stop (Finish, either assistant, timed or joined stops), automation refused while an area is drawn with the recorder's source unchanged, a Codex plan's save is stopping, the sound prompt before the countdown for sound the recorder leaves off (60 s by default as the catalog says, naming the client and the program that started it; allow, record without sound with no sound at all even when the recorder records some, cancel, no answer closes it, turned off meanwhile, a recorder sound turned off while it is up stays off, cancelled call, heartbeats above the approval's and the turn's; none for no sound, the recorder's own sound or the in-app assistant; the recorder's choices unchanged; its wait detaching as a job from the call's arrival), macOS's microphone permission settled before the countdown (the controller: one dialog for every caller, heartbeats above the sound prompt's, its timeout, a cancelled wait, a late answer only remembered; an AI tool's start_recording: never asked then allowed, Don't Allow, turned off before, restricted, no answer in time with the late answer starting nothing, a cancelled call, AI tools turned off meanwhile, the recorder's own microphone, none for record without sound or without the microphone, the wait detaching as a job; the person's Record and the in-app assistant wait for the answer, then record as before; while the person's Record waits, an AI tool's start_recording (with no sound of its own, or after its sound prompt), the in-app start, delete_project and an edit that opens a project are refused with the recorder's source unchanged, and the person's Record then records the source they chose, never a source changed meanwhile; the interaction-tracking alert comes up before macOS's dialog, while the Record click is handled))")
     }
 
     // MARK: - Duration
@@ -575,16 +575,37 @@ enum RecordingSessionRegression {
         try expect(windowRequests == 1, "An editing call afterwards shows the main window: \(windowRequests)")
     }
 
+    private static func targetPreparedBeforeCapture() async throws {
+        let fixture = try await SessionFixture()
+        defer { fixture.cleanup() }
+        let model = fixture.model
+        var handedOff: [CaptureTargetInfo] = []
+        var beforeCapture = false
+        model.prepareRecordingTarget = { target in
+            handedOff.append(target)
+            beforeCapture = model.destination == .countdown && fixture.capture.starts.isEmpty
+        }
+        _ = try model.startRecording(target: fixture.target, options: AIRecordingOptions())
+        try expect(beforeCapture && handedOff == [fixture.target], "The selected target comes forward before the countdown captures a frame")
+        let duplicate = model.beginRecordingCountdown(target: fixture.target, settings: model.recorderSettings, duration: nil)
+        try expect(duplicate == nil && handedOff.count == 1, "A duplicate start does not change focus")
+        model.cancelRecordingCountdown()
+        try await settle()
+        try expect(fixture.capture.starts.isEmpty, "Cancelling the countdown starts no capture")
+
+        let rect = CaptureRect(x: 10, y: 30, width: 900, height: 600)
+        let target = CaptureTargetInfo(id: "window-1", kind: .window, nativeID: 1, title: "Demo", frame: rect)
+        let other = CaptureRect(x: 40, y: 30, width: 900, height: 600)
+        try expect(RecordingWindowFocus.matchingWindow(target: target, candidates: [(other, "Demo"), (rect, "Demo")]) == 1, "The selected window wins over another window of the same app")
+        try expect(RecordingWindowFocus.matchingWindow(target: target, candidates: [(rect, "Other"), (rect, "Demo")]) == 1, "The title resolves equal rectangles")
+        try expect(RecordingWindowFocus.matchingWindow(target: target, candidates: [(rect, "Demo"), (rect, "Demo")]) == nil, "Ambiguous windows are not guessed")
+        try expect(RecordingWindowFocus.matchingWindow(target: target, candidates: [(other, "Demo")]) == nil, "A title alone cannot select the wrong window")
+    }
+
     // MARK: - Bringing the app forward
 
-    /// A saved stop asked for inside Focus Studio shows the editor in front,
-    /// as upstream's stop always did: the person's Finish, the in-app
-    /// assistant's stop_recording (which the person confirmed), and the
-    /// duration of a recording the in-app assistant started. An external AI
-    /// tool's stop_recording, and the duration of a recording one started,
-    /// leave the app where it is (the person may be typing elsewhere). A
-    /// Finish that joins an external stop in flight still brings it forward.
-    private static func stopsAskedInAppShowTheEditor() async throws {
+    /// Every saved take comes forward once, including concurrent stop callers.
+    private static func savedStopsShowTheEditor() async throws {
         let fixture = try await SessionFixture()
         defer { fixture.cleanup() }
         let (model, clock, capture) = (fixture.model, fixture.clock, fixture.capture)
@@ -600,26 +621,26 @@ enum RecordingSessionRegression {
         try await recordOnce()
         let external = try await fixture.succeed(bridge, "stop_recording", [:])
         try await settle()
-        try expect(external.structuredContent?["state"] == "finished" && model.destination == .editor && activations.value == 0,
-                   "An external AI tool's stop leaves the app where it is: \(activations.value) activations")
+        try expect(external.structuredContent?["state"] == "finished" && model.destination == .editor && activations.value == 1,
+                   "An external AI tool's stop brings the editor forward: \(activations.value) activations")
 
         try await recordOnce()
         let inAppStop = try unwrap(AIAssistantToolCatalog.standard.first { $0.name == "stop_recording" }, "The in-app assistant has stop_recording")
         let inApp = model.assistantSession.context
         try expect(!inApp.isExternal, "The in-app assistant's context is not external")
         let stopped = try await inAppStop.run(arguments: [:], context: inApp, progress: { _ in })
-        try await waitUntil("The in-app assistant's stop did not bring the editor forward") { activations.value == 1 }
+        try await waitUntil("The in-app assistant's stop did not bring the editor forward") { activations.value == 2 }
         try expect(stopped.data?["state"] == "finished" && model.destination == .editor && model.projects.count == 2, "The in-app assistant's stop saved its project")
 
         try await recordOnce()
         await model.stopRecording()
-        try expect(activations.value == 2 && model.destination == .editor && model.projects.count == 3, "The person's Finish brings the editor forward")
+        try expect(activations.value == 3 && model.destination == .editor && model.projects.count == 3, "The person's Finish brings the editor forward")
 
         try await recordOnce(duration: 2)
         try expect(model.currentRecording?.requester == nil, "The in-app assistant's recording names no AI tool")
         clock.advance(by: 2)
         try await waitUntil("The duration did not stop the in-app recording") { model.destination == .editor && !model.isFinishingRecording }
-        try await waitUntil("The in-app recording's duration did not bring the editor forward") { activations.value == 3 }
+        try await waitUntil("The in-app recording's duration did not bring the editor forward") { activations.value == 4 }
 
         model.automationRequester = { "Claude Code" }
         try await recordOnce(duration: 2)
@@ -628,7 +649,7 @@ enum RecordingSessionRegression {
         clock.advance(by: 2)
         try await waitUntil("The duration did not stop the external recording") { model.destination == .editor && !model.isFinishingRecording }
         try await settle()
-        try expect(activations.value == 3 && capture.finishes == 5 && model.projects.count == 5, "An external recording's duration leaves the app where it is: \(activations.value)")
+        try expect(activations.value == 5 && capture.finishes == 5 && model.projects.count == 5, "An external recording's duration brings the editor forward: \(activations.value)")
 
         try await recordOnce()
         capture.holdFinish = true
@@ -642,7 +663,7 @@ enum RecordingSessionRegression {
         await finish.value
         guard case let .result(joined) = await externalStop.value, !joined.isError else { throw SessionFailure("The external stop must succeed") }
         try await settle()
-        try expect(capture.finishes == 6 && model.projects.count == 6 && activations.value == 4,
+        try expect(capture.finishes == 6 && model.projects.count == 6 && activations.value == 6,
                    "A Finish joining an external stop brings the editor forward once: \(activations.value)")
     }
 

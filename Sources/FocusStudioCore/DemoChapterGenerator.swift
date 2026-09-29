@@ -286,7 +286,7 @@ public enum DemoChapterGenerator {
             lines.append("Product: \(description)")
         }
         let duration = project.duration
-        let clicks = project.clickEvents
+        let clicks = project.resolvedClickEvents
             .filter { $0.time.isFinite && $0.time >= 0 && (!duration.isFinite || $0.time <= duration) }
             .sorted { $0.time < $1.time }
         if clicks.isEmpty {
@@ -313,7 +313,7 @@ public enum DemoChapterGenerator {
             lines.append(line)
         }
         let bursts = typingBursts(
-            project.typingActivity ?? [],
+            project.resolvedTypingActivity,
             idleDelay: project.settings.resolvedTypingZoom.idleDelay
         )
         if bursts.isEmpty {

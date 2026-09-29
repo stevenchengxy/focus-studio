@@ -24,9 +24,17 @@ final class StudioModel: ObservableObject {
 
     @Published var destination: Destination = .library
     @Published var projects: [RecordingProject] = []
+    @Published private(set) var globalMediaAssets: [DemoMediaAsset] = []
     @Published var activeProject: RecordingProject? {
         didSet { assistantAssetsLocator.update(sourceVideoPath: activeProject?.sourceVideoPath) }
     }
+    /// Carries the playhead across the first clip edit, which opens a separate
+    /// editable copy and consequently recreates the editor view.
+    var pendingEditorVideoEditResume: (time: Double, clipID: UUID?)?
+    private var videoEditUndoStack: [UUID: [RecordingProject]] = [:]
+    private var videoEditRedoStack: [UUID: [RecordingProject]] = [:]
+    /// Coalesces a continuous slider/trim-handle gesture into one Undo step.
+    private var lastManualEditorChangeAt: [UUID: Date] = [:]
     @Published var selectedTargetID: String?
     @Published private(set) var selectedAreaTarget: CaptureTargetInfo?
     @Published private(set) var isSelectingArea = false
@@ -81,6 +89,11 @@ final class StudioModel: ObservableObject {
     /// bridge) share it, so they share one macOS dialog.
     let microphoneAccess: MicrophoneAccessController
 
+    var recordingInteractionTrace: InteractionTrace?
+    var isPerformingRecordingAction = false
+    var recordingActionReceipts: [String: AIJSONValue] = [:]
+    var recordingObservation: RecordingObservation?
+
     let captureEngine = CaptureEngine()
     let codexDirector = CodexDirectorService()
     /// A second app-server connection for the AI assistant when its brain is
@@ -92,10 +105,12 @@ final class StudioModel: ObservableObject {
     /// The one assistant conversation for the whole app, created on first use.
     /// Its context follows whatever project is open; see ``AIAssistantContext``.
     private(set) lazy var assistantSession: AIAssistantSession = makeAssistantSession()
+    private(set) lazy var assistantDemo = AssistantDemoController(model: self)
     private let assistantAssetsLocator: AssistantAssetsLocator
     private var assistantObservers: Set<AnyCancellable> = []
     private var didCreateAssistantSession = false
     private let store: ProjectStore
+    private let globalMediaStore: GlobalMediaLibraryStore
     private let assistantHistoryURL: URL?
     private let interactionTrackingAccess: @MainActor () -> Bool
     private let inputMonitoringAccess: @MainActor () -> Bool
@@ -168,6 +183,10 @@ final class StudioModel: ObservableObject {
         microphoneAccess: MicrophoneAccessController? = nil
     ) {
         self.store = store
+        globalMediaStore = GlobalMediaLibraryStore(
+            directory: store.projectsDirectory.deletingLastPathComponent()
+                .appendingPathComponent("MediaLibrary", isDirectory: true),
+            inspector: store)
         // macOS's own status and dialog unless a test scripts them.
         self.microphoneAccess = microphoneAccess ?? MicrophoneAccessController()
         self.startCapture = startCapture
@@ -240,6 +259,7 @@ final class StudioModel: ObservableObject {
 
     private func performBootstrap() async {
         await reloadProjects()
+        await reloadGlobalMediaAssets()
         // A key in ~/.config/focus-studio/ark.env (the file the Claude Code
         // skills use) is imported silently whenever the Keychain has none, so
         // the assistant works on a fresh Mac without a visit to Settings. The QA
@@ -322,6 +342,14 @@ final class StudioModel: ObservableObject {
         session.configureRecordingPlanRunner { [weak self] plan in
             self?.startCodexPlan(plan)
         }
+        session.configureConfirmationPresentation(onRequest: { [weak self] in
+            self?.presentAssistantWindow?()
+        }, onResolution: { [weak self] in
+            guard let self, let attempt = self.currentRecording, attempt.isLive,
+                  !self.isFinishingRecording, !self.isRecordingPaused else { return }
+            if let prepare = self.prepareRecordingTarget { prepare(attempt.target) }
+            else { RecordingWindowFocus.prepare(attempt.target) }
+        })
         session.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }.store(in: &assistantObservers)
@@ -421,7 +449,7 @@ final class StudioModel: ObservableObject {
         case .gatewayModel:
             return aiGateway.defaultTextModel?.modelID ?? L10n.tr("No model")
         case .codex:
-            let model = codexDirector.preferences.modelID
+            let model = codexAssistant.assistantModel?.title ?? codexAssistant.preferences.modelID
             return model.isEmpty ? "Codex" : "Codex · \(model)"
         }
     }
@@ -442,6 +470,47 @@ final class StudioModel: ObservableObject {
         } catch {
             show(error)
         }
+    }
+
+    func reloadGlobalMediaAssets() async {
+        do { globalMediaAssets = try await globalMediaStore.assets() }
+        catch { show(error) }
+    }
+
+    func listGlobalMedia() async throws -> [DemoMediaAsset] {
+        let assets = try await globalMediaStore.assets()
+        globalMediaAssets = assets
+        return assets
+    }
+
+    /// Store a durable copy in the app-wide catalog. This does not create a
+    /// project or put media on a timeline.
+    @discardableResult
+    func importGlobalMedia(from urls: [URL]) async throws -> [DemoMediaAsset] {
+        let added = try await globalMediaStore.importFiles(urls)
+        globalMediaAssets = try await globalMediaStore.assets()
+        return added
+    }
+
+    /// Copy selected shared assets into this project's own media folder. The
+    /// normal first-edit rule still creates a working copy of an original take.
+    @discardableResult
+    func importGlobalMediaToProject(assetIDs: [UUID], projectID: UUID) async throws -> RecordingProject {
+        guard !assetIDs.isEmpty else { throw GlobalMediaLibraryStore.LibraryError.assetMissing }
+        let urls = try await globalMediaStore.urls(for: assetIDs)
+        return try await importEditorMedia(from: urls, projectID: projectID)
+    }
+
+    func chooseGlobalMediaFiles() async {
+        let panel = NSOpenPanel()
+        panel.title = L10n.tr("Import to shared media library")
+        panel.prompt = L10n.tr("Import")
+        panel.allowedContentTypes = [.movie, .image]
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        do { _ = try await importGlobalMedia(from: panel.urls) }
+        catch { show(error) }
     }
 
     func showDirector() {
@@ -585,29 +654,31 @@ final class StudioModel: ObservableObject {
 
     /// Recording usually ends while another app is in front. Bring Focus Studio
     /// forward so the finished take is visible without hunting for the window.
-    /// Every saved stop asked for inside Focus Studio calls it (see
-    /// ``stopRecording()``); a stop an external AI tool asks for never does.
+    /// Every saved stop calls it, including external AI tools and timed stops.
     func bringToFront() {
         // No application (a command-line test run): nothing to bring forward.
         guard let app = NSApp, app.activationPolicy() == .regular else { return }
+        app.unhideWithoutActivation()
         app.activate(ignoringOtherApps: true)
-        let main = app.windows.first { $0.canBecomeMain && !$0.isExcludedFromWindowsMenu }
-        if let main {
-            main.makeKeyAndOrderFront(nil)
-        } else {
-            // The main window was closed: open one (MainWindowPresenter).
-            presentMainWindow?()
-        }
+        if let presentMainWindow { presentMainWindow() }
+        else { app.windows.first { $0.canBecomeMain && !$0.isExcludedFromWindowsMenu && !($0 is NSPanel) }?.makeKeyAndOrderFront(nil) }
     }
 
     /// Opens a main window when none is open (MainWindowPresenter, set by the
     /// app's services; nil in tests).
     var presentMainWindow: (@MainActor () -> Void)?
 
-    /// What a saved stop asked for inside Focus Studio does to show the
+    /// Restores or opens the assistant when a recording needs confirmation.
+    /// Independent of the main window so asking never changes the editor page.
+    var presentAssistantWindow: (@MainActor () -> Void)?
+
+    /// What a saved stop does to show the
     /// editor: ``bringToFront()`` when nil. Regression tests count the
     /// requests here instead.
     var activateAfterStop: (@MainActor () -> Void)?
+
+    /// Test seam for the desktop handoff before any capture starts.
+    var prepareRecordingTarget: (@MainActor (CaptureTargetInfo) -> Void)?
 
     /// Lets the person draw a recording area on a display and answers it
     /// (nil when they cancel): the full-screen overlay by default; regression
@@ -808,10 +879,18 @@ final class StudioModel: ObservableObject {
         attempt.requester = automationRequester?()
         let attemptID = attempt.id
         currentRecording = attempt
+        recordingActionReceipts.removeAll()
+        recordingObservation = nil
+        recordingInteractionTrace = settings.interactionMode == "codex"
+            ? InteractionTrace(sessionID: attemptID, source: .execution, cursorDisplayMode: .overlay, events: []) : nil
         recordingAttemptID = attemptID
         recordingCountdownTaskID = attemptID
         destination = .countdown
         recordingCountdown = 3
+        // Make the countdown bar non-hiding before hiding the recorder window.
+        RecordingControlPanelCoordinator.shared.sync()
+        if let prepareRecordingTarget { prepareRecordingTarget(targetSnapshot) }
+        else { RecordingWindowFocus.prepare(targetSnapshot) }
         let clock = recordingClock
         recordingCountdownTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -835,7 +914,13 @@ final class StudioModel: ObservableObject {
                     self.destination = .recorder
                     self.showMessage("The selected screen or window is no longer available.")
                     self.endRecordingAttempt(attemptID, .failed("The selected screen or window is no longer available."))
+                    self.bringToFront()
                     return
+                }
+                if settings.interactionMode == "codex", self.prepareRecordingTarget == nil {
+                    try await RecordingWindowFocus.prepareForAutomation(refreshedTarget)
+                    try Task.checkCancellation()
+                    guard self.recordingAttemptID == attemptID else { return }
                 }
                 await self.startRecordingNow(target: refreshedTarget, attemptID: attemptID)
             } catch is CancellationError {
@@ -844,6 +929,7 @@ final class StudioModel: ObservableObject {
                 self.destination = .recorder
                 self.show(error)
                 self.endRecordingAttempt(attemptID, .failed(error.localizedDescription))
+                self.bringToFront()
             }
         }
         return attemptID
@@ -890,6 +976,7 @@ final class StudioModel: ObservableObject {
         pendingSourceCropInsets = nil
         destination = .recorder
         if let attemptID { endRecordingAttempt(attemptID, .cancelled) }
+        bringToFront()
     }
 
     /// Cancels attempt `id` and keeps nothing, as the Cancel buttons do: its
@@ -929,14 +1016,11 @@ final class StudioModel: ObservableObject {
     /// under way is joined) once it has recorded its duration: measured from
     /// its first frame, with paused time left out. Nothing is scheduled while
     /// it is paused; the resume schedules the time left. The saved project
-    /// comes forward as for any stop asked for inside Focus Studio, unless an
-    /// external AI tool started the recording (it names a requester): then
-    /// the app stays where it is, as for that tool's stop_recording.
+    /// comes forward as for Finish, including a recording an AI tool started.
     private func scheduleAutomaticStop(for attempt: RecordingAttempt) {
         cancelAutomaticStop()
         guard let deadline = attempt.automaticStopUptime else { return }
         let id = attempt.id
-        let startedExternally = attempt.requester != nil
         let clock = recordingClock
         automaticStopTask = Task { @MainActor [weak self] in
             do {
@@ -950,7 +1034,7 @@ final class StudioModel: ObservableObject {
             }
             guard let self, !Task.isCancelled, self.currentRecording?.id == id, self.currentRecording?.isLive == true else { return }
             self.automaticStopTask = nil
-            await self.stopRecording(bringingAppForward: !startedExternally)
+            await self.stopRecording()
         }
     }
 
@@ -1019,6 +1103,7 @@ final class StudioModel: ObservableObject {
                 show(error)
             }
             endRecordingAttempt(attemptID, .failed(error.localizedDescription))
+            bringToFront()
         }
     }
 
@@ -1041,23 +1126,20 @@ final class StudioModel: ObservableObject {
     /// the editor shows it, brings Focus Studio forward, since a recording
     /// usually ends while another app is in front.
     func stopRecording() async {
-        await stopRecording(bringingAppForward: true)
+        await stopRecordingAndPresent()
     }
 
-    /// A tool's stop_recording: the in-app assistant's as ``stopRecording()``;
-    /// an external AI tool's (`external`) never activates the app: the person
-    /// may be typing elsewhere, and the editor is there when they come back.
+    /// All entry points finish with the saved demo visible in the editor.
     func stopRecording(external: Bool) async {
-        await stopRecording(bringingAppForward: !external)
+        await stopRecordingAndPresent()
     }
 
-    private func stopRecording(bringingAppForward: Bool) async {
+    private func stopRecordingAndPresent() async {
         // The Finish button, the duration and the tools can all ask to stop. A
         // second request waits for the stop in flight instead of finalizing
         // the capture again, and sees the same outcome.
         if let stopRecordingTask {
             await stopRecordingTask.value
-            if bringingAppForward { activateAfterSavedStop() }
             return
         }
         guard !isBusy, isCaptureLive else { return }
@@ -1078,10 +1160,10 @@ final class StudioModel: ObservableObject {
             // Cleared in the same main-actor turn that finishes the stop, so a
             // later stop starts fresh and `isFinishingRecording` never lags.
             self.stopRecordingTask = nil
+            self.activateAfterSavedStop()
         }
         stopRecordingTask = task
         await task.value
-        if bringingAppForward { activateAfterSavedStop() }
     }
 
     /// Shows the saved project in front, once the editor has it.
@@ -1115,15 +1197,22 @@ final class StudioModel: ObservableObject {
             settings.frameRate = min(recorded.frameRate, 60)
             settings.sourceCropInsets = pendingSourceCropInsets
             let title = "Recording \(Date().formatted(date: .abbreviated, time: .shortened))"
-            let project = try await store.createProject(
+            let trace = recordingInteractionTrace
+            let interactions = trace?.resolved(duration: result.duration)
+            var project = try await store.createProject(
                 from: result.outputURL,
                 title: title,
-                cursorSamples: result.cursorSamples,
-                clickEvents: result.clickEvents,
-                typingActivity: result.typingActivity,
+                cursorSamples: interactions?.cursorSamples ?? result.cursorSamples,
+                clickEvents: interactions?.clickEvents ?? result.clickEvents,
+                typingActivity: trace?.resolvedTypingActivity(duration: result.duration) ?? result.typingActivity,
                 eventDiagnostics: result.eventDiagnostics,
                 settings: settings
             )
+            if let trace {
+                project.interactionTrace = trace
+                try await store.save(project)
+            }
+            recordingInteractionTrace = nil
             activeProject = project
             projects.removeAll { $0.id == project.id }
             projects.insert(project, at: 0)
@@ -1192,6 +1281,7 @@ final class StudioModel: ObservableObject {
         guard isCaptureLive, !isChangingRecordingPause, !captureEngine.isChangingPauseState,
               !isBusy, !isFinishingRecording, captureEngine.state != .stopping else { return }
         let pausing = !isRecordingPaused
+        recordingObservation = nil
         isChangingRecordingPause = true
         defer { isChangingRecordingPause = false }
         if pausing {
@@ -1227,9 +1317,15 @@ final class StudioModel: ObservableObject {
     /// time left (nothing while paused; at once when the duration has been
     /// recorded in full).
     private func syncRecordingIntervals() {
-        guard var attempt = currentRecording, attempt.isLive, !isFinishingRecording else { return }
         let intervals = pauseCapture.intervals(captureEngine)
         guard intervals.firstFrameUptime != nil else { return }
+        // Match EventMonitor's reconciliation: a flushed segment may lose its
+        // incomplete tail. Never replay those interactions over resumed media.
+        if intervals.activeStartUptime == nil {
+            recordingInteractionTrace?.events.removeAll { $0.time > intervals.completedDuration }
+            recordingInteractionTrace?.typingActivity?.removeAll { $0.time > intervals.completedDuration }
+        }
+        guard var attempt = currentRecording, attempt.isLive, !isFinishingRecording else { return }
         attempt.intervals = intervals
         currentRecording = attempt
         scheduleAutomaticStop(for: attempt)
@@ -1395,6 +1491,185 @@ final class StudioModel: ObservableObject {
         return project
     }
 
+    @discardableResult
+    func createDemoCut(projectID: UUID, keepRanges: [DemoKeepRange], title: String?) async throws -> RecordingProject {
+        guard let source = project(id: projectID) else { throw ProjectStore.StoreError.projectNotFound }
+        if let blocker = automationBlocker { throw blocker.failure }
+        // Title validation happens before closing the editor. The source copy
+        // includes the person's current zooms, captions and unsaved appearance.
+        let suffix = " · " + L10n.tr("Edited demo")
+        let checkedTitle = try newProjectTitle(title, default: String(source.title.prefix(max(1, 120 - suffix.count))) + suffix)
+        try prepareForNewProject()
+        busy("Creating an edited copy…")
+        defer { isBusy = false }
+        let edited = try await store.createDemoCut(from: source, keepRanges: keepRanges, title: checkedTitle)
+        present(edited)
+        return edited
+    }
+
+    /// Manual and Codex clip commands enter here. The first edit makes one
+    /// self-contained working copy; later commands update that copy's clip
+    /// metadata while its source movie remains immutable. Validation happens
+    /// before any project is created or modified.
+    @discardableResult
+    func applyVideoEdit(projectID: UUID, operation: DemoVideoEditOperation) async throws -> RecordingProject {
+        guard let initial = project(id: projectID) else { throw ProjectStore.StoreError.projectNotFound }
+        if let blocker = automationBlocker { throw blocker.failure }
+        // Reject invalid edits before the editor closes for the first branch.
+        _ = try DemoVideoTimeline(project: initial).applying(operation, to: initial)
+        await flushProjectEdits()
+        guard let source = project(id: projectID) else { throw ProjectStore.StoreError.projectNotFound }
+        let edited = try DemoVideoTimeline(project: source).applying(operation, to: source)
+        if try await store.isVideoEditingCopy(source.id) {
+            busy("Updating video timeline…")
+            defer { isBusy = false }
+            try await store.save(edited)
+            var undo = videoEditUndoStack[source.id] ?? []
+            undo.append(source)
+            if undo.count > 30 { undo.removeFirst(undo.count - 30) }
+            videoEditUndoStack[source.id] = undo
+            videoEditRedoStack[source.id] = []
+            lastManualEditorChangeAt[source.id] = nil
+            pendingEditorVideoEditResume = nil
+            present(edited)
+            return edited
+        }
+
+        let suffix = " · " + L10n.tr("Edited demo")
+        let title = try newProjectTitle(nil, default: String(source.title.prefix(max(1, 120 - suffix.count))) + suffix)
+        try prepareForNewProject()
+        await flushProjectEdits()
+        busy("Creating editable timeline…")
+        defer { isBusy = false }
+        let working = try await store.createVideoEditingCopy(from: source, edited: edited, title: title)
+        var baseline = source
+        baseline.id = working.id
+        baseline.title = working.title
+        baseline.createdAt = working.createdAt
+        baseline.sourceVideoPath = working.sourceVideoPath
+        baseline.settings = working.settings
+        baseline.mediaAssets = working.mediaAssets
+        videoEditUndoStack[working.id] = [baseline]
+        videoEditRedoStack[working.id] = []
+        lastManualEditorChangeAt[working.id] = nil
+        present(working)
+        return working
+    }
+
+    func canUndoVideoEdit(projectID: UUID) -> Bool {
+        !(videoEditUndoStack[projectID] ?? []).isEmpty
+    }
+
+    func canRedoVideoEdit(projectID: UUID) -> Bool {
+        !(videoEditRedoStack[projectID] ?? []).isEmpty
+    }
+
+    @discardableResult
+    func undoVideoEdit(projectID: UUID) async throws -> RecordingProject {
+        if let blocker = automationBlocker { throw blocker.failure }
+        guard let previous = videoEditUndoStack[projectID]?.last,
+              let current = project(id: projectID) else {
+            throw AIToolError.failed("There is no editor change to undo in this project.")
+        }
+        await flushProjectEdits()
+        busy("Undoing video edit…")
+        defer { isBusy = false }
+        try await store.save(previous)
+        videoEditUndoStack[projectID]?.removeLast()
+        var redo = videoEditRedoStack[projectID] ?? []
+        redo.append(current)
+        if redo.count > 30 { redo.removeFirst(redo.count - 30) }
+        videoEditRedoStack[projectID] = redo
+        lastManualEditorChangeAt[projectID] = nil
+        pendingEditorVideoEditResume = nil
+        present(previous)
+        return previous
+    }
+
+    @discardableResult
+    func redoVideoEdit(projectID: UUID) async throws -> RecordingProject {
+        if let blocker = automationBlocker { throw blocker.failure }
+        guard let next = videoEditRedoStack[projectID]?.last,
+              let current = project(id: projectID) else {
+            throw AIToolError.failed("There is no editor change to redo in this project.")
+        }
+        await flushProjectEdits()
+        busy("Redoing video edit…")
+        defer { isBusy = false }
+        try await store.save(next)
+        videoEditRedoStack[projectID]?.removeLast()
+        var undo = videoEditUndoStack[projectID] ?? []
+        undo.append(current)
+        if undo.count > 30 { undo.removeFirst(undo.count - 30) }
+        videoEditUndoStack[projectID] = undo
+        lastManualEditorChangeAt[projectID] = nil
+        pendingEditorVideoEditResume = nil
+        present(next)
+        return next
+    }
+
+    /// Import local videos and stills into this project's media library. The
+    /// first import branches the original take; subsequent imports update the
+    /// same working copy. The source files and original take are never edited.
+    @discardableResult
+    func importEditorMedia(from urls: [URL], projectID: UUID) async throws -> RecordingProject {
+        guard project(id: projectID) != nil else { throw ProjectStore.StoreError.projectNotFound }
+        if let blocker = automationBlocker { throw blocker.failure }
+        let inspected = try await store.inspectEditorMedia(from: urls)
+        await flushProjectEdits()
+        guard let source = project(id: projectID) else { throw ProjectStore.StoreError.projectNotFound }
+        if try await store.isVideoEditingCopy(source.id) {
+            busy("Importing media…")
+            defer { isBusy = false }
+            let updated = try await store.importEditorMedia(inspected, into: source)
+            var undo = videoEditUndoStack[source.id] ?? []
+            undo.append(source)
+            if undo.count > 30 { undo.removeFirst(undo.count - 30) }
+            videoEditUndoStack[source.id] = undo
+            videoEditRedoStack[source.id] = []
+            lastManualEditorChangeAt[source.id] = nil
+            pendingEditorVideoEditResume = nil
+            present(updated)
+            return updated
+        }
+
+        let suffix = " · " + L10n.tr("Edited demo")
+        let title = try newProjectTitle(nil, default: String(source.title.prefix(max(1, 120 - suffix.count))) + suffix)
+        try prepareForNewProject()
+        busy("Creating editable timeline…")
+        defer { isBusy = false }
+        let working = try await store.createVideoEditingCopy(from: source, edited: source, title: title,
+                                                             importedMedia: inspected)
+        var baseline = source
+        baseline.id = working.id
+        baseline.title = working.title
+        baseline.createdAt = working.createdAt
+        baseline.sourceVideoPath = working.sourceVideoPath
+        baseline.settings = working.settings
+        // Existing media was also copied into the new self-contained project;
+        // a first-import Undo drops only the newly imported library entries.
+        if let count = source.mediaAssets?.count {
+            baseline.mediaAssets = Array((working.mediaAssets ?? []).prefix(count))
+        }
+        videoEditUndoStack[working.id] = [baseline]
+        videoEditRedoStack[working.id] = []
+        lastManualEditorChangeAt[working.id] = nil
+        present(working)
+        return working
+    }
+
+    @discardableResult
+    func insertEditorMedia(projectID: UUID, assetID: UUID, atIndex: Int,
+                           duration: Double? = nil) async throws -> RecordingProject {
+        guard let source = project(id: projectID),
+              let asset = source.mediaAssets?.first(where: { $0.id == assetID }) else {
+            throw AIToolError.failed("That media asset is not in this project's library.")
+        }
+        return try await applyVideoEdit(projectID: projectID,
+            operation: .insertMedia(assetID: assetID, atIndex: atIndex,
+                                    duration: duration ?? (asset.kind == .image ? 3 : nil)))
+    }
+
     func importScreenshotDemo() async {
         guard !isManagingProjects else { return }
         let panel = NSOpenPanel()
@@ -1473,6 +1748,7 @@ final class StudioModel: ObservableObject {
         defer {
             isRunningCodexPlan = false
             isBusy = false
+            recordingInteractionTrace = nil
             pendingSourceCropInsets = nil
         }
 
@@ -1504,6 +1780,7 @@ final class StudioModel: ObservableObject {
             options.microphone = false
             options.frameRate = min(max(frameRate, 30), 60)
             let outputURL = try await store.temporaryRecordingURL()
+            try await RecordingWindowFocus.prepareForAutomation(target)
             try await captureEngine.startRecording(
                 target: target,
                 outputURL: outputURL,
@@ -1521,36 +1798,33 @@ final class StudioModel: ObservableObject {
                     try await Task.sleep(for: .milliseconds(50))
                 }
                 try Task.checkCancellation()
-                guard self.captureEngine.isRecording else { throw CancellationError() }
+                guard self.captureEngine.state == .recording else { throw CancellationError() }
             }
             var lastPlanClock: TimeInterval = 0
             let activeClock: @MainActor () -> TimeInterval = { [weak self] in
                 // Flushing a segment can trim its last partial frame. Keep the
                 // scheduling clock monotonic while clicks use exact media time.
-                lastPlanClock = max(lastPlanClock, self?.captureEngine.duration ?? 0)
+                lastPlanClock = max(lastPlanClock, self?.captureEngine.recordingIntervals.elapsed(at: ProcessInfo.processInfo.systemUptime) ?? 0)
                 return lastPlanClock
             }
-            var plannedClicks: [ClickEvent] = []
+            recordingInteractionTrace = InteractionTrace(sessionID: UUID(), source: .execution)
             do {
                 try await CodexPlanRunner.waitForDuration(0.7, waitUntilReady: waitUntilReady, activeClock: activeClock)
                 try await CodexPlanRunner.run(
                     actions: plan.actions,
-                    in: target,
+                    in: captureEngine.recordingTarget ?? target,
                     cropInsets: cropInsets,
                     browserApplicationURL: prepared.browserApplicationURL,
                     waitUntilReady: waitUntilReady,
-                    activeClock: activeClock
-                ) { [weak self] x, y in
-                    guard let self else { return }
-                    plannedClicks.append(
-                        ClickEvent(
-                            time: self.captureEngine.duration,
-                            x: x,
-                            y: y,
-                            button: .left
-                        )
-                    )
-                }
+                    activeClock: activeClock,
+                    onInteraction: { [weak self] event in
+                        guard let self else { return }
+                        let sequence = self.recordingInteractionTrace?.events.count ?? 0
+                        let mediaTime = self.captureEngine.recordingIntervals.elapsed(at: ProcessInfo.processInfo.systemUptime)
+                        self.recordingInteractionTrace?.events.append(InteractionEvent(sequence: sequence, time: mediaTime,
+                            kind: InteractionEventKind(rawValue: event.kind.rawValue)!, x: event.x, y: event.y))
+                    }
+                )
                 try await CodexPlanRunner.waitForDuration(0.9, waitUntilReady: waitUntilReady, activeClock: activeClock)
             } catch let cancellation as CancellationError {
                 guard codexFinishRequested else { throw cancellation }
@@ -1561,28 +1835,27 @@ final class StudioModel: ObservableObject {
             RecordingControlPanelCoordinator.shared.hide()
 
             var settings = ProjectSettings()
-            settings.autoZoomEnabled = false
+            settings.autoZoomEnabled = true
             settings.showCursor = showRecordingCursor
             settings.frameRate = min(max(frameRate, 30), 60)
             settings.sourceCropInsets = cropInsets
             settings.screenAnimation = .smooth
-            let clicks = plannedClicks.isEmpty ? result.clickEvents : plannedClicks
+            let trace = recordingInteractionTrace ?? InteractionTrace(sessionID: UUID(), source: .execution)
+            let interactions = trace.resolved(duration: result.duration)
             var project = try await store.createProject(
                 from: result.outputURL,
                 title: plan.title,
-                cursorSamples: result.cursorSamples,
-                clickEvents: clicks,
-                typingActivity: result.typingActivity,
+                cursorSamples: interactions.cursorSamples,
+                clickEvents: interactions.clickEvents,
+                typingActivity: trace.resolvedTypingActivity(duration: result.duration),
                 eventDiagnostics: result.eventDiagnostics,
                 settings: settings
             )
-            project.zoomSegments = manualZooms(
-                for: clicks,
-                duration: project.duration,
-                cropInsets: cropInsets
-            )
+            project.interactionTrace = trace
+            TimelineMath.regenerateAutomaticZoomSegments(in: &project)
             try await store.save(project)
             present(project)
+            activateAfterSavedStop()
         } catch {
             if captureEngine.isRecording {
                 await captureEngine.cancelRecording()
@@ -1787,6 +2060,8 @@ final class StudioModel: ObservableObject {
                     )
                 }
                 time += 1.6
+            case .move:
+                time += (action.seconds ?? 0.45).clamped(to: 0...3)
             case .scroll:
                 // On a still image, scrolling becomes time for a gentle pan.
                 time += 0.8
@@ -2013,6 +2288,25 @@ final class StudioModel: ObservableObject {
         // Ignore callbacks from a disappearing editor, including late preview
         // updates and text-field commits after another project has opened.
         guard destination == .editor, activeProject?.id == project.id, !isManagingProjects else { return false }
+        if let previous = activeProject,
+           previous.title != project.title
+            || previous.settings != project.settings
+            || previous.zoomSegments != project.zoomSegments
+            || previous.chapters != project.chapters
+            || previous.videoClips != project.videoClips
+            || previous.videoTransitions != project.videoTransitions
+            || previous.mediaAssets != project.mediaAssets
+            || previous.duration != project.duration {
+            let now = Date()
+            if now.timeIntervalSince(lastManualEditorChangeAt[project.id] ?? .distantPast) > 0.7 {
+                var undo = videoEditUndoStack[project.id] ?? []
+                undo.append(previous)
+                if undo.count > 30 { undo.removeFirst(undo.count - 30) }
+                videoEditUndoStack[project.id] = undo
+            }
+            lastManualEditorChangeAt[project.id] = now
+            videoEditRedoStack[project.id] = []
+        }
         activeProject = project
         if let index = projects.firstIndex(where: { $0.id == project.id }) {
             projects[index] = project

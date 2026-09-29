@@ -1,6 +1,7 @@
 ---
 name: product-demo-composer
-description: Compose the final enterprise-grade product demo / launch video with ffmpeg from a storyboard.json - Focus Studio export chapters with Chinese/English captions, AI hero and B-roll clips (Volcengine Ark Seedance) and stills (Seedream) with Ken Burns motion, title/CTA cards, xfade transitions, background music with ducking, 1080p or 4K output plus a render report. Use whenever the user wants to render, assemble, stitch, 合成 or export a demo video, add 片头/片尾/字幕/BGM to a screen recording, generate the missing AI assets of a storyboard, make a quick preview render, or re-import the result into Focus Studio.
+description: >-
+  Assemble a product demo or launch video from storyboard.json with ffmpeg: exported Focus Studio chapters, title/CTA cards, captions, transitions, background music and optional existing or generated AI clips/stills. Use for multi-clip assembly, marketing finishing, or a storyboard preview/final render. For trimming AI recording waits or adjusting editable zooms within Focus Studio, use focus-demo-editing first.
 ---
 
 # product-demo-composer - storyboard.json → final MP4
@@ -10,6 +11,14 @@ normalises every segment to the output canvas, burns captions with a CJK-capable
 xfade/acrossfade, mixes BGM with ducking and writes `<output>.mp4` + `<output>-render-report.json`.
 `scripts/probe_media.py` is the ffprobe helper used for verification. Both need ffmpeg 7.x
 (`/usr/local/bin/ffmpeg` with libx264, drawtext, xfade, sidechaincompress) and Python 3.9+ (stdlib only).
+
+## Native edit before assembly
+
+For a request to remove slow Codex thinking gaps or change individual zoom durations, first use
+[focus-demo-editing](../focus-demo-editing/SKILL.md) to produce a separate editable Focus Studio project.
+Export that finished camera edit as this composer's `demo` source. Trimming the raw recording here would
+lose the native editable cursor/zoom timing; an imported MP4 cannot recover that metadata. Do not add paid
+AI assets, title cards or BGM merely because the user asked for pacing improvements.
 
 ## Workflow
 

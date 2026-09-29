@@ -20,6 +20,7 @@ enum AssistantControlRegression {
         try await secondStopJoinsTheFirst()
         try await permissionFailureIsReported()
         try await automationReadsStayPut()
+        try await assistantConfirmationRestoresTarget()
         print("AssistantControlRegression: PASS (dropped assistant edits throw, export library guard wiring, concurrent bootstrap, joined stops with one finalization, permission failure reporting, get_project/get_status read the model without navigating)")
     }
 
@@ -212,6 +213,41 @@ enum AssistantControlRegression {
         try await waitUntil("The scripted recording did not start") { model.recordingPhase == .recording }
     }
 
+    /// The model, rather than an open SwiftUI view, owns attention and focus
+    /// handoff. A cancelled confirmation must return to a still-live target.
+    private static func assistantConfirmationRestoresTarget() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let completion = ConfirmationCompletion()
+        let model = StudioModel(
+            store: fixture.store, interactionTrackingAccess: { true }, inputMonitoringAccess: { true },
+            startCapture: { _, _, _, _ in ProcessInfo.processInfo.systemUptime },
+            recordingClock: RecordingClock(now: { ProcessInfo.processInfo.systemUptime }, sleep: { _ in await Task.yield() }),
+            assistantCompletion: completion
+        )
+        var presentations = 0
+        var handoffs: [String] = []
+        model.presentAssistantWindow = { presentations += 1 }
+        model.prepareRecordingTarget = { handoffs.append($0.id) }
+        let session = model.assistantSession
+        session.send("Stop recording")
+        try await waitUntil("An idle confirmation never appeared") { session.pendingConfirmation != nil }
+        try expect(presentations == 1, "The model presents an assistant even without any visible chat view")
+        session.cancelPending()
+        try expect(handoffs.isEmpty, "Resolving an idle request must not hide the editor or library")
+        try await waitUntil("The idle confirmation did not resolve") { !session.isRunning }
+        try await startScriptedRecording(model)
+        let before = handoffs.count
+        session.send("Stop recording")
+        try await waitUntil("The live confirmation never appeared") { session.pendingConfirmation != nil }
+        try expect(presentations == 2, "A live recording's hidden assistant is presented for confirmation")
+        session.cancelPending()
+        try expect(handoffs.count == before + 1 && handoffs.last == model.currentRecording?.target.id,
+                   "Resolving a live confirmation returns the selected target synchronously")
+        try await waitUntil("The live confirmation did not resolve") { !session.isRunning }
+        try expect(model.currentRecording?.isLive == true, "Cancelling Stop leaves the take recording")
+    }
+
     private static func permissionFailureIsReported() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
@@ -271,6 +307,19 @@ enum AssistantControlRegression {
 
     private static func expect(_ condition: Bool, _ message: String) throws {
         if !condition { throw AssistantRegressionFailure(message) }
+    }
+}
+
+/// Asks for the same explicit stop on each new request; cancellation replies
+/// do not touch the capture or any external service.
+private final class ConfirmationCompletion: TextCompletionProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private var call = 0
+    func complete(system: String, user: String, json: Bool) async throws -> String {
+        let index = lock.withLock { call += 1; return call }
+        return index % 2 == 1
+            ? "{\"action\":{\"tool\":\"stop_recording\",\"arguments\":{}}}"
+            : "{\"reply\":\"Keep recording.\"}"
     }
 }
 

@@ -51,15 +51,16 @@ enum StudioMotion {
 
 struct PrimaryButtonStyle: ButtonStyle {
     var tint: Color = StudioTheme.purple
+    @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(.white)
+            .foregroundStyle(.white.opacity(isEnabled ? 1 : 0.5))
             .padding(.horizontal, 16)
             .frame(height: 36)
-            .background(tint.opacity(configuration.isPressed ? 0.78 : 1))
+            .background(tint.opacity(isEnabled ? (configuration.isPressed ? 0.78 : 1) : 0.32))
             .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.97 : 1)
             .animation(StudioMotion.press, value: configuration.isPressed)

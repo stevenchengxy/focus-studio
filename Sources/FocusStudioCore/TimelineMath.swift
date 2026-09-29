@@ -1,6 +1,19 @@
 import Foundation
 
 public enum TimelineMath {
+    /// Whether captured input can create a zoom inside the visible crop.
+    /// Cursor motion alone and clicks on cropped-out browser chrome cannot.
+    public static func hasAutomaticZoomInput(in project: RecordingProject) -> Bool {
+        let crop = project.settings.sourceCropInsets ?? SourceCropInsets()
+        func eligible(_ time: Double, _ x: Double, _ y: Double) -> Bool {
+            project.duration.isFinite && project.duration > 0 && time.isFinite && x.isFinite && y.isFinite
+                && time >= 0 && time <= project.duration && crop.croppedPoint(x: x, y: y) != nil
+        }
+        return project.resolvedClickEvents.contains { eligible($0.time, $0.x, $0.y) }
+            || (project.settings.resolvedTypingZoom.enabled
+                && project.resolvedTypingActivity.contains { eligible($0.time, $0.x, $0.y) })
+    }
+
     public static func generateZoomSegments(
         from clicks: [ClickEvent],
         duration: Double,
@@ -177,10 +190,10 @@ public enum TimelineMath {
         // Remove taken-over metadata BEFORE grouping it. Filtering only the
         // resulting first anchor lets split bursts (or merged nearby clicks)
         // reappear under a manually shortened/moved block.
-        let remainingClicks = project.clickEvents.filter {
+        let remainingClicks = project.resolvedClickEvents.filter {
             !authoredClicks.contains($0.id) && !isLegacyMember(time: $0.time, x: $0.x, y: $0.y)
         }
-        let remainingTyping = (project.typingActivity ?? []).filter {
+        let remainingTyping = project.resolvedTypingActivity.filter {
             !authoredTyping.contains($0) && !isLegacyMember(time: $0.time, x: $0.x, y: $0.y)
         }
         let automatic = generateZoomSegments(
@@ -361,7 +374,7 @@ public enum TimelineMath {
     /// reset a user's retimed blocks. Typing has its own explicit idle control.
     public static func adjustAutomaticClickHold(in project: inout RecordingProject, by delta: Double) {
         guard delta.isFinite else { return }
-        let typing = project.settings.resolvedTypingZoom.enabled ? project.typingActivity ?? [] : []
+        let typing = project.settings.resolvedTypingZoom.enabled ? project.resolvedTypingActivity : []
         for index in project.zoomSegments.indices where project.zoomSegments[index].kind == .automatic {
             let segment = project.zoomSegments[index]
             let containsTyping = typing.contains {

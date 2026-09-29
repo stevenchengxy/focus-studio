@@ -666,8 +666,9 @@ private actor SessionTransport: Transport {
 
     /// What the SDK gets for one message read: nothing for a batch, which is
     /// answered here; a `tools/call` request with its params replaced by a
-    /// reference; anything else as it is (including what does not parse,
-    /// which the SDK answers).
+    /// reference; for initialize, normalizes arbitrary experimental capability
+    /// values the pinned SDK cannot decode; anything else as it is (including
+    /// what does not parse, which the SDK answers).
     private func admit(_ data: Data) async -> Data? {
         guard let object = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else { return data }
         if let batch = object as? [Any] {
@@ -677,6 +678,23 @@ private actor SessionTransport: Transport {
         guard var message = object as? [String: Any] else { return data }
         let envelope = JSONRPCEnvelope(message)
         noteIncoming(envelope)
+        if envelope.isRequest, envelope.method == Initialize.name,
+           var params = message["params"] as? [String: Any],
+           var capabilities = params["capabilities"] as? [String: Any],
+           let experimental = capabilities["experimental"] as? [String: Any] {
+            // MCP clients may put JSON objects here (Codex sends
+            // "codex/auth-change": {}). The pinned Swift SDK models this map
+            // as [String: String] and rejects the whole initialize request.
+            // Focus Studio does not use experimental capabilities; preserve
+            // the string entries it accepts and leave every other field alone.
+            let supported = experimental.compactMapValues { $0 as? String }
+            if supported.count != experimental.count {
+                capabilities["experimental"] = supported
+                params["capabilities"] = capabilities
+                message["params"] = params
+                return (try? JSONSerialization.data(withJSONObject: message, options: [.withoutEscapingSlashes])) ?? data
+            }
+        }
         guard envelope.isRequest, envelope.method == CallTool.name, let id = envelope.id else { return data }
         let params = message["params"]
         let reference = UUID().uuidString

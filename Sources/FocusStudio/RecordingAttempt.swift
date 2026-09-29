@@ -15,6 +15,7 @@ struct RecordingSettings: Equatable {
     /// Whether the project shows the recorded pointer (the recorder's Show
     /// cursor); a call cannot change it.
     var showCursor: Bool = true
+    var interactionMode: String = "manual"
 
     /// What this recording captures besides the screen, for the recording
     /// UI (a key of the string catalogs, in English); nil for no audio. An
@@ -32,6 +33,7 @@ struct RecordingSettings: Equatable {
     /// These settings with the options a call gave (nil keeps a setting).
     func applying(_ options: AIRecordingOptions) -> RecordingSettings {
         var settings = self
+        if let value = options.interactionMode { settings.interactionMode = value }
         if let value = options.systemAudio { settings.systemAudio = value }
         if let value = options.microphone { settings.microphone = value }
         if let value = options.automaticZooms { settings.automaticZooms = value }

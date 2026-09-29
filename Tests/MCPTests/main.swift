@@ -26,6 +26,11 @@ struct MCPTests {
     static func main() async throws {
         let arguments = CommandLine.arguments
         if arguments.contains(stdioProbeFlag) { stdioProbe() }
+        if arguments.contains("--protocol-handshake-only") {
+            try await protocolHandshake()
+            print("MCPTests: PASS (protocol handshakes, including Codex nested experimental capability)")
+            return
+        }
         func value(after flag: String) -> String? {
             guard let index = arguments.firstIndex(of: flag), arguments.indices.contains(index + 1) else { return nil }
             return arguments[index + 1]

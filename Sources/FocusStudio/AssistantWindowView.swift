@@ -3,8 +3,9 @@ import SwiftUI
 /// Identity and sizing of the assistant window scene.
 enum AssistantWindow {
     static let id = "assistant"
-    static let minimumSize = CGSize(width: 420, height: 560)
-    static let defaultSize = CGSize(width: 460, height: 720)
+    @MainActor static let presenter = MainWindowPresenter()
+    static let minimumSize = CGSize(width: 720, height: 660)
+    static let defaultSize = CGSize(width: 980, height: 800)
 }
 
 /// Hosts the app-wide assistant. Observing the gateway and the Director keeps
@@ -16,11 +17,11 @@ struct AssistantWindowView: View {
     @ObservedObject private var installation = AppInstallationCoordinator.shared
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        AIAssistantPanel(
-            session: model.assistantSession,
-            modelLabel: model.assistantModelLabel,
+        AssistantWorkspaceView(
+            model: model,
             onClose: { dismissWindow(id: AssistantWindow.id) },
             openSettings: {
                 AppSettingsNavigation.shared.selection = .aiModels
@@ -31,5 +32,9 @@ struct AssistantWindowView: View {
         .background(StudioTheme.window)
         .preferredColorScheme(.dark)
         .disabled(installation.isWorking)
+        .background(HostingWindowReader { AssistantWindow.presenter.register($0) })
+        .onAppear {
+            AssistantWindow.presenter.openMainWindow = { [openWindow] in openWindow(id: AssistantWindow.id) }
+        }
     }
 }

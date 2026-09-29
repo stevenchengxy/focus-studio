@@ -65,9 +65,7 @@ struct StudioRootView: View {
                     LibraryView()
                 case .director:
                     CodexDirectorView(
-                        session: model.assistantSession,
-                        director: model.codexDirector,
-                        modelLabel: model.assistantModelLabel,
+                        model: model,
                         onClose: { model.closeDirector() },
                         openSettings: {
                             AppSettingsNavigation.shared.selection = .aiModels
@@ -135,6 +133,7 @@ struct StudioRootView: View {
         .onAppear {
             // Lets an AI call open a main window when none is open.
             MainWindowPresenter.shared.openMainWindow = { [openWindow] in openWindow(id: MainWindow.id) }
+            AssistantWindow.presenter.openMainWindow = { [openWindow] in openWindow(id: AssistantWindow.id) }
         }
         .task {
             await model.bootstrap()

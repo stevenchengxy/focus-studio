@@ -315,7 +315,7 @@ def tools_list(path, catalog, fixture_names):
         check(("project_id" in schema["properties"]) == entry["acceptsProjectID"], f"{name}: project_id offered {entry['acceptsProjectID']}")
         annotations = tool["annotations"]
         check(annotations.get("title") == tool["title"] and isinstance(annotations.get("readOnlyHint"), bool)
-              and annotations.get("openWorldHint") is False, f"{name} annotations: {annotations}")
+              and annotations.get("openWorldHint") == (name in {"perform_recording_action", "perform_recording_text"}), f"{name} annotations: {annotations}")
         if not annotations["readOnlyHint"]:
             check(isinstance(annotations.get("destructiveHint"), bool) and isinstance(annotations.get("idempotentHint"), bool),
                   f"{name} is a writer and says whether it is destructive: {annotations}")

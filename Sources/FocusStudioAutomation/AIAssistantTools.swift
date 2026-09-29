@@ -11,14 +11,34 @@ public enum AIAssistantToolCatalog {
             // Pacing for multi-step flows ("record for 8 seconds").
             WaitTool(),
             // Recording and library (the app itself).
+            GetStatusTool(),
             ListRecordingSourcesTool(),
+            PrepareDemoPageTool(),
+            RunDemoTaskTool(),
             StartRecordingTool(),
+            CaptureRecordingFrameTool(),
+            PerformRecordingActionTool(),
+            PerformRecordingTextTool(),
             StopRecordingTool(),
             WaitForRecordingTool(),
             ListProjectsTool(),
+            GetProjectTool(),
             OpenProjectTool(),
             CloseEditorTool(),
             // Editing the open project.
+            AnalyzeDemoPacingTool(),
+            CreateDemoCutTool(),
+            GetTimelineTool(),
+            SplitClipTool(),
+            TrimClipTool(),
+            DeleteClipTool(),
+            MoveClipTool(),
+            SetTransitionTool(),
+            SetClipAudioTool(),
+            SetImageDurationTool(),
+            UndoClipEditTool(),
+            RedoClipEditTool(),
+            UpdateZoomTool(),
             AddZoomTool(),
             RemoveZoomTool(),
             SetZoomStyleTool(),
@@ -27,6 +47,12 @@ public enum AIAssistantToolCatalog {
             SetBackgroundImageTool(),
             SetBackgroundMusicTool(),
             SetSoundEffectsTool(),
+            ListMediaAssetsTool(),
+            ImportMediaAssetTool(),
+            InsertMediaAssetTool(),
+            ListGlobalMediaAssetsTool(),
+            ImportGlobalMediaAssetTool(),
+            AddGlobalMediaToProjectTool(),
             // Generated media and output.
             GenerateImageTool(),
             GenerateVideoTool(),
@@ -491,7 +517,7 @@ public enum AIToolSupport {
 
 struct GenerateImageTool: AIAssistantTool {
     let name = "generate_image"
-    let summary = "Generate a still image with Seedream (Volcengine Ark): a background for the recording, a title card, or any other asset. Saves a PNG in the assets folder. Apply a background afterwards with set_background_image."
+    let summary = "Generate a still image with Seedream (Volcengine Ark) for a demo. Saves a PNG and registers it in the shared media library; copying it into a project is a separate step. Apply a recording background with set_background_image when requested."
 
     var parametersSchema: [String: Any] {
         [
@@ -542,7 +568,20 @@ struct GenerateImageTool: AIAssistantTool {
         var lines = [context.format("Image saved: %@ (%lld × %lld)", output.lastPathComponent, pixelSize.width, pixelSize.height)]
         if let estimate { lines.append(context.format("Estimated cost ≈ ¥%@", AIToolSupport.yuan(estimate))) }
         lines.append(output.path)
-        return AIToolResult(text: lines.joined(separator: "\n"), attachments: [output])
+        let registration = await MediaLibraryToolSupport.registerGenerated(output, context: context)
+        if let asset = registration.globalAsset {
+            lines.append(context.isChinese
+                ? "已加入通用素材库（素材 \(asset.id.uuidString)）；如需用于当前视频，请先加入项目素材库。"
+                : "Added to the shared media library (asset \(asset.id.uuidString)); copy it into a project before using it on a timeline.")
+        }
+        if let issue = registration.issue { lines.append(issue) }
+        let data: AIJSONValue = [
+            "path": AIJSONValue(output),
+            "global_asset": registration.globalAsset.map(MediaLibraryToolSupport.data) ?? .null,
+            "global_asset_id": registration.globalAsset.map { AIJSONValue($0.id.uuidString) } ?? .null,
+            "media_import_issue": registration.issue.map { AIJSONValue($0) } ?? .null,
+        ]
+        return AIToolResult(text: lines.joined(separator: "\n"), attachments: [output], data: data)
     }
 }
 
@@ -550,7 +589,7 @@ struct GenerateImageTool: AIAssistantTool {
 
 struct GenerateVideoTool: AIAssistantTool {
     let name = "generate_video"
-    let summary = "Generate a short video clip with Seedance (Volcengine Ark), e.g. an intro or outro for the demo. Optional first/last frame images, reference images, a reference video (camera/composition) and reference audio (rhythm). Paid: the user confirms a cost estimate first. Prefer the mini model and 4–6 s while iterating."
+    let summary = "Generate a short video clip with Seedance (Volcengine Ark), e.g. an intro or outro. Saves it to the shared media library; adding it to a project is separate. Optional first/last frames and reference media. Paid: the user confirms a cost estimate first. Prefer the mini model and 4–6 s while iterating."
 
     var parametersSchema: [String: Any] {
         [
@@ -692,7 +731,20 @@ struct GenerateVideoTool: AIAssistantTool {
                                     AIToolSupport.seconds(duration ?? Double(plan.duration)), AIToolSupport.bytes(output))]
         if let estimate { lines.append(context.format("Estimated cost ≈ ¥%@", AIToolSupport.yuan(estimate))) }
         lines.append(output.path)
-        return AIToolResult(text: lines.joined(separator: "\n"), attachments: [output])
+        let registration = await MediaLibraryToolSupport.registerGenerated(output, context: context)
+        if let asset = registration.globalAsset {
+            lines.append(context.isChinese
+                ? "已加入通用素材库（素材 \(asset.id.uuidString)）；如需用于当前视频，请先加入项目素材库。"
+                : "Added to the shared media library (asset \(asset.id.uuidString)); copy it into a project before using it on a timeline.")
+        }
+        if let issue = registration.issue { lines.append(issue) }
+        let data: AIJSONValue = [
+            "path": AIJSONValue(output),
+            "global_asset": registration.globalAsset.map(MediaLibraryToolSupport.data) ?? .null,
+            "global_asset_id": registration.globalAsset.map { AIJSONValue($0.id.uuidString) } ?? .null,
+            "media_import_issue": registration.issue.map { AIJSONValue($0) } ?? .null,
+        ]
+        return AIToolResult(text: lines.joined(separator: "\n"), attachments: [output], data: data)
     }
 }
 
@@ -792,7 +844,7 @@ struct SetBackgroundImageTool: AIAssistantTool {
 
 struct UpdateSettingsTool: AIAssistantTool {
     let name = "update_settings"
-    let summary = "Change how the recording looks and exports: background (style, preset, colours, image, blur, brightness), padding, corner radius, shadow, screen animation, zoom scale, aspect ratio, motion blur, caption style, the product description, and the export width and frame rate. Only the given keys change."
+    let summary = "Change how the recording looks and exports: background (style, preset, colours, image, blur, brightness), padding, corner radius, shadow, screen animation, zoom scale and cursor following, aspect ratio, motion blur, caption style, the product description, and the export width and frame rate. Only the given keys change."
 
     static let backgroundPresetNames = BackgroundPreset.allCases.map(\.rawValue)
     static let aspectRatioNames = CanvasAspectRatio.allCases.map(\.rawValue) + ["auto", "16:9", "9:16", "1:1", "4:3", "3:4"]
@@ -805,6 +857,7 @@ struct UpdateSettingsTool: AIAssistantTool {
         "cornerRadius": 0...52,
         "shadow": 0...0.8,
         "zoomScale": 1.1...3,
+        "zoomFollowsCursor": 0...1,
         "motionBlur": 0...0.3,
         "backgroundBlur": 0...60,
         "backgroundBrightness": -0.5...0.35,
@@ -813,7 +866,7 @@ struct UpdateSettingsTool: AIAssistantTool {
 
     static let allowedKeys = [
         "backgroundStyle", "backgroundPreset", "backgroundColor", "secondaryBackgroundColor", "backgroundImagePath",
-        "backgroundBlur", "backgroundBrightness", "padding", "cornerRadius", "shadow", "screenAnimation", "zoomScale",
+        "backgroundBlur", "backgroundBrightness", "padding", "cornerRadius", "shadow", "screenAnimation", "zoomScale", "zoomFollowsCursor",
         "aspectRatio", "motionBlur", "captionPosition", "captionScale", "showsChapterNumber", "productDescription",
         "exportWidth", "frameRate",
     ]
@@ -834,6 +887,7 @@ struct UpdateSettingsTool: AIAssistantTool {
                 "shadow": ["type": "number", "minimum": 0, "maximum": 0.8, "description": "Shadow strength behind the screen, from 0 (none) to 0.8 (strongest)."],
                 "screenAnimation": ["type": "string", "enum": ScreenAnimationStyle.allCases.map(\.rawValue)],
                 "zoomScale": ["type": "number", "minimum": 1.1, "maximum": 3, "description": "Default magnification for automatic zooms and new manual zooms, from 1.1 to 3."],
+                "zoomFollowsCursor": ["type": "number", "minimum": 0, "maximum": 1, "description": "Camera following for the whole project: 0 holds each zoom's authored target; 1 fully follows the cursor. Leave omitted to preserve the current setting."],
                 "aspectRatio": ["type": "string", "enum": CanvasAspectRatio.allCases.map(\.rawValue), "description": "wide = 16:9, vertical = 9:16, square, classic = 4:3, tall = 3:4"],
                 "motionBlur": ["type": "number", "minimum": 0, "maximum": 0.3, "description": "Motion blur while the camera moves, from 0 (off) to 0.3."],
                 "captionPosition": ["type": "string", "enum": CaptionPosition.allCases.map(\.rawValue)],
@@ -966,6 +1020,10 @@ struct UpdateSettingsTool: AIAssistantTool {
         if let value = try number("zoomScale") {
             let scale = clamp("zoomScale", value)
             steps.append { $0.zoomScale = scale }
+        }
+        if let value = try number("zoomFollowsCursor") {
+            let follow = clamp("zoomFollowsCursor", value)
+            steps.append { $0.zoomFollowsCursor = follow }
         }
         if let value = try number("motionBlur") {
             let blur = clamp("motionBlur", value)

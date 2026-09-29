@@ -169,8 +169,11 @@ enum MCPClientConnectorRegression {
         try expect(MCPClientKind.claudeCode.commandLine(helperPath: path) == "claude mcp add --scope user focus-studio -- '/Applications/Focus Studio.app/Contents/MacOS/focus-studio-mcp'", "claude command: \(MCPClientKind.claudeCode.commandLine(helperPath: path))")
         try expect(MCPClientKind.codex.commandLine(helperPath: path) == "codex mcp add focus-studio -- '/Applications/Focus Studio.app/Contents/MacOS/focus-studio-mcp'", "codex command")
         // The CLI found on this Mac, which may not be on PATH (the codex inside ChatGPT.app), shell-quoted.
-        let bundled = MCPClientKind.codex.commandLine(helperPath: path, cliPath: "/Applications/ChatGPT.app/Contents/Resources/codex")
-        try expect(bundled == "/Applications/ChatGPT.app/Contents/Resources/codex mcp add focus-studio -- '/Applications/Focus Studio.app/Contents/MacOS/focus-studio-mcp'", "codex command with its path: \(bundled)")
+        let nestedCLI = "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"
+        try expect(MCPClientKind.codex.standardLocations(home: "/Users/example").contains(nestedCLI),
+                   "current ChatGPT desktop CodexCLI is discovered even when not on PATH")
+        let bundled = MCPClientKind.codex.commandLine(helperPath: path, cliPath: nestedCLI)
+        try expect(bundled == "\(nestedCLI) mcp add focus-studio -- '/Applications/Focus Studio.app/Contents/MacOS/focus-studio-mcp'", "codex command with its path: \(bundled)")
         let spaced = MCPClientKind.claudeCode.commandLine(helperPath: path, cliPath: "/Users/me/My Tools/claude")
         try expect(spaced == "'/Users/me/My Tools/claude' mcp add --scope user focus-studio -- '/Applications/Focus Studio.app/Contents/MacOS/focus-studio-mcp'", "claude command with a quoted path: \(spaced)")
         try expect(MCPClientKind.codex.commandLine(helperPath: path, cliPath: "") == MCPClientKind.codex.commandLine(helperPath: path), "An empty path is no path")

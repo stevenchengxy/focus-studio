@@ -1,6 +1,6 @@
 ---
 name: focus-studio-mcp
-description: Operate the Focus Studio macOS app through its MCP server (tools named mcp__focus-studio__*) to record a display or window, edit the recording (zooms, chapters/captions, background, music, sound effects, export size) and export an MP4 into the working directory; also import a video or turn a screenshot into a demo, and list, search, rename or delete projects. Use whenever the user asks to record / 录制 / 录屏 a product demo, walkthrough or bug reproduction with Focus Studio, to add zooms, captions, 字幕, BGM or 配乐 to a Focus Studio project, or to export or re-export a Focus Studio demo video. Paid AI generation is not part of these tools.
+description: Operate Focus Studio through its MCP tools to record a product demo, edit its video clips, zooms, transitions, captions and sound, then export an MP4. Use for Focus Studio recording, clip trimming or reordering, demo editing, BGM, subtitles and export requests. Paid AI generation is separate.
 ---
 
 # focus-studio-mcp - record, edit and export with Focus Studio over MCP
@@ -29,20 +29,79 @@ recording shows a countdown and a control bar. Focus Studio is the only writer o
   (`permissions.screen_recording`). Automatic zooms on clicks and typing also need Accessibility and Input
   Monitoring.
 
-## The 24 tools
+## Tools
 
 | Group | Tools |
 | --- | --- |
 | Status and library | `get_status`, `list_projects`, `get_project`, `rename_project`, `delete_project` |
 | New projects from files | `import_video`, `create_screenshot_demo` |
-| Recording | `list_recording_sources`, `start_recording`, `stop_recording`, `wait_for_recording` |
-| Editing (by `project_id`) | `add_zoom`, `remove_zoom`, `set_zoom_style`, `update_settings`, `set_chapters`, `set_background_image`, `set_background_music`, `set_sound_effects` |
+| Recording | `list_recording_sources`, `start_recording`, `capture_recording_frame`, `perform_recording_action`, `perform_recording_text`, `stop_recording`, `wait_for_recording` |
+| Editing (by `project_id`) | `analyze_demo_pacing`, `create_demo_cut`, `get_timeline`, `split_clip`, `trim_clip`, `delete_clip`, `move_clip`, `set_transition`, `set_clip_audio`, `set_image_duration`, `undo_clip_edit`, `redo_clip_edit`, `update_zoom`, `add_zoom`, `remove_zoom`, `set_zoom_style`, `update_settings`, `set_chapters`, `set_background_image`, `set_background_music`, `set_sound_effects` |
+| Shared media library | `list_global_media_assets`, `import_global_media_asset`, `add_global_media_to_project` |
+| Current project's media | `list_media_assets`, `import_media_asset`, `insert_media_asset` |
 | Output | `capture_frame`, `export_project`, `assemble_video`, `list_assets` |
 | Long calls | `wait_for_job` |
 
-Not available over MCP: `generate_image`, `generate_video` (paid), clicks, key presses, shell commands.
+Not available over MCP: `generate_image`, `generate_video` (paid), arbitrary key presses, shell commands. Tracked pointer input is available only inside the selected live recording window.
 
 ## Typical flows
+
+### Record and finish a demo in one task
+
+For “record this website, remove the slow waits, adjust zoom durations and export”, use
+[focus-demo-editing](../focus-demo-editing/SKILL.md). It connects the recording flow below to the native
+`analyze_demo_pacing` → reviewed `create_demo_cut` or `get_timeline` → clip edits → `update_zoom` → preview/export workflow. The source take is retained,
+and a first video-track edit opens a separate working project. Use its returned `project_id` for later changes.
+A long pause in input is only
+a candidate cut; inspect generated answers, loading animations and audio before removing it.
+
+Use `update_zoom` with an existing `zoom_id` for individual start/end/target/scale changes. Use
+`set_zoom_style` for global motion, before those local edits; automatic regeneration can change segments.
+If these newer tools are absent from the connected catalog, update Focus Studio before claiming to use them.
+
+For precise clip work, call `get_timeline` first. `split_clip.at` is an absolute **output** time;
+`trim_clip.source_start` and `source_end` are positions in the immutable **source** movie. Use IDs from the
+latest receipt, since a split creates another clip ID. `move_clip.to_index` starts at zero. `set_transition`
+supports `cut`, `fadeToBlack` and `flash` on a clip with a following clip; `set_clip_audio.volume` controls
+only that clip's source sound (0–2; 0 mutes). Preview and export render these edits. `undo_clip_edit` and
+`redo_clip_edit` traverse recent editor changes while the app keeps this history in memory.
+
+For reusable video or images, use `import_global_media_asset`, then `list_global_media_assets`.
+Choose an item explicitly with `add_global_media_to_project`; this copies it into the current project's
+library and returns the **project-local asset ID**. Use that ID with `insert_media_asset` and a zero-based
+clip index. The first edit branches the original recording into a working project; use its returned
+`project_id` for subsequent calls. A still defaults to 3 seconds and can be adjusted with
+`set_image_duration`; video clips retain their sound and can be trimmed. Shared and project copies are
+independent, so changing or deleting the shared source does not break an existing project. Use
+`import_media_asset` when a file should go directly into this project instead of the shared library.
+Confirmed Seedance/Seedream generation through the in-app assistant stores successful output in the
+shared library; adding it to a project remains an explicit step.
+
+### Codex-controlled recording with synchronized pointer and zooms
+
+Choose a visible window and start with `interaction_mode: "codex"` and `automatic_zooms: true`.
+The result includes `recording_id`. Before every pointer action, call `capture_recording_frame`
+with that id and inspect the returned image. Use `perform_recording_action` with the returned
+`observation_id`, a unique `action_id`, `action` (`move`, `click`, `scroll`), and normalized x/y
+in the full uncropped image. For scrolling include `delta_y` (positive goes down). Coordinates
+are the pointer hotspot, not an element's page coordinates. Never infer unseen controls.
+
+To type demo text the user requested, click the observed input first, then capture a fresh frame
+and call `perform_recording_text` with `recording_id`, `observation_id`, `action_id` and `text`.
+It accepts one line of up to 1000 characters in an editable webpage field, refuses passwords and
+browser chrome, and never presses Enter. Inspect a new image before any separately authorized
+submit click. Text can trigger autosave; do not enter credentials or unrelated content.
+
+An observation is single-use and expires after 60 seconds or window geometry changes. A
+pause, stop, obscuring window or stale session refuses input. Reuse an uncertain `action_id`
+only to retrieve its receipt; never blindly repeat a partially executed action with a new id.
+The recorder dispatches and records the same measured pointer path, so physical mouse input
+elsewhere cannot steal the camera. Inspect `get_project.interaction_trace`, clicks and zooms
+when finished, then preview and export. Do not manually add zooms to make a failed test look successful.
+
+`interaction_mode: "manual"` (the default) keeps normal system event tracking. Arbitrary
+Codex browser/AX tool operations are not intercepted by this implementation; use the tracked
+recording tools for synchronized automated demos. There is no universal CUA event stream.
 
 ### Record a window, edit, export into the working directory
 
@@ -52,7 +111,8 @@ Not available over MCP: `generate_image`, `generate_video` (paid), clicks, key p
    `start_recording` with `source`, and usually `duration` (1-600 s, counted from the first frame).
    Optional per-recording settings: `browser_content_only`, `system_audio`, `microphone`, `frame_rate`
    (30 or 60), `automatic_zooms`. The call returns once the recording is live (`state: "recording"`,
-   `started_at`, `auto_stop_at`).
+   `started_at`, `auto_stop_at`). The recorder hides before the countdown and brings the selected
+   window forward; a saved take returns to the editor, including timed and MCP stops.
    Sound: turn on `microphone` or `system_audio` only when the demo needs it. When the person's own
    recorder settings leave that sound off, Focus Studio asks the person before the countdown, every time:
    **Allow for this recording**; **Record without sound**, which records the screen with no sound at all,
@@ -140,19 +200,23 @@ Not available over MCP: `generate_image`, `generate_video` (paid), clicks, key p
   points while recording; the person can expand it), and is not in the video. When you operate the recorded app
   yourself, keep its controls out of that area and stop with `stop_recording`, never by clicking the bar
   (its x discards the recording to the Trash).
-* Clicks and typing sent over a browser's DevTools protocol (Playwright, Claude in Chrome) are not real input
-  events and make no automatic zooms. Note when you acted and add zooms afterwards with `add_zoom`.
+* Clicks and typing sent over a browser's DevTools protocol (Playwright, Claude in Chrome), and some
+  Accessibility-based automation, do not emit the system input events needed for automatic zooms.
+  Keep `automatic_zooms: true`, but verify `clicks` and `zooms` with `get_project` after the take.
+  Note the actual interaction times relative to `started_at` and add missing zooms with `add_zoom`.
+  Explain when zooms were added from the shot log rather than automatically detected; never claim
+  that enabling the setting can recover missing click metadata.
 * Never read-modify-write `project.json` or anything under `~/Library/Application Support/FocusStudio`;
   use the tools.
 * Do not work around the missing paid generation. The Seedream / Seedance skills in this repository
   (`ark-still-image`, `ark-video-clip`) cost money: use them only when the person asks, after a `--dry-run`
   cost estimate.
 
-## Outlook: rehearse, then shoot
+## Recording pace and editing
 
-Recording while an AI operates step by step gives long idle stretches, jumping cursors and visible retries.
-Focus Studio's planned director mode (GitHub issue #2) splits the work: the AI rehearses with its own tools
-without recording, writes a shot script, and Focus Studio executes and records it. Until then, apply the same
-idea by hand: explore the target app first without recording, reset it to its starting state, then record a
-short take with `duration` in which you (or the person) perform only the planned steps, and fix pacing
-afterwards with zooms and chapters. Re-record rather than ship a take full of mistakes.
+Use a short rehearsal when it helps identify the intended product route before capture. During a Codex-driven
+take, model observation/decision time can still produce long pauses. The native pacing analyzer proposes
+cuts from the real action metadata; `create_demo_cut` applies accepted keep ranges to a new project, and
+`update_zoom` tunes each camera hold. Follow [focus-demo-editing](../focus-demo-editing/SKILL.md) to inspect
+results, preserve meaningful visual/voice content, preview the new timeline and export. Editing cannot turn
+an unsuccessful product action into a successful demonstration.
