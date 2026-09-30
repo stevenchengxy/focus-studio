@@ -54,6 +54,60 @@ extension AIAssistantTests {
         let restoredTimeline = try DemoVideoTimeline(project: restored)
         check(restoredTimeline.clips.first?.sourceAudioVolume == 0,
               "timeline edits survive a project JSON round trip")
+        let legacyTransitionJSON = Data("""
+            {"fromClipID":"\(thirdID.uuidString)","preset":"fadeToBlack","duration":0.4}
+            """.utf8)
+        let legacyTransition = try JSONDecoder().decode(DemoVideoTransition.self, from: legacyTransitionJSON)
+        check(legacyTransition.outgoingDuration == nil && legacyTransition.incomingDuration == nil
+                && legacyTransition.resolvedOutgoingDuration == 0.2
+                && legacyTransition.resolvedIncomingDuration == 0.2
+                && legacyTransition.resolvedOutgoingCurve == .linear
+                && legacyTransition.resolvedIncomingCurve == .linear,
+              "a transition saved before in/out controls still decodes as an even linear effect")
+        let shaped = try restoredTimeline.applying(
+            .setTransitionParameters(fromClipID: thirdID, preset: .fadeToBlack,
+                                     outgoingDuration: 0.1, incomingDuration: 0.3,
+                                     outgoingCurve: .easeIn, incomingCurve: .easeOut), to: restored)
+        let shapedRoundTrip = try JSONDecoder().decode(RecordingProject.self, from: JSONEncoder().encode(shaped))
+        let shapedTimeline = try DemoVideoTimeline(project: shapedRoundTrip)
+        let shapedTransition = shapedTimeline.transition(after: thirdID)
+        check(shapedTransition?.duration == 0.4
+                && shapedTransition?.resolvedOutgoingDuration == 0.1
+                && shapedTransition?.resolvedIncomingDuration == 0.3
+                && shapedTransition?.resolvedOutgoingCurve == .easeIn
+                && shapedTransition?.resolvedIncomingCurve == .easeOut,
+              "different exit/entry times and visual curves survive a full project JSON round trip")
+        check(DemoTransitionCurve.easeIn.value(at: 0.5) == 0.25
+                && DemoTransitionCurve.easeOut.value(at: 0.5) == 0.75
+                && DemoTransitionCurve.smooth.value(at: 0.5) == 0.5,
+              "transition curves shape the two visual halves independently")
+        let keptEffect = try shapedTimeline.clipped(to: DemoTimelineEdit(
+            keepRanges: [.init(start: 0, end: 1.3)], sourceDuration: shapedTimeline.duration))
+        check(keptEffect.transition(after: thirdID)?.resolvedOutgoingDuration == 0.1
+                && keptEffect.transition(after: thirdID)?.resolvedIncomingDuration == 0.3
+                && keptEffect.transition(after: thirdID)?.resolvedIncomingCurve == .easeOut,
+              "a full join preserved by a keep-range cut retains its asymmetric effect")
+        let cutEffect = try shapedTimeline.clipped(to: DemoTimelineEdit(
+            keepRanges: [.init(start: 0, end: 0.8), .init(start: 0.9, end: 1.3)],
+            sourceDuration: shapedTimeline.duration))
+        check(cutEffect.transition(after: thirdID)?.preset == .cut,
+              "a keep-range cut through the incoming effect removes that incomplete transition")
+        await expectThrows("an exit cannot extend beyond its outgoing clip") {
+            _ = try restoredTimeline.applying(
+                .setTransitionParameters(fromClipID: thirdID, preset: .flash,
+                                         outgoingDuration: 0.85, incomingDuration: 0.15,
+                                         outgoingCurve: .linear, incomingCurve: .linear), to: restored)
+        }
+        let longEntry = try restoredTimeline.applying(
+            .setTransitionParameters(fromClipID: thirdID, preset: .fadeToBlack,
+                                     outgoingDuration: 0.1, incomingDuration: 0.75,
+                                     outgoingCurve: .linear, incomingCurve: .linear), to: restored)
+        await expectThrows("incoming and outgoing effects cannot overlap inside a middle clip") {
+            _ = try DemoVideoTimeline(project: longEntry).applying(
+                .setTransitionParameters(fromClipID: originalID, preset: .flash,
+                                         outgoingDuration: 0.4, incomingDuration: 0.1,
+                                         outgoingCurve: .linear, incomingCurve: .linear), to: longEntry)
+        }
         let prepared = try await ProjectVideoRenderer.prepare(project: restored)
         check(abs(prepared.duration - 2.8) < 0.000_001 && prepared.audioMix != nil,
               "preview composes the edited clips and source-audio mix")

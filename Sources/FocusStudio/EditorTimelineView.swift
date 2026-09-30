@@ -18,6 +18,7 @@ struct EditorTimelineView: View {
 
     private let labelWidth = 100.0
     private let rowHeight = 38.0
+    private let videoRowHeight = 70.0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var isTimelineFocused: Bool
     @State private var timelineZoom = 1.0
@@ -35,9 +36,6 @@ struct EditorTimelineView: View {
                 HStack(spacing: 0) {
                     timelineControls(maxZoom: maximumZoom(duration: duration, viewportWidth: viewportWidth))
                     Spacer(minLength: 0)
-                    Text("Scroll to inspect frames")
-                        .font(.system(size: 9))
-                        .foregroundStyle(StudioTheme.secondaryText)
                 }
                 .frame(height: 27)
                 .padding(.horizontal, 12)
@@ -97,15 +95,20 @@ struct EditorTimelineView: View {
                             .zIndex(selectedZoomID == segment.id ? 1 : 0)
                         }
 
+                        HStack(spacing: 0) {
+                        Color.clear.frame(width: scrollOffset)
                         Canvas { context, _ in
                             for click in project.clickEvents {
                                 let x = click.time / duration * timelineWidth
                                 guard x >= scrollOffset - 4, x <= scrollOffset + viewportWidth + 4 else { continue }
-                                context.fill(Path(ellipseIn: CGRect(x: x - 2, y: rowHeight - 9,
+                                context.fill(Path(ellipseIn: CGRect(x: x - scrollOffset - 2, y: rowHeight - 9,
                                                                     width: 4, height: 4)),
                                              with: .color(.white.opacity(0.8)))
                             }
                         }
+                        .frame(width: viewportWidth, height: rowHeight)
+                        }
+                        .frame(width: timelineWidth, alignment: .leading)
                         .allowsHitTesting(false)
 
                         if project.zoomSegments.isEmpty {
@@ -166,7 +169,7 @@ struct EditorTimelineView: View {
                 }
 
                             timelineRow(label: "Cursor", icon: "cursorarrow") {
-                    CursorTrack(samples: project.cursorSamples, duration: duration,
+                    CursorTrack(samples: project.cursorSamples, duration: duration, timelineWidth: timelineWidth,
                                 visibleX: scrollOffset...(scrollOffset + viewportWidth))
                         .contentShape(Rectangle())
                         .onTapGesture { selectedTool = .cursor }
@@ -178,7 +181,7 @@ struct EditorTimelineView: View {
                         .onTapGesture { selectedTool = .audio }
                 }
 
-                            timelineRow(label: "Video", icon: "film", height: 56) {
+                            timelineRow(label: "Video", icon: "film", height: videoRowHeight) {
                     if let videoTimeline {
                         EditorVideoTimelineView(
                             project: project,
@@ -208,18 +211,12 @@ struct EditorTimelineView: View {
                             }
                         }
                         .frame(width: timelineWidth)
-                        .background {
-                            GeometryReader { geometry in
-                                Color.clear.preference(key: TimelineScrollOffsetKey.self,
-                                    value: -geometry.frame(in: .named("timeline-scroll")).minX)
-                            }
-                        }
                         .overlay(alignment: .topLeading) {
                 let playheadX = CGFloat((currentTime / duration).clamped(to: 0...1)) * timelineWidth
                 ZStack(alignment: .top) {
                     Rectangle()
                         .fill(Color.white.opacity(0.92))
-                        .frame(width: 1.5, height: 236)
+                        .frame(width: 1.5, height: 254)
                         .shadow(color: .black.opacity(0.5), radius: 2)
                     UnevenRoundedRectangle(topLeadingRadius: 3, bottomLeadingRadius: 1, bottomTrailingRadius: 1, topTrailingRadius: 3)
                         .fill(.white)
@@ -231,7 +228,13 @@ struct EditorTimelineView: View {
                     }
                     .scrollIndicators(.visible)
                     .coordinateSpace(name: "timeline-scroll")
-                    .onPreferenceChange(TimelineScrollOffsetKey.self) { scrollOffset = max(0, $0) }
+                    .onScrollGeometryChange(for: Int.self, of: { geometry in
+                        max(0, Int(geometry.visibleRect.minX / 8))
+                    }) { _, bucket in
+                        // Publish one visible range per eight pixels, so a
+                        // long project does not redraw every lane each pixel.
+                        scrollOffset = Double(bucket) * 8
+                    }
                     .onChange(of: project.duration) { _, _ in
                         timelineZoom = min(timelineZoom,
                             maximumZoom(duration: max(project.duration, 0.001), viewportWidth: viewportWidth))
@@ -242,7 +245,7 @@ struct EditorTimelineView: View {
                 }
             }
         }
-        .frame(height: 272)
+        .frame(height: 296)
         .padding(.vertical, 6)
         .background(StudioTheme.panel)
         .focusable()
@@ -281,7 +284,10 @@ struct EditorTimelineView: View {
             .disabled(timelineZoom <= 1.001)
             .accessibilityLabel("Zoom timeline out")
             .accessibilityIdentifier("timeline.zoomOut")
-            Slider(value: $timelineZoom, in: 1...maxZoom)
+            Slider(value: Binding(
+                get: { log(timelineZoom) / log(maxZoom) },
+                set: { timelineZoom = pow(maxZoom, $0) }
+            ), in: 0...1)
                 .frame(width: 100)
                 .accessibilityLabel("Timeline zoom")
                 .accessibilityValue("\(Int(timelineZoom * 100)) percent")
@@ -331,7 +337,7 @@ struct EditorTimelineView: View {
             }
             fixedLaneLabel("Cursor", icon: "cursorarrow", tool: .cursor)
             fixedLaneLabel("Audio", icon: "waveform", tool: .audio)
-            fixedLaneLabel("Video", icon: "film", tool: .video, height: 56) {
+            fixedLaneLabel("Video", icon: "film", tool: .video, height: videoRowHeight) {
                 Button(action: splitAtPlayhead) { Image(systemName: "scissors") }
                     .foregroundStyle(StudioTheme.yellow)
                     .disabled(!canSplitAtPlayhead || isVideoEditing)
@@ -562,11 +568,6 @@ private struct AudioTrack: View {
     }
 }
 
-private struct TimelineScrollOffsetKey: PreferenceKey {
-    static var defaultValue = 0.0
-    static func reduce(value: inout Double, nextValue: () -> Double) { value = nextValue() }
-}
-
 private struct RulerRow: View {
     let duration: Double
     @Binding var currentTime: Double
@@ -577,7 +578,10 @@ private struct RulerRow: View {
     var body: some View {
         let pixelsPerSecond = timelineWidth / duration
         let interval = tickInterval(pixelsPerSecond: pixelsPerSecond)
+        let viewportWidth = max(1, visibleX.upperBound - visibleX.lowerBound)
         ZStack(alignment: .topLeading) {
+            HStack(spacing: 0) {
+            Color.clear.frame(width: visibleX.lowerBound)
             Canvas { context, size in
                 let first = max(0, Int(floor(visibleX.lowerBound / pixelsPerSecond / interval)) - 1)
                 let last = min(Int(ceil(duration / interval)),
@@ -590,16 +594,18 @@ private struct RulerRow: View {
                         let minorX = x + Double(minor) * interval * pixelsPerSecond / 5
                         if minorX < visibleX.lowerBound - 10 || minorX > visibleX.upperBound + 10 { continue }
                         var path = Path()
-                        path.move(to: CGPoint(x: minorX, y: size.height - (minor == 0 ? 8 : 4)))
-                        path.addLine(to: CGPoint(x: minorX, y: size.height))
+                        path.move(to: CGPoint(x: minorX - visibleX.lowerBound, y: size.height - (minor == 0 ? 8 : 4)))
+                        path.addLine(to: CGPoint(x: minorX - visibleX.lowerBound, y: size.height))
                         context.stroke(path, with: .color(.white.opacity(minor == 0 ? 0.25 : 0.10)))
                     }
                     let title = interval < 1 ? second.editorTimecode : second.formattedDuration
                     context.draw(context.resolve(Text(title)
                         .font(.system(size: 9, design: .monospaced))
                         .foregroundStyle(StudioTheme.secondaryText)),
-                        at: CGPoint(x: x, y: 3), anchor: .topLeading)
+                        at: CGPoint(x: x - visibleX.lowerBound, y: 3), anchor: .topLeading)
                 }
+            }
+            .frame(width: viewportWidth, height: 32)
             }
             if let hoverX {
                 Text((hoverX / timelineWidth * duration).editorTimecode)
@@ -1037,13 +1043,17 @@ private struct ChapterBlockView: View {
 private struct CursorTrack: View {
     let samples: [CursorSample]
     let duration: Double
+    let timelineWidth: Double
     let visibleX: ClosedRange<Double>
 
     var body: some View {
+        let viewportWidth = max(1, visibleX.upperBound - visibleX.lowerBound)
+        HStack(spacing: 0) {
+        Color.clear.frame(width: visibleX.lowerBound)
         Canvas { context, size in
             guard samples.count > 1 else { return }
-            let firstTime = max(0, visibleX.lowerBound / max(1, size.width) * duration)
-            let lastTime = min(duration, visibleX.upperBound / max(1, size.width) * duration)
+            let firstTime = max(0, visibleX.lowerBound / max(1, timelineWidth) * duration)
+            let lastTime = min(duration, visibleX.upperBound / max(1, timelineWidth) * duration)
             let first = max(0, lowerBound(firstTime) - 1)
             let last = min(samples.count, lowerBound(lastTime) + 2)
             guard last - first > 1 else { return }
@@ -1051,7 +1061,7 @@ private struct CursorTrack: View {
             for index in first..<last {
                 let sample = samples[index]
                 let point = CGPoint(
-                    x: CGFloat(sample.time / duration) * size.width,
+                    x: CGFloat(sample.time / duration * timelineWidth - visibleX.lowerBound),
                     y: size.height * (0.2 + CGFloat(sample.y) * 0.6)
                 )
                 if index == first { path.move(to: point) }
@@ -1059,6 +1069,9 @@ private struct CursorTrack: View {
             }
             context.stroke(path, with: .color(Color.cyan.opacity(0.65)), lineWidth: 1)
         }
+        .frame(width: viewportWidth)
+        }
+        .frame(width: timelineWidth, alignment: .leading)
         .background(Color.white.opacity(0.018))
         .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
     }

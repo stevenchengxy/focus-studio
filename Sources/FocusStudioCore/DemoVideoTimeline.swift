@@ -57,16 +57,50 @@ public enum DemoTransitionPreset: String, Codable, CaseIterable, Hashable, Senda
     case flash
 }
 
+public enum DemoTransitionCurve: String, Codable, CaseIterable, Hashable, Sendable {
+    case linear
+    case smooth
+    case easeIn
+    case easeOut
+
+    public func value(at progress: Double) -> Double {
+        let t = min(1, max(0, progress))
+        switch self {
+        case .linear: return t
+        case .smooth: return t * t * (3 - 2 * t)
+        case .easeIn: return t * t
+        case .easeOut: return 1 - (1 - t) * (1 - t)
+        }
+    }
+}
+
 /// An effect centered on the join after `fromClipID`. It does not alter duration.
 public struct DemoVideoTransition: Codable, Hashable, Sendable {
     public var fromClipID: UUID
     public var preset: DemoTransitionPreset
     public var duration: Double
+    /// Optional so projects written before separate in/out controls retain
+    /// their original, evenly split transition when decoded.
+    public var outgoingDuration: Double?
+    public var incomingDuration: Double?
+    public var outgoingCurve: DemoTransitionCurve?
+    public var incomingCurve: DemoTransitionCurve?
 
-    public init(fromClipID: UUID, preset: DemoTransitionPreset = .cut, duration: Double = 0) {
+    public var resolvedOutgoingDuration: Double { outgoingDuration ?? duration / 2 }
+    public var resolvedIncomingDuration: Double { incomingDuration ?? duration / 2 }
+    public var resolvedOutgoingCurve: DemoTransitionCurve { outgoingCurve ?? .linear }
+    public var resolvedIncomingCurve: DemoTransitionCurve { incomingCurve ?? .linear }
+
+    public init(fromClipID: UUID, preset: DemoTransitionPreset = .cut, duration: Double = 0,
+                outgoingDuration: Double? = nil, incomingDuration: Double? = nil,
+                outgoingCurve: DemoTransitionCurve? = nil, incomingCurve: DemoTransitionCurve? = nil) {
         self.fromClipID = fromClipID
         self.preset = preset
         self.duration = duration
+        self.outgoingDuration = outgoingDuration
+        self.incomingDuration = incomingDuration
+        self.outgoingCurve = outgoingCurve
+        self.incomingCurve = incomingCurve
     }
 }
 
@@ -91,6 +125,9 @@ public enum DemoVideoEditOperation: Sendable {
     /// A still has no fixed source end, so it can be lengthened as well as cut.
     case setImageDuration(clipID: UUID, duration: Double)
     case setTransition(fromClipID: UUID, preset: DemoTransitionPreset, duration: Double)
+    case setTransitionParameters(fromClipID: UUID, preset: DemoTransitionPreset,
+                                 outgoingDuration: Double, incomingDuration: Double,
+                                 outgoingCurve: DemoTransitionCurve, incomingCurve: DemoTransitionCurve)
     /// A value in 0...2; zero mutes the source sound in this clip.
     case setClipAudio(clipID: UUID, volume: Double)
 }
@@ -177,7 +214,13 @@ public struct DemoVideoTimeline: Sendable {
         for transition in transitions {
             guard outgoingIDs.contains(transition.fromClipID),
                   transitionByID[transition.fromClipID] == nil,
-                  transition.duration.isFinite else {
+                  transition.duration.isFinite,
+                  (transition.outgoingDuration == nil) == (transition.incomingDuration == nil),
+                  transition.resolvedOutgoingDuration.isFinite,
+                  transition.resolvedIncomingDuration.isFinite,
+                  transition.resolvedOutgoingDuration >= 0,
+                  transition.resolvedIncomingDuration >= 0,
+                  abs(transition.resolvedOutgoingDuration + transition.resolvedIncomingDuration - transition.duration) < 0.000_001 else {
                 throw DemoVideoTimelineError.invalidTimeline("a transition has an invalid or duplicate join")
             }
             switch transition.preset {
@@ -195,11 +238,11 @@ public struct DemoVideoTimeline: Sendable {
         let normalized = clips.dropLast().map { clip in
             transitionByID[clip.id] ?? .init(fromClipID: clip.id)
         }
-        // Each half of a transition occupies its neighboring clip. Effects at
-        // both ends must not overlap inside a very short middle clip.
+        // Each side occupies its neighboring clip. Effects at both ends must
+        // not overlap inside a very short middle clip.
         for index in clips.indices {
-            let incoming = index > 0 ? normalized[index - 1].duration / 2 : 0
-            let outgoing = index < normalized.count ? normalized[index].duration / 2 : 0
+            let incoming = index > 0 ? normalized[index - 1].resolvedIncomingDuration : 0
+            let outgoing = index < normalized.count ? normalized[index].resolvedOutgoingDuration : 0
             guard incoming + outgoing <= clips[index].duration + 0.000_001 else {
                 throw DemoVideoTimelineError.invalidTimeline("transition duration exceeds adjacent clip handles")
             }
@@ -264,16 +307,19 @@ public struct DemoVideoTimeline: Sendable {
                   sourceIndex + 1 < placements.count,
                   placements[sourceIndex + 1].clip.id == second.sourceClipID,
                   let transition = transition(after: first.sourceClipID) else { continue }
-            let half = transition.duration / 2
             let join = first.originalEnd
             // A partly cut fade/flash has a different shape. Make it a plain
             // cut rather than silently stretching its remaining frames.
-            let entireEffectSurvives = first.originalStart <= join - half + 0.000_001
-                && second.originalEnd >= join + half - 0.000_001
+            let entireEffectSurvives = first.originalStart <= join - transition.resolvedOutgoingDuration + 0.000_001
+                && second.originalEnd >= join + transition.resolvedIncomingDuration - 0.000_001
             if entireEffectSurvives {
                 keptTransitions.append(.init(fromClipID: first.clip.id,
                                              preset: transition.preset,
-                                             duration: transition.duration))
+                                             duration: transition.duration,
+                                             outgoingDuration: transition.outgoingDuration,
+                                             incomingDuration: transition.incomingDuration,
+                                             outgoingCurve: transition.outgoingCurve,
+                                             incomingCurve: transition.incomingCurve))
             }
         }
         return try DemoVideoTimeline(clips: pieces.map(\.clip),
@@ -370,6 +416,23 @@ public struct DemoVideoTimeline: Sendable {
             }
             nextTransitions[index] = .init(fromClipID: fromClipID, preset: preset,
                                            duration: preset == .cut ? 0 : effectDuration)
+        case let .setTransitionParameters(fromClipID, preset, outgoingDuration, incomingDuration,
+                                          outgoingCurve, incomingCurve):
+            guard let index = clips.dropLast().firstIndex(where: { $0.id == fromClipID }) else {
+                throw DemoVideoTimelineError.invalidOperation("A transition needs a following clip.")
+            }
+            let duration = outgoingDuration + incomingDuration
+            guard preset != .cut, outgoingDuration.isFinite, incomingDuration.isFinite,
+                  duration.isFinite, (0.1...2).contains(duration),
+                  outgoingDuration >= 0, incomingDuration >= 0 else {
+                throw DemoVideoTimelineError.invalidOperation("Set a 0.1–2 second effect with non-negative exit and entry times; use Cut for no effect.")
+            }
+            nextTransitions[index] = .init(fromClipID: fromClipID, preset: preset,
+                                           duration: duration,
+                                           outgoingDuration: outgoingDuration,
+                                           incomingDuration: incomingDuration,
+                                           outgoingCurve: outgoingCurve,
+                                           incomingCurve: incomingCurve)
         case let .setClipAudio(clipID, volume):
             guard let index = clips.firstIndex(where: { $0.id == clipID }) else { throw DemoVideoTimelineError.clipNotFound }
             guard volume.isFinite, (0...2).contains(volume) else {
@@ -393,7 +456,7 @@ public struct DemoVideoTimeline: Sendable {
             return unchanged
         }
         switch operation {
-        case .setTransition, .setClipAudio:
+        case .setTransition, .setTransitionParameters, .setClipAudio:
             // These are presentation/audio choices. Retiming every event here
             // would needlessly replace trace IDs and turn automatic zooms into
             // manual blocks even though no frame moved.

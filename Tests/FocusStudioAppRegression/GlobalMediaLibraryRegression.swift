@@ -66,7 +66,14 @@ enum GlobalMediaLibraryRegression {
             && privateAsset.filePath.hasPrefix(projects.appendingPathComponent(working.id.uuidString).path + "/media/")
             && privateAsset.filePath != added[0].filePath,
             "Explicit project import branches the original and owns a distinct media copy")
-        try FileManager.default.removeItem(atPath: added[0].filePath)
+        let deleted = await model.deleteGlobalMediaAssets(ids: [added[0].id])
+        precondition(deleted == [added[0].id] && model.globalMediaAssets.map(\.id) == [added[1].id]
+            && !FileManager.default.fileExists(atPath: added[0].filePath),
+            "Deleting a shared item removes only its own catalog entry and moves its source to Trash")
+        let afterDelete = GlobalMediaLibraryStore(directory: shared, inspector: inspector)
+        let persistedAfterDelete = try await afterDelete.assets()
+        precondition(persistedAfterDelete.map(\.id) == [added[1].id],
+            "Shared media deletion persists after reopening the catalog")
         let after = SHA256.hash(data: try Data(contentsOf: raw))
         precondition(FileManager.default.fileExists(atPath: privateAsset.filePath)
             && after == before,
@@ -78,17 +85,17 @@ enum GlobalMediaLibraryRegression {
         // The home screen shows eight cards by default. A new AI/manual item
         // must be visible immediately even once the shared catalog grows.
         var newestID = added[1].id
-        for _ in 0..<7 {
+        for _ in 0..<8 {
             let newItems = try await model.importGlobalMedia(from: [URL(fileURLWithPath: added[1].filePath)])
             newestID = newItems[0].id
         }
         let featured = GlobalMediaLibrarySection.visibleAssets(model.globalMediaAssets, showAll: false)
         let expanded = GlobalMediaLibrarySection.visibleAssets(model.globalMediaAssets, showAll: true)
         precondition(model.globalMediaAssets.count == 9 && featured.count == 8
-            && featured.first?.id == newestID && !featured.contains(where: { $0.id == added[0].id })
+            && featured.first?.id == newestID && !featured.contains(where: { $0.id == added[1].id })
             && expanded.count == 9 && expanded.first?.id == newestID,
             "Home media cards show newest additions first, including the ninth item")
-        print("GlobalMediaLibraryRegression: PASS (atomic import, durable shared copies, explicit project copy, source isolation, newest home cards visible)")
+        print("GlobalMediaLibraryRegression: PASS (atomic import, durable shared copies, independent project copy, recoverable shared deletion, newest home cards visible)")
     }
 
     private static func makeImage(_ url: URL) throws {

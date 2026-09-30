@@ -39,7 +39,12 @@ enum TimelineToolSupport {
                 "source_audio_volume": .rounded(clip.sourceAudioVolume),
                 "media_asset_id": clip.mediaAssetID.map { AIJSONValue($0.uuidString) } ?? .null,
                 "transition_after": transition.map { value -> AIJSONValue in
-                    ["preset": AIJSONValue(value.preset.rawValue), "duration": .rounded(value.duration)]
+                    ["preset": AIJSONValue(value.preset.rawValue),
+                     "duration": .rounded(value.duration),
+                     "outgoing_duration": .rounded(value.resolvedOutgoingDuration),
+                     "incoming_duration": .rounded(value.resolvedIncomingDuration),
+                     "outgoing_curve": AIJSONValue(value.resolvedOutgoingCurve.rawValue),
+                     "incoming_curve": AIJSONValue(value.resolvedIncomingCurve.rawValue)]
                 } ?? .null,
             ]
         }
@@ -170,7 +175,7 @@ public struct MoveClipTool: AIAssistantTool {
 
 public struct SetTransitionTool: AIAssistantTool {
     public let name = "set_transition"
-    public let summary = "Set the transition after one clip: cut, fadeToBlack or flash. Duration is 0.1–2 seconds for a visual effect; cut uses zero."
+    public let summary = "Set the transition after one clip. Optionally shape the outgoing and incoming sides separately with durations and visual curves."
     public init() {}
     public var parametersSchema: [String: Any] {
         ["type": "object", "required": ["clip_id", "preset", "duration"], "properties": [
@@ -178,6 +183,10 @@ public struct SetTransitionTool: AIAssistantTool {
             "clip_id": TimelineToolSupport.clipProperty,
             "preset": ["type": "string", "enum": ["cut", "fadeToBlack", "flash"], "description": "Visual transition after this clip; the final clip cannot have an outgoing transition."],
             "duration": ["type": "number", "minimum": 0, "maximum": 2, "description": "Seconds. Use 0 for cut, or 0.1–2 for fadeToBlack/flash."],
+            "outgoing_duration": ["type": "number", "minimum": 0, "maximum": 2, "description": "Optional seconds fading the outgoing clip before the join. Supply with incoming_duration; their sum must equal duration."],
+            "incoming_duration": ["type": "number", "minimum": 0, "maximum": 2, "description": "Optional seconds revealing the incoming clip after the join. Supply with outgoing_duration; their sum must equal duration."],
+            "outgoing_curve": ["type": "string", "enum": ["linear", "smooth", "easeIn", "easeOut"], "description": "Optional visual curve before the join; requires both side durations. Default linear."],
+            "incoming_curve": ["type": "string", "enum": ["linear", "smooth", "easeIn", "easeOut"], "description": "Optional visual curve after the join; requires both side durations. Default linear."],
         ]]
     }
     public func run(arguments raw: [String: Any], context: AIAssistantContext, progress: @escaping @Sendable (String) -> Void) async throws -> AIToolResult {
@@ -189,7 +198,29 @@ public struct SetTransitionTool: AIAssistantTool {
         guard (preset == .cut && duration == 0) || (preset != .cut && (0.1...2).contains(duration)) else {
             throw AIToolError.invalidArgument("Use duration 0 for cut, or 0.1–2 seconds for fadeToBlack/flash.")
         }
-        return try await TimelineToolSupport.edit(raw, context: context, operation: .setTransition(fromClipID: try TimelineToolSupport.clipID(args), preset: preset, duration: duration), progress: progress)
+        let clipID = try TimelineToolSupport.clipID(args)
+        let hasSideParameters = ["outgoing_duration", "incoming_duration", "outgoing_curve", "incoming_curve"].contains { raw[$0] != nil }
+        if hasSideParameters {
+            guard preset != .cut,
+                  let outgoing = args.double("outgoing_duration"),
+                  let incoming = args.double("incoming_duration"),
+                  outgoing >= 0, incoming >= 0,
+                  abs(outgoing + incoming - duration) < 0.000_001 else {
+                throw AIToolError.invalidArgument("Supply both non-negative side durations; their sum must equal the effect duration.")
+            }
+            let outgoingCurve = args.string("outgoing_curve").flatMap(DemoTransitionCurve.init(rawValue:)) ?? .linear
+            let incomingCurve = args.string("incoming_curve").flatMap(DemoTransitionCurve.init(rawValue:)) ?? .linear
+            if raw["outgoing_curve"] != nil && args.string("outgoing_curve").flatMap(DemoTransitionCurve.init(rawValue:)) == nil
+                || raw["incoming_curve"] != nil && args.string("incoming_curve").flatMap(DemoTransitionCurve.init(rawValue:)) == nil {
+                throw AIToolError.invalidArgument("Transition curves must be linear, smooth, easeIn or easeOut.")
+            }
+            return try await TimelineToolSupport.edit(raw, context: context,
+                operation: .setTransitionParameters(fromClipID: clipID, preset: preset,
+                                                    outgoingDuration: outgoing, incomingDuration: incoming,
+                                                    outgoingCurve: outgoingCurve, incomingCurve: incomingCurve), progress: progress)
+        }
+        return try await TimelineToolSupport.edit(raw, context: context,
+            operation: .setTransition(fromClipID: clipID, preset: preset, duration: duration), progress: progress)
     }
 }
 

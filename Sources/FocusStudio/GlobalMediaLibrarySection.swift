@@ -8,7 +8,12 @@ struct GlobalMediaLibrarySection: View {
     let assets: [DemoMediaAsset]
     let onImport: () -> Void
     let onCreateWithAI: () -> Void
+    let onDelete: (Set<UUID>) async -> Set<UUID>
     @State private var showAll = false
+    @State private var isManaging = false
+    @State private var selectedIDs: Set<UUID> = []
+    @State private var pendingDeletionIDs: Set<UUID> = []
+    @State private var confirmsDeletion = false
     @State private var previewAsset: DemoMediaAsset?
 
     private let columns = [GridItem(.adaptive(minimum: 165, maximum: 220), spacing: 14)]
@@ -33,6 +38,17 @@ struct GlobalMediaLibrarySection: View {
                         .buttonStyle(.plain)
                         .foregroundStyle(StudioTheme.purple)
                 }
+                if !assets.isEmpty {
+                    Button(isManaging ? "Done" : "Manage") {
+                        withAnimation(StudioMotion.fade) {
+                            isManaging.toggle()
+                            selectedIDs = []
+                            if isManaging { showAll = true }
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityIdentifier("library.sharedMedia.manage")
+                }
                 Button(action: onImport) {
                     Label("Import media", systemImage: "square.and.arrow.down")
                 }
@@ -42,6 +58,25 @@ struct GlobalMediaLibrarySection: View {
                     Label("Create with AI", systemImage: "sparkles")
                 }
                 .buttonStyle(.bordered)
+            }
+            if isManaging {
+                HStack(spacing: 12) {
+                    Text(L10n.format("%lld selected", selectedIDs.count))
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(StudioTheme.secondaryText)
+                    Button("Select all") { selectedIDs = Set(assets.map(\.id)) }
+                        .buttonStyle(.plain)
+                    Button("Deselect all") { selectedIDs = [] }
+                        .buttonStyle(.plain)
+                        .disabled(selectedIDs.isEmpty)
+                    Spacer()
+                    Button(role: .destructive) { requestDeletion(selectedIDs) } label: {
+                        Label("Move to Trash", systemImage: "trash")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(selectedIDs.isEmpty)
+                    .accessibilityIdentifier("library.sharedMedia.deleteSelected")
+                }
             }
             if assets.isEmpty {
                 HStack(spacing: 10) {
@@ -56,7 +91,15 @@ struct GlobalMediaLibrarySection: View {
             } else {
                 LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
                     ForEach(Self.visibleAssets(assets, showAll: showAll)) { asset in
-                        Button { previewAsset = asset } label: {
+                        ZStack(alignment: .topTrailing) {
+                        Button {
+                            if isManaging {
+                                if selectedIDs.contains(asset.id) { selectedIDs.remove(asset.id) }
+                                else { selectedIDs.insert(asset.id) }
+                            } else {
+                                previewAsset = asset
+                            }
+                        } label: {
                             VStack(alignment: .leading, spacing: 7) {
                                 EditorMediaPoster(asset: asset)
                                     .frame(height: 100)
@@ -80,12 +123,49 @@ struct GlobalMediaLibrarySection: View {
                             .padding(7)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(StudioTheme.panelRaised, in: RoundedRectangle(cornerRadius: 11))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 11)
+                                    .stroke(selectedIDs.contains(asset.id) ? StudioTheme.purple : .clear, lineWidth: 2)
+                                    .allowsHitTesting(false)
+                            }
                         }
                         .buttonStyle(.plain)
-                        .help(L10n.format("Preview %@", asset.title))
+                        .help(isManaging ? L10n.tr("Select media") : L10n.format("Preview %@", asset.title))
                         .accessibilityElement(children: .combine)
-                        .accessibilityLabel(L10n.format("Preview %@", asset.title))
+                        .accessibilityLabel(isManaging ? L10n.format("Select %@", asset.title) : L10n.format("Preview %@", asset.title))
+                        .accessibilityAddTraits(selectedIDs.contains(asset.id) ? .isSelected : [])
                         .accessibilityIdentifier("library.sharedMedia.asset.\(asset.id.uuidString)")
+                        if isManaging {
+                            Image(systemName: selectedIDs.contains(asset.id) ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 22, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .background(selectedIDs.contains(asset.id) ? StudioTheme.purple : Color.black.opacity(0.6), in: Circle())
+                                .padding(13)
+                                .allowsHitTesting(false)
+                        } else {
+                            Menu {
+                                Button("Preview") { previewAsset = asset }
+                                Button("Move to Trash", role: .destructive) {
+                                    requestDeletion([asset.id])
+                                }
+                            } label: {
+                                Image(systemName: "ellipsis")
+                                    .font(.system(size: 15, weight: .bold))
+                                    .frame(width: 28, height: 28)
+                                    .background(.black.opacity(0.72), in: Circle())
+                            }
+                            .menuStyle(.borderlessButton)
+                            .menuIndicator(.hidden)
+                            .fixedSize()
+                            .padding(12)
+                            .accessibilityLabel(L10n.format("Media actions: %@", asset.title))
+                            .accessibilityIdentifier("library.sharedMedia.actions.\(asset.id.uuidString)")
+                        }
+                        }
+                        .contextMenu {
+                            Button("Preview") { previewAsset = asset }
+                            Button("Move to Trash", role: .destructive) { requestDeletion([asset.id]) }
+                        }
                     }
                 }
             }
@@ -93,5 +173,29 @@ struct GlobalMediaLibrarySection: View {
         .sheet(item: $previewAsset) { asset in
             AssistantMediaPreviewSheet(url: URL(fileURLWithPath: asset.filePath), title: asset.title)
         }
+        .alert("Move shared media to Trash?", isPresented: $confirmsDeletion) {
+            Button("Cancel", role: .cancel) { pendingDeletionIDs = [] }
+            Button("Move to Trash", role: .destructive) {
+                let ids = pendingDeletionIDs
+                pendingDeletionIDs = []
+                Task {
+                    let deleted = await onDelete(ids)
+                    selectedIDs.subtract(deleted)
+                    if assets.isEmpty { isManaging = false }
+                }
+            }
+        } message: {
+            Text("Only shared copies will be moved to Trash. Media already added to a demo stays in that project.")
+        }
+        .onChange(of: assets.map(\.id)) { _, ids in
+            selectedIDs.formIntersection(ids)
+            if ids.isEmpty { isManaging = false }
+        }
+    }
+
+    private func requestDeletion(_ ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        pendingDeletionIDs = ids
+        confirmsDeletion = true
     }
 }

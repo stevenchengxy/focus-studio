@@ -725,8 +725,8 @@ public enum ProjectVideoRenderer {
         for (index, placement) in timeline.placements.enumerated()
             where placement.clip.mediaAssetID == assetID {
             let level = globalVolume * Float(placement.clip.sourceAudioVolume)
-            let incoming = index > 0 ? timeline.transitions[index - 1].duration / 2 : 0
-            let outgoing = index < timeline.transitions.count ? timeline.transitions[index].duration / 2 : 0
+            let incoming = index > 0 ? timeline.transitions[index - 1].resolvedIncomingDuration : 0
+            let outgoing = index < timeline.transitions.count ? timeline.transitions[index].resolvedOutgoingDuration : 0
             let start = CMTime(seconds: placement.start, preferredTimescale: 60_000)
             if incoming > 0 {
                 parameters.setVolume(0, at: start)
@@ -755,11 +755,19 @@ public enum ProjectVideoRenderer {
         guard seconds.isFinite else { return frame }
         for (index, transition) in timeline.transitions.enumerated() where transition.preset != .cut {
             let join = timeline.placements[index].end
-            let half = transition.duration / 2
-            guard seconds >= join - half, seconds <= join + half else { continue }
-            // The two halves meet on the actual cut frame. This is a full-frame
-            // overlay on the finished canvas, so preview and MP4 match exactly.
-            let opacity = 1 - min(1, abs(seconds - join) / max(half, 0.000_001))
+            let exit = transition.resolvedOutgoingDuration
+            let entry = transition.resolvedIncomingDuration
+            guard seconds >= join - exit, seconds <= join + entry else { continue }
+            // The independently shaped sides meet on the actual cut frame.
+            // Preview and MP4 use this same full-canvas overlay.
+            let opacity: Double
+            if seconds < join {
+                opacity = transition.resolvedOutgoingCurve.value(
+                    at: (seconds - (join - exit)) / max(exit, 0.000_001))
+            } else {
+                opacity = 1 - transition.resolvedIncomingCurve.value(
+                    at: (seconds - join) / max(entry, 0.000_001))
+            }
             let value: CGFloat = transition.preset == .flash ? 1 : 0
             let color = CIColor(red: value, green: value, blue: value,
                                 alpha: CGFloat(opacity.clamped(to: 0...1)))

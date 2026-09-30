@@ -93,6 +93,38 @@ actor GlobalMediaLibraryStore {
         }
     }
 
+    /// Remove only the shared copy. A project has its own file and continues
+    /// to work even when the shared source is moved to the macOS Trash.
+    func moveToTrash(id: UUID) throws {
+        let existing = try assets()
+        guard let asset = existing.first(where: { $0.id == id }) else {
+            throw LibraryError.assetMissing
+        }
+        let source = URL(fileURLWithPath: asset.filePath)
+        guard source.deletingLastPathComponent().resolvingSymlinksInPath()
+                == filesDirectory.resolvingSymlinksInPath() else {
+            throw LibraryError.invalidCatalog
+        }
+        guard (try? source.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
+            throw LibraryError.assetMissing
+        }
+
+        let remaining = existing.filter { $0.id != id }
+        try save(remaining)
+        do {
+            try fileManager.trashItem(at: source, resultingItemURL: nil)
+            cachedAssets = remaining
+        } catch {
+            // If macOS cannot move the file, restore the catalog entry.
+            do { try save(existing) }
+            catch {
+                cachedAssets = nil
+                throw LibraryError.invalidCatalog
+            }
+            throw error
+        }
+    }
+
     private func prepare() throws {
         guard directory.isFileURL else { throw LibraryError.invalidCatalog }
         for url in [directory, filesDirectory] {

@@ -57,8 +57,15 @@ struct EditorInspectorView: View {
     @State private var trimStartDraft = 0.0
     @State private var trimEndDraft = 0.0
     @State private var transitionDurationDraft = 0.5
+    @State private var transitionOutgoingDraft = 0.25
+    @State private var transitionIncomingDraft = 0.25
+    @State private var transitionOutgoingCurveDraft: DemoTransitionCurve = .linear
+    @State private var transitionIncomingCurveDraft: DemoTransitionCurve = .linear
     @State private var sourceAudioDraft = 1.0
     @State private var imageDurationDraft = 3.0
+    @State private var isMediaLibraryExpanded = false
+    @State private var isClipSoundExpanded = false
+    @State private var isTransitionDetailExpanded = false
     private let systemWallpapers = SystemWallpaperCatalog.installed
     private let bundledBackgrounds = (try? BackgroundCatalog.loadBundled())?.assets ?? []
     private let bundledBackgroundCatalog = try? BackgroundCatalog.loadBundled()
@@ -143,6 +150,7 @@ struct EditorInspectorView: View {
         .onAppear(perform: syncVideoDrafts)
         .onChange(of: selectedClipID) { _, _ in syncVideoDrafts() }
         .onChange(of: project.videoClips) { _, _ in syncVideoDrafts() }
+        .onChange(of: project.videoTransitions) { _, _ in syncVideoDrafts() }
     }
 
     @ViewBuilder
@@ -571,24 +579,63 @@ struct EditorInspectorView: View {
         trimEndDraft = placement.clip.sourceEnd
         sourceAudioDraft = placement.clip.sourceAudioVolume
         imageDurationDraft = placement.clip.duration
-        transitionDurationDraft = timeline.transition(after: placement.clip.id).map {
-            $0.preset == .cut ? 0.5 : $0.duration
-        } ?? 0.5
+        let transition = timeline.transition(after: placement.clip.id)
+        transitionDurationDraft = transition.map { $0.preset == .cut ? 0.5 : $0.duration } ?? 0.5
+        transitionOutgoingDraft = transition?.preset == .cut ? 0.25 : transition?.resolvedOutgoingDuration ?? 0.25
+        transitionIncomingDraft = transition?.preset == .cut ? 0.25 : transition?.resolvedIncomingDuration ?? 0.25
+        transitionOutgoingCurveDraft = transition?.resolvedOutgoingCurve ?? .linear
+        transitionIncomingCurveDraft = transition?.resolvedIncomingCurve ?? .linear
     }
 
     private func maximumTransitionDuration(after index: Int, in timeline: DemoVideoTimeline) -> Double {
+        max(0, min(2, 2 * min(maximumTransitionOutgoing(after: index, in: timeline),
+                              maximumTransitionIncoming(after: index, in: timeline))))
+    }
+
+    private func maximumTransitionOutgoing(after index: Int, in timeline: DemoVideoTimeline) -> Double {
         guard index >= 0, index + 1 < timeline.clips.count else { return 0 }
-        let incoming = index > 0 ? timeline.transitions[index - 1].duration / 2 : 0
-        let nextOutgoing = index + 1 < timeline.transitions.count ? timeline.transitions[index + 1].duration / 2 : 0
-        return max(0, min(2,
-            2 * (timeline.clips[index].duration - incoming),
-            2 * (timeline.clips[index + 1].duration - nextOutgoing)))
+        let priorIncoming = index > 0 ? timeline.transitions[index - 1].resolvedIncomingDuration : 0
+        return max(0, min(2, timeline.clips[index].duration - priorIncoming))
+    }
+
+    private func maximumTransitionIncoming(after index: Int, in timeline: DemoVideoTimeline) -> Double {
+        guard index >= 0, index + 1 < timeline.clips.count else { return 0 }
+        let nextOutgoing = index + 1 < timeline.transitions.count
+            ? timeline.transitions[index + 1].resolvedOutgoingDuration : 0
+        return max(0, min(2, timeline.clips[index + 1].duration - nextOutgoing))
+    }
+
+    private func canApplyTransitionParameters(_ transition: DemoVideoTransition,
+                                              after index: Int, in timeline: DemoVideoTimeline) -> Bool {
+        let total = transitionOutgoingDraft + transitionIncomingDraft
+        guard transition.preset != .cut,
+              transitionOutgoingDraft.isFinite, transitionIncomingDraft.isFinite,
+              transitionOutgoingDraft >= 0, transitionIncomingDraft >= 0,
+              (0.1...2).contains(total),
+              transitionOutgoingDraft <= maximumTransitionOutgoing(after: index, in: timeline) + 0.000_001,
+              transitionIncomingDraft <= maximumTransitionIncoming(after: index, in: timeline) + 0.000_001 else {
+            return false
+        }
+        return abs(transitionOutgoingDraft - transition.resolvedOutgoingDuration) > 0.001
+            || abs(transitionIncomingDraft - transition.resolvedIncomingDuration) > 0.001
+            || transitionOutgoingCurveDraft != transition.resolvedOutgoingCurve
+            || transitionIncomingCurveDraft != transition.resolvedIncomingCurve
+    }
+
+    @ViewBuilder
+    private var transitionCurveOptions: some View {
+        Text("Linear").tag(DemoTransitionCurve.linear)
+        Text("Smooth").tag(DemoTransitionCurve.smooth)
+        Text("Ease in").tag(DemoTransitionCurve.easeIn)
+        Text("Ease out").tag(DemoTransitionCurve.easeOut)
     }
 
     @ViewBuilder
     private var videoInspector: some View {
         if let timeline = videoTimeline {
-            InspectorSection("Media library") {
+            InspectorDisclosureSection("Media library",
+                                       detail: L10n.format("%lld items", (project.mediaAssets ?? []).count),
+                                       isExpanded: $isMediaLibraryExpanded) {
                 EditorMediaLibraryView(
                     assets: project.mediaAssets ?? [],
                     sharedAssets: model.globalMediaAssets,
@@ -623,22 +670,21 @@ struct EditorInspectorView: View {
                     Button(action: onUndoVideoEdit) {
                         Label("Undo", systemImage: "arrow.uturn.backward")
                     }
+                    .labelStyle(.iconOnly)
+                    .help(Text("Undo"))
                     .disabled(!canUndoVideoEdit)
                     .accessibilityIdentifier("video.undo")
                     Button(action: onRedoVideoEdit) {
                         Label("Redo", systemImage: "arrow.uturn.forward")
                     }
+                    .labelStyle(.iconOnly)
+                    .help(Text("Redo"))
                     .disabled(!canRedoVideoEdit)
                     .accessibilityIdentifier("video.redo")
                 }
                 .buttonStyle(.bordered)
                 .font(.system(size: 10, weight: .medium))
                 .disabled(isVideoEditing)
-
-                Text("Split with S. Drag clip edges to trim and drag a clip to change its order. Use the join button for transitions.")
-                    .font(.system(size: 9))
-                    .foregroundStyle(StudioTheme.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if let placement = selectedVideoPlacement,
@@ -691,22 +737,23 @@ struct EditorInspectorView: View {
                     .accessibilityIdentifier("video.applyTrim")
                     }
 
-                    HStack {
+                    Menu {
                         Button("Move left") { onVideoEdit(.move(clipID: placement.clip.id, toIndex: index - 1)) }
-                            .disabled(index == 0)
+                            .disabled(isVideoEditing || index == 0)
                         Button("Move right") { onVideoEdit(.move(clipID: placement.clip.id, toIndex: index + 1)) }
-                            .disabled(index + 1 >= timeline.clips.count)
+                            .disabled(isVideoEditing || index + 1 >= timeline.clips.count)
+                        Divider()
+                        Button(role: .destructive) { onVideoEdit(.delete(clipID: placement.clip.id)) } label: {
+                            Label("Remove clip", systemImage: "trash")
+                        }
+                        .disabled(isVideoEditing || timeline.clips.count == 1)
+                    } label: {
+                        Label("Clip actions", systemImage: "ellipsis.circle")
                     }
-                    .disabled(isVideoEditing)
-                    Button(role: .destructive) { onVideoEdit(.delete(clipID: placement.clip.id)) } label: {
-                        Label("Remove clip", systemImage: "trash")
-                    }
-                    .disabled(isVideoEditing || timeline.clips.count == 1)
-                    .accessibilityIdentifier("video.deleteClip")
+                    .accessibilityIdentifier("video.clipActions")
                 }
 
                 if selectedAsset?.kind != .image {
-                InspectorSection("AI variation") {
                     Button {
                         let request = [
                             L10n.tr("Visual change I want for this clip: [describe here]"),
@@ -722,26 +769,17 @@ struct EditorInspectorView: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(isVideoEditing || model.assistantSession.isRunning || model.assistantSession.pendingConfirmation != nil)
                     .accessibilityIdentifier("video.aiOptimizeClip")
-                    Text("Opens a draft for this clip. Your recording stays unchanged until you approve an edit.")
-                        .font(.system(size: 9))
-                        .foregroundStyle(StudioTheme.secondaryText)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                InspectorSection("Clip sound") {
-                    Text("Captured sound for this clip")
-                        .font(.system(size: 9))
-                        .foregroundStyle(StudioTheme.secondaryText)
-                    LabeledSlider(value: $sourceAudioDraft, range: 0...2,
-                                  label: "Volume", suffix: "%", multiplier: 100, decimals: 0)
-                    Button("Apply volume") {
-                        onVideoEdit(.setClipAudio(clipID: placement.clip.id, volume: sourceAudioDraft))
+                    InspectorDisclosureSection("Clip sound",
+                                               detail: "\(Int((placement.clip.sourceAudioVolume * 100).rounded()))%",
+                                               isExpanded: $isClipSoundExpanded) {
+                        LabeledSlider(value: $sourceAudioDraft, range: 0...2,
+                                      label: "Volume", suffix: "%", multiplier: 100, decimals: 0)
+                        Button("Apply volume") {
+                            onVideoEdit(.setClipAudio(clipID: placement.clip.id, volume: sourceAudioDraft))
+                        }
+                        .disabled(isVideoEditing || abs(sourceAudioDraft - placement.clip.sourceAudioVolume) < 0.001)
+                        .accessibilityIdentifier("video.applyVolume")
                     }
-                    .disabled(isVideoEditing || abs(sourceAudioDraft - placement.clip.sourceAudioVolume) < 0.001)
-                    .accessibilityIdentifier("video.applyVolume")
-                    Text("Music and sound effects are in the Audio panel.")
-                        .font(.system(size: 9))
-                        .foregroundStyle(StudioTheme.secondaryText)
-                }
                 }
 
                 if index + 1 < timeline.clips.count {
@@ -751,27 +789,65 @@ struct EditorInspectorView: View {
                         Picker("Style", selection: Binding<DemoTransitionPreset>(
                             get: { videoTimeline?.transition(after: placement.clip.id)?.preset ?? .cut },
                             set: { preset in
-                                let length = preset == .cut ? 0 : min(maximum, max(0.1, transitionDurationDraft))
-                                onVideoEdit(.setTransition(fromClipID: placement.clip.id, preset: preset, duration: length))
+                                if preset == .cut {
+                                    onVideoEdit(.setTransition(fromClipID: placement.clip.id, preset: .cut, duration: 0))
+                                } else if let transition, transition.preset != .cut {
+                                    // A style change should keep the timing and curves
+                                    // already chosen for this join.
+                                    onVideoEdit(.setTransitionParameters(
+                                        fromClipID: placement.clip.id,
+                                        preset: preset,
+                                        outgoingDuration: transition.resolvedOutgoingDuration,
+                                        incomingDuration: transition.resolvedIncomingDuration,
+                                        outgoingCurve: transition.resolvedOutgoingCurve,
+                                        incomingCurve: transition.resolvedIncomingCurve))
+                                } else {
+                                    let length = min(maximum, max(0.1, transitionDurationDraft))
+                                    onVideoEdit(.setTransition(fromClipID: placement.clip.id, preset: preset, duration: length))
+                                }
                             }
                         )) {
                             Text("Cut").tag(DemoTransitionPreset.cut)
                             Text("Fade to black").tag(DemoTransitionPreset.fadeToBlack)
                             Text("Flash").tag(DemoTransitionPreset.flash)
                         }
-                        .disabled(isVideoEditing || maximum < 0.1)
+                        .disabled(isVideoEditing || (maximum < 0.1 && transition?.preset == .cut))
                         .accessibilityIdentifier("video.transitionPreset")
-                        if transition?.preset != .cut && transition != nil {
-                            LabeledSlider(value: $transitionDurationDraft,
-                                          range: 0.1...max(0.1, maximum),
-                                          label: "Duration", suffix: "s", decimals: 2)
-                            Button("Apply duration") {
-                                onVideoEdit(.setTransition(fromClipID: placement.clip.id,
-                                                            preset: transition?.preset ?? .cut,
-                                                            duration: transitionDurationDraft))
+                        if let transition, transition.preset != .cut {
+                            InspectorDisclosureSection("Fine tune transition",
+                                                       detail: L10n.format("%.2f s", transition.duration),
+                                                       isExpanded: $isTransitionDetailExpanded) {
+                                LabeledSlider(value: $transitionOutgoingDraft,
+                                              range: 0...max(0.001, min(maximumTransitionOutgoing(after: index, in: timeline),
+                                                                        2 - transitionIncomingDraft)),
+                                              label: "Exit", suffix: "s", decimals: 2)
+                                    .accessibilityIdentifier("video.transitionExit")
+                                LabeledSlider(value: $transitionIncomingDraft,
+                                              range: 0...max(0.001, min(maximumTransitionIncoming(after: index, in: timeline),
+                                                                        2 - transitionOutgoingDraft)),
+                                              label: "Entrance", suffix: "s", decimals: 2)
+                                    .accessibilityIdentifier("video.transitionEntrance")
+                                Picker("Exit curve", selection: $transitionOutgoingCurveDraft) {
+                                    transitionCurveOptions
+                                }
+                                .accessibilityIdentifier("video.transitionExitCurve")
+                                Picker("Entry curve", selection: $transitionIncomingCurveDraft) {
+                                    transitionCurveOptions
+                                }
+                                .accessibilityIdentifier("video.transitionEntryCurve")
+                                Button("Apply transition") {
+                                    onVideoEdit(.setTransitionParameters(
+                                        fromClipID: placement.clip.id,
+                                        preset: transition.preset,
+                                        outgoingDuration: transitionOutgoingDraft,
+                                        incomingDuration: transitionIncomingDraft,
+                                        outgoingCurve: transitionOutgoingCurveDraft,
+                                        incomingCurve: transitionIncomingCurveDraft))
+                                }
+                                .disabled(isVideoEditing || !canApplyTransitionParameters(transition,
+                                                                                          after: index, in: timeline))
+                                .accessibilityIdentifier("video.applyTransitionDuration")
                             }
-                            .disabled(isVideoEditing || abs(transitionDurationDraft - (transition?.duration ?? 0)) < 0.001)
-                            .accessibilityIdentifier("video.applyTransitionDuration")
                         }
                     }
                 }
@@ -1845,6 +1921,50 @@ private struct BackgroundPresetSwatch: View {
                         .padding(4)
                 }
             }
+    }
+}
+
+private struct InspectorDisclosureSection<Content: View>: View {
+    let title: String
+    let detail: String?
+    @Binding var isExpanded: Bool
+    @ViewBuilder let content: Content
+
+    init(_ title: String, detail: String? = nil, isExpanded: Binding<Bool>,
+         @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.detail = detail
+        self._isExpanded = isExpanded
+        self.content = content()
+    }
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            VStack(alignment: .leading, spacing: 11) {
+                content
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 10)
+        } label: {
+            HStack(spacing: 8) {
+                Text(LocalizedStringKey(title))
+                    .font(.system(size: 10, weight: .semibold))
+                Spacer()
+                if let detail {
+                    Text(detail)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(StudioTheme.secondaryText)
+                }
+            }
+        }
+        .tint(StudioTheme.secondaryText)
+        .padding(13)
+        .background(Color.white.opacity(0.025))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(StudioTheme.line, lineWidth: 1)
+        )
     }
 }
 

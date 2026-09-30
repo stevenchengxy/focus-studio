@@ -1256,6 +1256,17 @@
 "Save to shared library" = "Save to shared library";
 "No shared media yet. Import on the home screen or ask the AI assistant to create a clip." = "No shared media yet. Import on the home screen or ask the AI assistant to create a clip.";
 "This paid generation cannot start because its model, settings, or price could not be verified. Review the model and duration in Settings, then try again." = "This paid generation cannot start because its model, settings, or price could not be verified. Review the model and duration in Settings, then try again.";
+"Clip actions" = "Clip actions";
+"Fine tune transition" = "Fine tune transition";
+"Exit" = "Exit";
+"Entrance" = "Entrance";
+"Exit curve" = "Exit curve";
+"Entry curve" = "Entry curve";
+"Linear" = "Linear";
+"Ease in" = "Ease in";
+"Ease out" = "Ease out";
+"Apply transition" = "Apply transition";
+"%.2f s" = "%.2f s";
 
 "AI optimize this clip" = "AI optimize this clip";
 "AI variation" = "AI variation";
@@ -1279,6 +1290,14 @@
 "Loading preview…" = "Loading preview…";
 "MCP ready." = "MCP ready.";
 "MCP registered; Focus Studio is not accepting calls." = "MCP registered; Focus Studio is not accepting calls.";
+"Manage" = "Manage";
+"Preview" = "Preview";
+"Select media" = "Select media";
+"Select %@" = "Select %@";
+"Media actions: %@" = "Media actions: %@";
+"Move shared media to Trash?" = "Move shared media to Trash?";
+"Only shared copies will be moved to Trash. Media already added to a demo stays in that project." = "Only shared copies will be moved to Trash. Media already added to a demo stays in that project.";
+"Record. Edit. Export." = "Record. Edit. Export.";
 "Media unavailable" = "Media unavailable";
 "Missing media: %@" = "Missing media: %@";
 "No Ark key" = "No Ark key";

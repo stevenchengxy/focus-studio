@@ -380,7 +380,7 @@ public struct MCPToolCatalog: Sendable {
         ),
         MCPToolSpec(
             tool: SetTransitionTool(), title: "Set clip transition",
-            description: "Set the rendered effect after a clip by stable clip_id: cut (0 seconds), fadeToBlack or flash (0.1–2 seconds). The final clip has no outgoing transition. This affects both preview and MP4 export; get_timeline reports the current preset and duration. The first edit creates a separate editable copy.",
+            description: "Set the rendered effect after a clip by stable clip_id: cut (0 seconds), fadeToBlack or flash (0.1–2 seconds). Optionally supply outgoing_duration and incoming_duration, summing to duration, plus separate outgoing_curve and incoming_curve (linear, smooth, easeIn, easeOut). The final clip has no outgoing transition. Preview and MP4 share these settings; get_timeline reports both sides. The first edit creates a separate editable copy.",
             scope: .project, annotations: MCPToolAnnotations(readOnly: false, idempotent: true)
         ),
         MCPToolSpec(

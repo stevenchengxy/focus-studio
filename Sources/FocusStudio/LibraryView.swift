@@ -68,7 +68,7 @@ struct LibraryView: View {
                             Text("Make every click easy to follow.")
                                 .font(.system(size: 34, weight: .bold, design: .rounded))
                                 .tracking(-0.8)
-                            Text("Record. Clicks become cinematic zooms. Edit, caption, export.")
+                            Text("Record. Edit. Export.")
                                 .font(.system(size: 14))
                                 .foregroundStyle(StudioTheme.secondaryText)
 
@@ -152,7 +152,8 @@ struct LibraryView: View {
                     GlobalMediaLibrarySection(
                         assets: model.globalMediaAssets,
                         onImport: { Task { await model.chooseGlobalMediaFiles() } },
-                        onCreateWithAI: { openWindow(id: AssistantWindow.id) }
+                        onCreateWithAI: { openWindow(id: AssistantWindow.id) },
+                        onDelete: { ids in await model.deleteGlobalMediaAssets(ids: ids) }
                     )
                     .id("sharedMedia")
 

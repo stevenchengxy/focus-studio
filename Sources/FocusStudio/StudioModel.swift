@@ -503,6 +503,26 @@ final class StudioModel: ObservableObject {
         return added
     }
 
+    /// Shared items are deleted independently. A failure leaves that item's
+    /// card in place and does not prevent the other selected items from moving.
+    @discardableResult
+    func deleteGlobalMediaAssets(ids: Set<UUID>) async -> Set<UUID> {
+        var deleted: Set<UUID> = []
+        var failures: [String] = []
+        for asset in globalMediaAssets where ids.contains(asset.id) {
+            do {
+                try await globalMediaStore.moveToTrash(id: asset.id)
+                deleted.insert(asset.id)
+            } catch {
+                failures.append("\(asset.title): \(error.localizedDescription)")
+            }
+        }
+        do { globalMediaAssets = try await globalMediaStore.assets() }
+        catch { failures.append(error.localizedDescription) }
+        if !failures.isEmpty { showMessage(failures.joined(separator: "\n")) }
+        return deleted
+    }
+
     /// Copy selected shared assets into this project's own media folder. The
     /// normal first-edit rule still creates a working copy of an original take.
     @discardableResult

@@ -35,8 +35,53 @@ extension AIAssistantTests {
 
         let transition = try await SetTransitionTool().run(arguments: ["project_id": projectID, "clip_id": leftID, "preset": "fadeToBlack", "duration": 0.4], context: context, progress: { _ in })
         check(transition.data?["clips"]?[0]?["transition_after"]?["preset"]?.stringValue == "fadeToBlack"
-              && transition.data?["clips"]?[0]?["transition_after"]?["duration"]?.doubleValue == 0.4,
-              "transition receipt identifies the rendered preset and duration at the outgoing boundary")
+              && transition.data?["clips"]?[0]?["transition_after"]?["duration"]?.doubleValue == 0.4
+              && transition.data?["clips"]?[0]?["transition_after"]?["outgoing_duration"]?.doubleValue == 0.2
+              && transition.data?["clips"]?[0]?["transition_after"]?["incoming_duration"]?.doubleValue == 0.2,
+              "an existing symmetric transition call reports its effective in/out durations")
+        let shaped = try await SetTransitionTool().run(arguments: [
+            "project_id": projectID, "clip_id": leftID, "preset": "fadeToBlack", "duration": 0.4,
+            "outgoing_duration": 0.1, "incoming_duration": 0.3,
+            "outgoing_curve": "easeIn", "incoming_curve": "easeOut",
+        ], context: context, progress: { _ in })
+        let shapedReceipt = shaped.data?["clips"]?[0]?["transition_after"]
+        check(shapedReceipt?["duration"]?.doubleValue == 0.4
+              && shapedReceipt?["outgoing_duration"]?.doubleValue == 0.1
+              && shapedReceipt?["incoming_duration"]?.doubleValue == 0.3
+              && shapedReceipt?["outgoing_curve"]?.stringValue == "easeIn"
+              && shapedReceipt?["incoming_curve"]?.stringValue == "easeOut",
+              "Codex can set independently timed and curved transition sides and inspect the result")
+        let reread = try await GetTimelineTool().run(arguments: ["project_id": projectID], context: context, progress: { _ in })
+        check(reread.data?["clips"]?[0]?["transition_after"] == shapedReceipt,
+              "get_timeline returns the persisted transition parameters, not only the edit receipt")
+        let beforeInvalidTransition = box.project
+        let beforeInvalidCalls = app.videoEditCalls.count
+        await expectThrows("side durations must sum to the overall transition duration") {
+            _ = try await SetTransitionTool().run(arguments: [
+                "project_id": projectID, "clip_id": leftID, "preset": "flash", "duration": 0.4,
+                "outgoing_duration": 0.1, "incoming_duration": 0.2,
+            ], context: context, progress: { _ in })
+        }
+        await expectThrows("both side durations are required") {
+            _ = try await SetTransitionTool().run(arguments: [
+                "project_id": projectID, "clip_id": leftID, "preset": "flash", "duration": 0.4,
+                "outgoing_duration": 0.1,
+            ], context: context, progress: { _ in })
+        }
+        await expectThrows("an unknown visual curve is rejected") {
+            _ = try await SetTransitionTool().run(arguments: [
+                "project_id": projectID, "clip_id": leftID, "preset": "flash", "duration": 0.4,
+                "outgoing_duration": 0.1, "incoming_duration": 0.3, "incoming_curve": "bounce",
+            ], context: context, progress: { _ in })
+        }
+        await expectThrows("a transition side cannot exceed its adjacent clip") {
+            _ = try await SetTransitionTool().run(arguments: [
+                "project_id": projectID, "clip_id": leftID, "preset": "flash", "duration": 1.7,
+                "outgoing_duration": 1.6, "incoming_duration": 0.1,
+            ], context: context, progress: { _ in })
+        }
+        check(box.project == beforeInvalidTransition && app.videoEditCalls.count == beforeInvalidCalls,
+              "invalid transition parameters leave the working project and edit history unchanged")
         let audio = try await SetClipAudioTool().run(arguments: ["project_id": projectID, "clip_id": leftID, "volume": 0.0], context: context, progress: { _ in })
         check(audio.data?["clips"]?[0]?["source_audio_volume"]?.doubleValue == 0,
               "clip-audio receipt identifies the muted segment")
