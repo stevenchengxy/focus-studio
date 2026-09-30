@@ -43,6 +43,32 @@ extension AIAssistantTests {
                 && actualTrimmedClickTimes.count == expectedTrimmedClickTimes.count
                 && zip(actualTrimmedClickTimes, expectedTrimmedClickTimes).allSatisfy { abs($0 - $1) < 0.000_001 },
               "trimming remaps interaction times without changing the source: \(actualTrimmedClickTimes)")
+        let shortened = try JSONDecoder().decode(RecordingProject.self, from: JSONEncoder().encode(project))
+        let shortenedTimeline = try DemoVideoTimeline(project: shortened)
+        check(shortenedTimeline.sourceBounds(for: shortenedTimeline.clips[0]) == 0...3,
+              "a saved trimmed clip still exposes the full immutable recording")
+        let restoredStart = try shortenedTimeline.applying(
+            .trim(clipID: thirdID, sourceStart: 2, sourceEnd: 3), to: shortened)
+        check(abs(restoredStart.duration - 3) < 0.000_001
+                && restoredStart.videoClips?.first?.sourceStart == 2
+                && restoredStart.videoClips?.first?.sourceEnd == 3
+                && abs(restoredStart.resolvedClickEvents.first!.time - 0.5) < 0.000_001,
+              "dragging a previously shortened leading edge outward restores source frames and retimes retained events")
+        let shortenedEnd = try DemoVideoTimeline(project: restoredStart).applying(
+            .trim(clipID: thirdID, sourceStart: 2, sourceEnd: 2.7), to: restoredStart)
+        let restoredEnd = try DemoVideoTimeline(project: shortenedEnd).applying(
+            .trim(clipID: thirdID, sourceStart: 2, sourceEnd: 3), to: shortenedEnd)
+        check(abs(restoredEnd.duration - 3) < 0.000_001
+                && restoredEnd.videoClips?.first?.sourceEnd == 3,
+              "dragging a previously shortened trailing edge outward restores the source end")
+        await expectThrows("a restored trim cannot move before the source movie") {
+            _ = try shortenedTimeline.applying(
+                .trim(clipID: thirdID, sourceStart: -0.1, sourceEnd: 3), to: shortened)
+        }
+        await expectThrows("a restored trim cannot move after the source movie") {
+            _ = try shortenedTimeline.applying(
+                .trim(clipID: thirdID, sourceStart: 2.2, sourceEnd: 3.1), to: shortened)
+        }
         project = try DemoVideoTimeline(project: project).applying(
             .setTransition(fromClipID: thirdID, preset: .fadeToBlack, duration: 0.4), to: project)
         project = try DemoVideoTimeline(project: project).applying(.setClipAudio(clipID: thirdID, volume: 0), to: project)
@@ -239,6 +265,17 @@ extension AIAssistantTests {
         project = try DemoVideoTimeline(project: project).applying(
             .setTransition(fromClipID: imageClipID, preset: .fadeToBlack, duration: 0.2), to: project)
         let videoClipID = try DemoVideoTimeline(project: project).clips[1].id
+        let shortenedImportedMovie = try DemoVideoTimeline(project: project)
+        let restoredImportedMovie = try shortenedImportedMovie.applying(
+            .trim(clipID: videoClipID, sourceStart: 0, sourceEnd: 1.2), to: project)
+        check(abs(restoredImportedMovie.duration - (project.duration + 0.4)) < 0.000_001
+                && restoredImportedMovie.videoClips?[1].sourceEnd == 1.2
+                && shortenedImportedMovie.sourceBounds(for: shortenedImportedMovie.clips[1]) == 0...1.2,
+              "an imported movie can extend to its own source duration, independent of the recording")
+        await expectThrows("an imported clip cannot extend beyond its source") {
+            _ = try shortenedImportedMovie.applying(
+                .trim(clipID: videoClipID, sourceStart: 0, sourceEnd: 1.3), to: project)
+        }
         project = try DemoVideoTimeline(project: project).applying(
             .split(clipID: videoClipID, at: 1.4), to: project)
         let edited = try DemoVideoTimeline(project: project)

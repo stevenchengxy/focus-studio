@@ -7,11 +7,15 @@ actor GlobalMediaLibraryStore {
     enum LibraryError: LocalizedError {
         case assetMissing
         case invalidCatalog
+        case invalidTitle
+        case titleTooLong
 
         var errorDescription: String? {
             switch self {
             case .assetMissing: return "This shared media item is no longer available. Refresh the media library."
             case .invalidCatalog: return "The shared media library could not be read safely."
+            case .invalidTitle: return "A media name cannot be empty."
+            case .titleTooLong: return "Names can contain up to 120 characters."
             }
         }
     }
@@ -91,6 +95,23 @@ actor GlobalMediaLibraryStore {
                   fileManager.fileExists(atPath: asset.filePath) else { throw LibraryError.assetMissing }
             return URL(fileURLWithPath: asset.filePath)
         }
+    }
+
+    /// A display-name edit changes only catalog metadata. The shared file and
+    /// project-owned copies retain their paths and bytes.
+    @discardableResult
+    func rename(id: UUID, to proposedTitle: String) throws -> DemoMediaAsset {
+        let title = proposedTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { throw LibraryError.invalidTitle }
+        guard title.count <= 120 else { throw LibraryError.titleTooLong }
+        var updated = try assets()
+        guard let index = updated.firstIndex(where: { $0.id == id }) else {
+            throw LibraryError.assetMissing
+        }
+        updated[index].title = title
+        try save(updated)
+        cachedAssets = updated
+        return updated[index]
     }
 
     /// Remove only the shared copy. A project has its own file and continues

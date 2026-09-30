@@ -1306,8 +1306,16 @@
 "MCP ready." = "MCP 已就绪。";
 "MCP registered; Focus Studio is not accepting calls." = "MCP 已登记；Focus Studio 当前尚未接收工具调用。";
 "Manage" = "管理";
+"Select, rename, or move media to Trash" = "选择、重命名或删除素材";
+"Select, rename, or move projects to Trash" = "选择、重命名或删除项目";
 "Preview" = "预览";
 "Select media" = "选择素材";
+"Deselect media" = "取消选择素材";
+"Rename media" = "重命名素材";
+"Media name" = "素材名称";
+"Enter a name for this media." = "请输入素材名称。";
+"A media name cannot be empty." = "素材名称不能为空。";
+"Expand to source bounds" = "恢复至源视频边界";
 "Select %@" = "选择 %@";
 "Media actions: %@" = "素材操作：%@";
 "Move shared media to Trash?" = "将通用素材移到废纸篓？";

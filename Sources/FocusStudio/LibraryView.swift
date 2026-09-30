@@ -5,6 +5,7 @@ import SwiftUI
 struct LibraryView: View {
     @EnvironmentObject private var model: StudioModel
     @State private var selection = ProjectLibrarySelection()
+    @State private var mediaSelection = ProjectLibrarySelection()
     @State private var renamingProject: RecordingProject?
     @State private var pendingDeletion: [RecordingProject] = []
     @State private var confirmsDeletion = false
@@ -151,8 +152,16 @@ struct LibraryView: View {
 
                     GlobalMediaLibrarySection(
                         assets: model.globalMediaAssets,
+                        selection: $mediaSelection,
                         onImport: { Task { await model.chooseGlobalMediaFiles() } },
                         onCreateWithAI: { openWindow(id: AssistantWindow.id) },
+                        onBeginManagement: { selection.finish() },
+                        onRename: { id, name in
+                            let succeeded = await model.renameGlobalMediaAsset(id: id, to: name)
+                            if !succeeded { model.isShowingError = false }
+                            return succeeded
+                        },
+                        failureMessage: { model.errorMessage },
                         onDelete: { ids in await model.deleteGlobalMediaAssets(ids: ids) }
                     )
                     .id("sharedMedia")
@@ -203,7 +212,8 @@ struct LibraryView: View {
         .disabled(model.isManagingProjects)
         .onChange(of: orderedIDs) { _, ids in selection.retainExisting(ids) }
         .sheet(item: $renamingProject) { project in
-            RenameRecordingSheet(project: project, failureMessage: { model.errorMessage }) { name in
+            RenameLibraryItemSheet(kind: .recording, initialName: project.title,
+                                   failureMessage: { model.errorMessage }) { name in
                 let succeeded = await model.renameProject(id: project.id, to: name)
                 // A sheet owns its own error; avoid stacking a root alert behind it.
                 if !succeeded { model.isShowingError = false }
@@ -245,15 +255,14 @@ struct LibraryView: View {
                     .foregroundStyle(StudioTheme.secondaryText)
                 if !model.projects.isEmpty {
                     Button {
-                        if selection.isSelecting { selection.finish() } else { selection.begin() }
+                        if selection.isSelecting { selection.finish() }
+                        else { mediaSelection.finish(); selection.begin() }
                     } label: {
-                        Label(LocalizedStringKey(selection.isSelecting ? "Done selecting" : "Select recordings"), systemImage: selection.isSelecting ? "checkmark" : "checklist")
+                        Label(LocalizedStringKey(selection.isSelecting ? "Done" : "Manage"), systemImage: selection.isSelecting ? "checkmark" : "checklist")
                     }
                     .buttonStyle(.bordered)
                     .accessibilityIdentifier("library.selectionMode")
-                    .help(LocalizedStringKey(selection.isSelecting
-                        ? "Selection mode: click cards to select; Shift-click selects a range."
-                        : "Use the checkboxes to select recordings, or Command-click a card."))
+                    .help(LocalizedStringKey("Select, rename, or move projects to Trash"))
                 }
             }
             if let trashedCount {
@@ -274,34 +283,16 @@ struct LibraryView: View {
 
     /// Keep batch actions visible even at the bottom of a long recording library.
     private var selectionActions: some View {
-        HStack(spacing: 12) {
-            Text("\(selection.ids.count) selected")
-                .font(.system(size: 12, weight: .semibold))
-                .accessibilityIdentifier("library.selectionCount")
-            Button("Select all") { selection.selectAll(orderedIDs) }
-                .keyboardShortcut("a", modifiers: .command)
-                .disabled(renamingProject != nil || confirmsDeletion || model.projects.isEmpty)
-                .accessibilityIdentifier("library.selectAll")
-            Button("Deselect all") { selection.deselectAll() }
-                .disabled(selection.ids.isEmpty)
-                .accessibilityIdentifier("library.deselectAll")
-            Spacer()
-            Button {
-                renamingProject = selectedProjects.first
-            } label: {
-                Label("Rename", systemImage: "pencil")
-            }
-            .disabled(selection.ids.count != 1)
-            .accessibilityIdentifier("library.renameSelected")
-            Button(role: .destructive) { requestDeletion(selectedProjects) } label: {
-                Label("Delete selected", systemImage: "trash")
-            }
-            .disabled(selection.ids.isEmpty)
-            .accessibilityIdentifier("library.deleteSelected")
-            Button("Done selecting") { selection.finish() }
-                .accessibilityIdentifier("library.finishSelection")
-        }
-        .buttonStyle(.bordered)
+        LibrarySelectionActions(
+            count: selection.ids.count,
+            totalCount: orderedIDs.count,
+            identifierPrefix: "library",
+            onSelectAll: { selection.selectAll(orderedIDs) },
+            onDeselectAll: { selection.deselectAll() },
+            onRename: { renamingProject = selectedProjects.first },
+            onDelete: { requestDeletion(selectedProjects) },
+            onDone: { selection.finish() }
+        )
     }
 
     private func activate(_ project: RecordingProject) {
@@ -315,6 +306,7 @@ struct LibraryView: View {
 
     private func select(_ project: RecordingProject) {
         trashedCount = nil
+        if !selection.isSelecting { mediaSelection.finish() }
         selection.toggle(project.id, in: orderedIDs, extendingRange: NSEvent.modifierFlags.contains(.shift))
     }
 
@@ -322,6 +314,45 @@ struct LibraryView: View {
         guard !projects.isEmpty else { return }
         pendingDeletion = projects
         confirmsDeletion = true
+    }
+}
+
+/// Both home collections use the same selection actions and enablement rules.
+struct LibrarySelectionActions: View {
+    let count: Int
+    let totalCount: Int
+    let identifierPrefix: String
+    let onSelectAll: () -> Void
+    let onDeselectAll: () -> Void
+    let onRename: () -> Void
+    let onDelete: () -> Void
+    let onDone: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(L10n.format("%lld selected", count))
+                .font(.system(size: 12, weight: .semibold))
+                .accessibilityIdentifier("\(identifierPrefix).selectionCount")
+            Button("Select all", action: onSelectAll)
+                .disabled(count == totalCount)
+                .keyboardShortcut("a", modifiers: .command)
+                .accessibilityIdentifier("\(identifierPrefix).selectAll")
+            Button("Deselect all", action: onDeselectAll)
+                .disabled(count == 0)
+                .accessibilityIdentifier("\(identifierPrefix).deselectAll")
+            Spacer(minLength: 8)
+            Button(action: onRename) { Label("Rename", systemImage: "pencil") }
+                .disabled(count != 1)
+                .accessibilityIdentifier("\(identifierPrefix).renameSelected")
+            Button(role: .destructive, action: onDelete) {
+                Label("Move to Trash", systemImage: "trash")
+            }
+            .disabled(count == 0)
+            .accessibilityIdentifier("\(identifierPrefix).deleteSelected")
+            Button("Done", action: onDone)
+                .accessibilityIdentifier("\(identifierPrefix).finishSelection")
+        }
+        .buttonStyle(.bordered)
     }
 }
 
@@ -444,9 +475,21 @@ private struct ProjectCard: View {
     }
 }
 
-private struct RenameRecordingSheet: View {
+enum LibraryRenameKind {
+    case recording
+    case media
+
+    var heading: LocalizedStringKey { self == .recording ? "Rename recording" : "Rename media" }
+    var prompt: LocalizedStringKey { self == .recording ? "Enter a name for this recording." : "Enter a name for this media." }
+    var placeholder: LocalizedStringKey { self == .recording ? "Recording name" : "Media name" }
+    var emptyError: LocalizedStringKey { self == .recording ? "A recording name cannot be empty." : "A media name cannot be empty." }
+    var identifierPrefix: String { self == .recording ? "library.rename" : "library.sharedMedia.rename" }
+}
+
+struct RenameLibraryItemSheet: View {
     @Environment(\.dismiss) private var dismiss
-    let project: RecordingProject
+    let kind: LibraryRenameKind
+    let initialName: String
     let failureMessage: () -> String
     let save: (String) async -> Bool
     @State private var name = ""
@@ -459,18 +502,18 @@ private struct RenameRecordingSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Rename recording").font(.system(size: 19, weight: .semibold))
-            Text("Enter a name for this recording.")
+            Text(kind.heading).font(.system(size: 19, weight: .semibold))
+            Text(kind.prompt)
                 .font(.system(size: 12))
                 .foregroundStyle(StudioTheme.secondaryText)
-            TextField("Recording name", text: $name)
+            TextField(kind.placeholder, text: $name)
                 .textFieldStyle(.roundedBorder)
                 .focused($nameFocused)
-                .accessibilityIdentifier("library.rename.name")
+                .accessibilityIdentifier("\(kind.identifierPrefix).name")
                 .onSubmit { submit() }
             HStack {
                 if trimmedName.isEmpty {
-                    Text("A recording name cannot be empty.").foregroundStyle(StudioTheme.red)
+                    Text(kind.emptyError).foregroundStyle(StudioTheme.red)
                 } else if trimmedName.count > 120 {
                     Text("Names can contain up to 120 characters.").foregroundStyle(StudioTheme.red)
                 }
@@ -495,12 +538,12 @@ private struct RenameRecordingSheet: View {
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
                     .disabled(!isValid || isSaving)
-                    .accessibilityIdentifier("library.rename.save")
+                    .accessibilityIdentifier("\(kind.identifierPrefix).save")
             }
         }
         .padding(24)
         .frame(width: 430)
-        .onAppear { name = project.title; nameFocused = true }
+        .onAppear { name = initialName; nameFocused = true }
         .interactiveDismissDisabled(isSaving)
     }
 

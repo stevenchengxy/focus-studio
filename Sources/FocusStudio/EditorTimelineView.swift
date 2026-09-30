@@ -23,14 +23,22 @@ struct EditorTimelineView: View {
     @FocusState private var isTimelineFocused: Bool
     @State private var timelineZoom = 1.0
     @State private var scrollOffset = 0.0
+    @State private var hoverScrubTime: Double?
+    @State private var previousHoverX: Double?
+    @State private var hoverSeekTask: Task<Void, Never>?
+    @State private var lastHoverSeekUptime = 0.0
 
     private var timelineLabelWidth: Double { labelWidth + 22 }
 
     var body: some View {
         GeometryReader { proxy in
             let viewportWidth = max(1, proxy.size.width - timelineLabelWidth - 14)
-            let timelineWidth = viewportWidth * timelineZoom
             let duration = max(project.duration, 0.001)
+            // Keep a stable pointer-travel area past the final frame. Changing
+            // the ruler scale as a trim crosses the source end made the lane
+            // jump at exactly the moment the user released the handle.
+            let trailingGutter = min(160, viewportWidth * 0.2)
+            let timelineWidth = max(1, viewportWidth - trailingGutter) * timelineZoom
 
             VStack(spacing: 0) {
                 HStack(spacing: 0) {
@@ -188,6 +196,7 @@ struct EditorTimelineView: View {
                             placements: videoTimeline.placements,
                             transitions: videoTimeline.transitions,
                             timelineWidth: timelineWidth,
+                            trailingGutter: trailingGutter,
                             visibleX: scrollOffset...(scrollOffset + viewportWidth),
                             currentTime: currentTime,
                             selectedClipID: $selectedClipID,
@@ -210,9 +219,32 @@ struct EditorTimelineView: View {
                     }
                             }
                         }
-                        .frame(width: timelineWidth)
+                        .frame(width: timelineWidth + trailingGutter, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .onContinuousHover { phase in
+                            switch phase {
+                            case .active(let point):
+                                // Mouse-down belongs to clip/zoom editing. Never
+                                // seek the player while an edit handle is held.
+                                guard NSEvent.pressedMouseButtons == 0, !isVideoEditing else {
+                                    cancelHoverScrub()
+                                    return
+                                }
+                                guard previousHoverX.map({ abs($0 - Double(point.x)) >= 1.5 }) ?? true else { return }
+                                previousHoverX = Double(point.x)
+                                let time = (Double(point.x) / timelineWidth * duration)
+                                    .clamped(to: 0...duration)
+                                hoverScrubTime = time
+                                scheduleHoverSeek(time, duration: duration)
+                            case .ended:
+                                if let time = hoverScrubTime, NSEvent.pressedMouseButtons == 0 {
+                                    commitHoverSeek(time, duration: duration)
+                                }
+                                cancelHoverScrub()
+                            }
+                        }
                         .overlay(alignment: .topLeading) {
-                let playheadX = CGFloat((currentTime / duration).clamped(to: 0...1)) * timelineWidth
+                let playheadX = CGFloat(((hoverScrubTime ?? currentTime) / duration).clamped(to: 0...1)) * timelineWidth
                 ZStack(alignment: .top) {
                     Rectangle()
                         .fill(Color.white.opacity(0.92))
@@ -261,6 +293,43 @@ struct EditorTimelineView: View {
         .onChange(of: selectedClipID) { _, id in
             if id != nil { isTimelineFocused = true }
         }
+        .onDisappear { cancelHoverScrub() }
+    }
+
+    private func scheduleHoverSeek(_ time: Double, duration: Double) {
+        let now = ProcessInfo.processInfo.systemUptime
+        let interval = 1.0 / 20.0
+        if now - lastHoverSeekUptime >= interval {
+            hoverSeekTask?.cancel()
+            hoverSeekTask = nil
+            commitHoverSeek(time, duration: duration)
+            return
+        }
+        guard hoverSeekTask == nil else { return }
+        let remaining = interval - (now - lastHoverSeekUptime)
+        hoverSeekTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(remaining))
+            guard !Task.isCancelled else { return }
+            hoverSeekTask = nil
+            if let latest = hoverScrubTime, NSEvent.pressedMouseButtons == 0 {
+                commitHoverSeek(latest, duration: duration)
+            }
+        }
+    }
+
+    private func commitHoverSeek(_ time: Double, duration: Double) {
+        let frame = 1.0 / Double(max(1, project.settings.frameRate))
+        let frameTime = (time / frame).rounded() * frame
+        guard abs(currentTime - frameTime) >= frame * 0.5 else { return }
+        currentTime = frameTime.clamped(to: 0...duration)
+        lastHoverSeekUptime = ProcessInfo.processInfo.systemUptime
+    }
+
+    private func cancelHoverScrub() {
+        hoverSeekTask?.cancel()
+        hoverSeekTask = nil
+        hoverScrubTime = nil
+        previousHoverX = nil
     }
 
     private var videoTimeline: DemoVideoTimeline? { try? DemoVideoTimeline(project: project) }
@@ -661,26 +730,30 @@ private struct ZoomBlockView: View {
     @State private var trailingOrigin: ZoomSegment?
     @State private var fullZoomOrigin: ZoomSegment?
     @State private var zoomOutOrigin: ZoomSegment?
+    // Keep the visual drag local. Writing through the project binding on
+    // every pointer sample rebuilt the preview composition and queued saves.
+    @State private var dragPreview: ZoomSegment?
 
     private let handleWidth = 14.0
     private let innerHandleWidth = 10.0
+    private var displayedSegment: ZoomSegment { dragPreview ?? segment }
 
     var body: some View {
-        let startX = segment.start / duration * timelineWidth
-        let width = min(timelineWidth, max(40, (segment.end - segment.start) / duration * timelineWidth))
+        let startX = displayedSegment.start / duration * timelineWidth
+        let width = min(timelineWidth, max(40, (displayedSegment.end - displayedSegment.start) / duration * timelineWidth))
         let displayedStart = startX.clamped(to: 0...max(0, timelineWidth - width))
-        let timing = ZoomTiming.resolve(segment, settings: settings)
-        let pixelsPerSecond = width / max(0.001, segment.end - segment.start)
+        let timing = ZoomTiming.resolve(displayedSegment, settings: settings)
+        let pixelsPerSecond = width / max(0.001, displayedSegment.end - displayedSegment.start)
         let easeInWidth = min(width, timing.easeIn * pixelsPerSecond)
         let easeOutWidth = min(width, timing.easeOut * pixelsPerSecond)
-        let showsInnerHandles = isSelected && !segment.isInstant && width >= 96
+        let showsInnerHandles = isSelected && !displayedSegment.isInstant && width >= 96
 
         ZStack {
             RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(LinearGradient(colors: segment.isEnabled ? [StudioTheme.purple, StudioTheme.purpleSoft] : [.gray.opacity(0.45), .gray.opacity(0.3)], startPoint: .top, endPoint: .bottom))
+                .fill(LinearGradient(colors: displayedSegment.isEnabled ? [StudioTheme.purple, StudioTheme.purpleSoft] : [.gray.opacity(0.45), .gray.opacity(0.3)], startPoint: .top, endPoint: .bottom))
                 .shadow(color: StudioTheme.purple.opacity(isSelected ? 0.55 : 0), radius: isSelected ? 6 : 0)
             // The transitions are shaded so their length is visible at a glance.
-            if !segment.isInstant {
+            if !displayedSegment.isInstant {
                 HStack(spacing: 0) {
                     LinearGradient(colors: [Color.black.opacity(0.28), Color.clear], startPoint: .leading, endPoint: .trailing)
                         .frame(width: easeInWidth)
@@ -712,12 +785,12 @@ private struct ZoomBlockView: View {
         .offset(x: displayedStart)
         .animation(reduceMotion ? nil : StudioMotion.hover, value: isSelected)
         .animation(reduceMotion ? nil : StudioMotion.hover, value: isHovering)
-        .animation(reduceMotion ? nil : StudioMotion.hover, value: segment.isEnabled)
+        .animation(reduceMotion ? nil : StudioMotion.hover, value: displayedSegment.isEnabled)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text("Zoom \(ordinal)"))
         .accessibilityIdentifier("zoom.\(segment.id.uuidString)")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .help("Start \(seconds(segment.start))s · End \(seconds(segment.end))s · Duration \(seconds(segment.end - segment.start))s. Drag the middle to move; drag either edge to resize.")
+        .help("Start \(seconds(displayedSegment.start))s · End \(seconds(displayedSegment.end))s · Duration \(seconds(displayedSegment.end - displayedSegment.start))s. Drag the middle to move; drag either edge to resize.")
         .contextMenu {
             Button(LocalizedStringKey(segment.isEnabled ? "Disable" : "Enable")) {
                 onSelect()
@@ -733,7 +806,7 @@ private struct ZoomBlockView: View {
                 .font(.system(size: 9, weight: .semibold, design: .monospaced))
             if showDuration {
                 Text("·")
-                Text("\(seconds(segment.end - segment.start))s")
+                Text("\(seconds(displayedSegment.end - displayedSegment.start))s")
                     .font(.system(size: 9, weight: .medium, design: .monospaced))
                     .lineLimit(1)
             }
@@ -746,21 +819,21 @@ private struct ZoomBlockView: View {
         .gesture(
             DragGesture(minimumDistance: 2, coordinateSpace: .named("zoom-timeline"))
                 .onChanged { value in
-                    onSelect()
+                    if !isSelected { onSelect() }
                     let origin = moveOrigin ?? segment
                     if moveOrigin == nil { moveOrigin = origin }
-                    segment = ZoomTiming.applying(
+                    dragPreview = ZoomTiming.applying(
                         .move(origin.start + timeDelta(value.translation.width)),
                         to: origin,
                         projectDuration: duration,
                         settings: settings
                     )
                 }
-                .onEnded { _ in moveOrigin = nil }
+                .onEnded { _ in commitDrag(); moveOrigin = nil }
         )
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text("Move zoom \(ordinal)"))
-        .accessibilityValue("Start \(seconds(segment.start)) seconds, end \(seconds(segment.end)) seconds")
+        .accessibilityValue("Start \(seconds(displayedSegment.start)) seconds, end \(seconds(displayedSegment.end)) seconds")
         .accessibilityHint("Drag to move the whole interval. Adjust to move by one tenth of a second.")
         .accessibilityIdentifier("zoom.\(segment.id.uuidString).move")
         .accessibilityAction { onSelect() }
@@ -787,13 +860,13 @@ private struct ZoomBlockView: View {
         .gesture(
             DragGesture(minimumDistance: 1, coordinateSpace: .named("zoom-timeline"))
                 .onChanged { value in
-                    onSelect()
+                    if !isSelected { onSelect() }
                     let origin = (isFullZoom ? fullZoomOrigin : zoomOutOrigin) ?? segment
                     if isFullZoom { if fullZoomOrigin == nil { fullZoomOrigin = origin } }
                     else if zoomOutOrigin == nil { zoomOutOrigin = origin }
                     let originTiming = ZoomTiming.resolve(origin, settings: settings)
                     let delta = timeDelta(value.translation.width)
-                    segment = ZoomTiming.applying(
+                    dragPreview = ZoomTiming.applying(
                         isFullZoom ? .fullZoomAt(originTiming.fullZoomStart + delta) : .zoomOutAt(originTiming.zoomOutStart + delta),
                         to: origin,
                         projectDuration: duration,
@@ -801,13 +874,14 @@ private struct ZoomBlockView: View {
                     )
                 }
                 .onEnded { _ in
+                    commitDrag()
                     if isFullZoom { fullZoomOrigin = nil } else { zoomOutOrigin = nil }
                 }
         )
         .help(LocalizedStringKey(isFullZoom ? "Drag to change when the zoom-in finishes" : "Drag to change when the zoom-out starts"))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(LocalizedStringKey(isFullZoom ? "Zoom in ends" : "Zoom out starts")))
-        .accessibilityValue("\(seconds(isFullZoom ? ZoomTiming.resolve(segment, settings: settings).fullZoomStart : ZoomTiming.resolve(segment, settings: settings).zoomOutStart)) seconds")
+        .accessibilityValue("\(seconds(isFullZoom ? ZoomTiming.resolve(displayedSegment, settings: settings).fullZoomStart : ZoomTiming.resolve(displayedSegment, settings: settings).zoomOutStart)) seconds")
         .accessibilityIdentifier("zoom.\(segment.id.uuidString).\(isFullZoom ? "fullZoom" : "zoomOut")")
         .accessibilityAdjustableAction { direction in
             adjust(direction) { delta in
@@ -830,7 +904,7 @@ private struct ZoomBlockView: View {
             .gesture(
                 DragGesture(minimumDistance: 2, coordinateSpace: .named("zoom-timeline"))
                     .onChanged { value in
-                        onSelect()
+                        if !isSelected { onSelect() }
                         let delta = timeDelta(value.translation.width)
                         let origin = (isLeading ? leadingOrigin : trailingOrigin) ?? segment
                         if isLeading {
@@ -838,7 +912,7 @@ private struct ZoomBlockView: View {
                         } else {
                             if trailingOrigin == nil { trailingOrigin = origin }
                         }
-                        segment = ZoomTiming.applying(
+                        dragPreview = ZoomTiming.applying(
                             isLeading ? .start(origin.start + delta) : .end(origin.end + delta),
                             to: origin,
                             projectDuration: duration,
@@ -846,12 +920,13 @@ private struct ZoomBlockView: View {
                         )
                     }
                     .onEnded { _ in
+                        commitDrag()
                         if isLeading { leadingOrigin = nil } else { trailingOrigin = nil }
                     }
             )
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(isLeading ? Text("Zoom \(ordinal) start") : Text("Zoom \(ordinal) end"))
-            .accessibilityValue("\(seconds(isLeading ? segment.start : segment.end)) seconds")
+            .accessibilityValue("\(seconds(isLeading ? displayedSegment.start : displayedSegment.end)) seconds")
             .accessibilityHint(Text(LocalizedStringKey(isLeading ? "Drag the left edge to change the start. Adjust by one tenth of a second." : "Drag the right edge to change the end. Adjust by one tenth of a second.")))
             .accessibilityIdentifier("zoom.\(segment.id.uuidString).\(isLeading ? "start" : "end")")
             .accessibilityAction { onSelect() }
@@ -862,6 +937,11 @@ private struct ZoomBlockView: View {
 
     private func timeDelta(_ translation: CGFloat) -> Double {
         Double(translation) / max(1, timelineWidth) * duration
+    }
+
+    private func commitDrag() {
+        if let dragPreview, dragPreview != segment { segment = dragPreview }
+        dragPreview = nil
     }
 
     private func adjust(_ direction: AccessibilityAdjustmentDirection, edit: (Double) -> ZoomTimingEdit) {

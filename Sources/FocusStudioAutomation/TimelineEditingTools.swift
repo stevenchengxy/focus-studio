@@ -35,6 +35,8 @@ enum TimelineToolSupport {
                 "timeline_end": .rounded(placement.end),
                 "source_start": .rounded(clip.sourceStart),
                 "source_end": .rounded(clip.sourceEnd),
+                "source_min": .rounded(timeline.sourceBounds(for: clip).lowerBound),
+                "source_max": .rounded(timeline.sourceBounds(for: clip).upperBound),
                 "duration": .rounded(placement.duration),
                 "source_audio_volume": .rounded(clip.sourceAudioVolume),
                 "media_asset_id": clip.mediaAssetID.map { AIJSONValue($0.uuidString) } ?? .null,
@@ -119,14 +121,14 @@ public struct SplitClipTool: AIAssistantTool {
 
 public struct TrimClipTool: AIAssistantTool {
     public let name = "trim_clip"
-    public let summary = "Set a clip's in/out points in source-video seconds. It retains the same clip ID and retimes later clips; read get_timeline first."
+    public let summary = "Set or restore a clip's in/out points in source-video seconds. It retains the same clip ID and retimes later clips; get_timeline shows the full source_min/source_max bounds."
     public init() {}
     public var parametersSchema: [String: Any] {
         ["type": "object", "required": ["clip_id", "source_start", "source_end"], "properties": [
             "project_id": TimelineToolSupport.projectProperty,
             "clip_id": TimelineToolSupport.clipProperty,
-            "source_start": ["type": "number", "description": "New in point in seconds of the source recording."],
-            "source_end": ["type": "number", "description": "New out point in seconds of the source recording; must be after source_start."],
+            "source_start": ["type": "number", "description": "New in point in seconds of this clip's source; may extend an earlier trim as far as source_min."],
+            "source_end": ["type": "number", "description": "New out point in seconds of this clip's source; must be after source_start and may extend an earlier trim as far as source_max."],
         ]]
     }
     public func run(arguments raw: [String: Any], context: AIAssistantContext, progress: @escaping @Sendable (String) -> Void) async throws -> AIToolResult {

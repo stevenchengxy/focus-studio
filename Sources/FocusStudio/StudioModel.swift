@@ -162,6 +162,11 @@ final class StudioModel: ObservableObject {
     private var codexPlanTask: Task<Void, Never>?
     private var codexFinishRequested = false
     private var projectSaveTask: Task<Void, Never>?
+    /// Drag gestures can publish dozens of editor snapshots per second. Keep
+    /// only the newest unsaved snapshot instead of queueing a disk write for
+    /// every pointer event. `flushProjectEdits` still waits for the last one.
+    private var pendingProjectSaves: [UUID: RecordingProject] = [:]
+    private var projectSaveRevision = 0
     private lazy var audioAssetCatalog = try? AudioAssetCatalog.loadBundled()
 
     init(
@@ -521,6 +526,22 @@ final class StudioModel: ObservableObject {
         catch { failures.append(error.localizedDescription) }
         if !failures.isEmpty { showMessage(failures.joined(separator: "\n")) }
         return deleted
+    }
+
+    @discardableResult
+    func renameGlobalMediaAsset(id: UUID, to title: String) async -> Bool {
+        do {
+            let renamed = try await globalMediaStore.rename(id: id, to: title)
+            if let index = globalMediaAssets.firstIndex(where: { $0.id == id }) {
+                globalMediaAssets[index] = renamed
+            } else {
+                globalMediaAssets = try await globalMediaStore.assets()
+            }
+            return true
+        } catch {
+            showProjectManagementMessage(error.localizedDescription)
+            return false
+        }
     }
 
     /// Copy selected shared assets into this project's own media folder. The
@@ -2342,11 +2363,26 @@ final class StudioModel: ObservableObject {
         if let index = projects.firstIndex(where: { $0.id == project.id }) {
             projects[index] = project
         }
-        let precedingSave = projectSaveTask
-        projectSaveTask = Task {
-            await precedingSave?.value
-            do { try await store.save(project) }
-            catch { await MainActor.run { self.show(error) } }
+        pendingProjectSaves[project.id] = project
+        projectSaveRevision += 1
+        if projectSaveTask == nil {
+            projectSaveTask = Task { [weak self] in
+                guard let self else { return }
+                while !self.pendingProjectSaves.isEmpty {
+                    let revision = self.projectSaveRevision
+                    // A continuous drag is one edit. A quiet interval lets us
+                    // persist its final value without serializing every frame.
+                    try? await Task.sleep(for: .milliseconds(180))
+                    guard revision == self.projectSaveRevision else { continue }
+                    let snapshots = Array(self.pendingProjectSaves.values)
+                    self.pendingProjectSaves.removeAll()
+                    for snapshot in snapshots {
+                        do { try await self.store.save(snapshot) }
+                        catch { self.show(error) }
+                    }
+                }
+                self.projectSaveTask = nil
+            }
         }
         return true
     }

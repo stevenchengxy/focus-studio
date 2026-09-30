@@ -30,8 +30,15 @@ extension AIAssistantTests {
         let trim = try await TrimClipTool().run(arguments: ["project_id": projectID, "clip_id": leftID, "source_start": 0.5, "source_end": 2.0], context: context, progress: { _ in })
         let trimmed = try structured(trim, "trim_clip")
         check(trimmed["project_id"]?.stringValue == projectID && trimmed["duration"]?.doubleValue == 5.5
-              && trimmed["clips"]?[0]?["id"]?.stringValue == leftID && trimmed["clips"]?[0]?["source_start"]?.doubleValue == 0.5,
+              && trimmed["clips"]?[0]?["id"]?.stringValue == leftID && trimmed["clips"]?[0]?["source_start"]?.doubleValue == 0.5
+              && trimmed["clips"]?[0]?["source_min"]?.doubleValue == 0
+              && trimmed["clips"]?[0]?["source_max"]?.doubleValue == 6,
               "trim keeps the clip identity, applies source in/out points and retimes the track")
+        let restored = try await TrimClipTool().run(arguments: ["project_id": projectID, "clip_id": leftID, "source_start": 0, "source_end": 2], context: context, progress: { _ in })
+        check(restored.data?["duration"]?.doubleValue == 6
+              && restored.data?["clips"]?[0]?["source_start"]?.doubleValue == 0,
+              "Codex can extend a previously trimmed clip back to its original source boundary")
+        _ = try await TrimClipTool().run(arguments: ["project_id": projectID, "clip_id": leftID, "source_start": 0.5, "source_end": 2], context: context, progress: { _ in })
 
         let transition = try await SetTransitionTool().run(arguments: ["project_id": projectID, "clip_id": leftID, "preset": "fadeToBlack", "duration": 0.4], context: context, progress: { _ in })
         check(transition.data?["clips"]?[0]?["transition_after"]?["preset"]?.stringValue == "fadeToBlack"

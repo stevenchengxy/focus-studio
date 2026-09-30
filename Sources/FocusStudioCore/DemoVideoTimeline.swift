@@ -114,8 +114,8 @@ public struct DemoVideoClipPlacement: Hashable, Sendable {
 public enum DemoVideoEditOperation: Sendable {
     /// `at` is the absolute time of the editor playhead, not a source time.
     case split(clipID: UUID, at: Double)
-    /// Bounds are seconds within the original source movie and may only reduce
-    /// the currently visible span. Undo restores material previously trimmed.
+    /// Bounds are seconds within the original source movie. A later trim can
+    /// expand a shortened clip again, up to that source's original duration.
     case trim(clipID: UUID, sourceStart: Double, sourceEnd: Double)
     case delete(clipID: UUID)
     case move(clipID: UUID, toIndex: Int)
@@ -264,6 +264,18 @@ public struct DemoVideoTimeline: Sendable {
         return mediaAssets.first { $0.id == id }
     }
 
+    /// Full source range available to a clip, including frames trimmed from
+    /// its current visible span. Imported movies have their own source length.
+    public func sourceBounds(for clip: DemoVideoClip) -> ClosedRange<Double> {
+        let limit: Double
+        if let asset = asset(for: clip) {
+            limit = asset.kind == .image ? 120 : asset.duration
+        } else {
+            limit = sourceDuration
+        }
+        return 0...limit
+    }
+
     /// Applies a conventional keep-range cut to an already edited source
     /// timeline. The returned clips still refer to the same immutable movie.
     /// `DemoTimelineEdit.remap` handles the output-time overlays separately.
@@ -357,14 +369,15 @@ public struct DemoVideoTimeline: Sendable {
         case let .trim(clipID, sourceStart, sourceEnd):
             guard let index = clips.firstIndex(where: { $0.id == clipID }) else { throw DemoVideoTimelineError.clipNotFound }
             let current = clips[index]
+            let bounds = sourceBounds(for: current)
             guard sourceStart.isFinite, sourceEnd.isFinite,
-                  sourceStart >= current.sourceStart - 0.000_001,
-                  sourceEnd <= current.sourceEnd + 0.000_001,
+                  sourceStart >= bounds.lowerBound - 0.000_001,
+                  sourceEnd <= bounds.upperBound + 0.002,
                   sourceEnd - sourceStart >= 0.1 - 0.000_001 else {
-                throw DemoVideoTimelineError.invalidOperation("Trim within the clip and leave at least 0.1 seconds.")
+                throw DemoVideoTimelineError.invalidOperation("Keep at least 0.1 seconds within the source movie.")
             }
-            nextClips[index].sourceStart = max(current.sourceStart, sourceStart)
-            nextClips[index].sourceEnd = min(current.sourceEnd, sourceEnd)
+            nextClips[index].sourceStart = max(bounds.lowerBound, sourceStart)
+            nextClips[index].sourceEnd = min(bounds.upperBound, sourceEnd)
         case let .delete(clipID):
             guard let index = clips.firstIndex(where: { $0.id == clipID }) else { throw DemoVideoTimelineError.clipNotFound }
             guard clips.count > 1 else { throw DemoVideoTimelineError.lastClip }

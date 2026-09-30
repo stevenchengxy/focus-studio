@@ -136,6 +136,7 @@ struct EditorVideoTimelineView: View {
     let placements: [DemoVideoClipPlacement]
     let transitions: [DemoVideoTransition]
     let timelineWidth: Double
+    let trailingGutter: Double
     let visibleX: ClosedRange<Double>
     let currentTime: Double
     @Binding var selectedClipID: UUID?
@@ -163,7 +164,7 @@ struct EditorVideoTimelineView: View {
             transitionMenus
             clipBlocks
         }
-        .frame(width: timelineWidth, height: 64, alignment: .leading)
+        .frame(width: timelineWidth + trailingGutter, height: 64, alignment: .leading)
         .overlay {
             RoundedRectangle(cornerRadius: 7)
                 .strokeBorder(isMediaDropTarget ? StudioTheme.purple : .clear, lineWidth: 2)
@@ -363,6 +364,9 @@ private struct VideoClipBlock: View {
         guard let mediaAssetID = clip.mediaAssetID else { return nil }
         return project.mediaAssets?.first { $0.id == mediaAssetID }
     }
+    private var sourceEndLimit: Double {
+        mediaAsset?.duration ?? project.videoSourceDuration ?? project.duration
+    }
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -438,6 +442,24 @@ private struct VideoClipBlock: View {
                 .allowsHitTesting(false)
         }
         .frame(width: width, height: 46)
+        .background(alignment: .leading) {
+            // An outward drag previews the restored frames without changing
+            // clip layout or asking AVFoundation to decode on every mouse move.
+            if let leadingTrim, leadingTrim < clip.sourceStart {
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(StudioTheme.yellow.opacity(0.5))
+                    .frame(width: (clip.sourceStart - leadingTrim) * pixelsPerSecond)
+                    .offset(x: (leadingTrim - clip.sourceStart) * pixelsPerSecond)
+                    .allowsHitTesting(false)
+            }
+            if let trailingTrim, trailingTrim > clip.sourceEnd {
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(StudioTheme.yellow.opacity(0.5))
+                    .frame(width: (trailingTrim - clip.sourceEnd) * pixelsPerSecond)
+                    .offset(x: width)
+                    .allowsHitTesting(false)
+            }
+        }
         .offset(x: moveOffset)
         .animation(reduceMotion ? nil : StudioMotion.hover, value: selected)
         .disabled(isEditing)
@@ -454,6 +476,12 @@ private struct VideoClipBlock: View {
                 onEdit(.split(clipID: clip.id, at: currentTime))
             }
             .disabled(currentTime <= placement.start + 0.1 || currentTime >= placement.end - 0.1)
+            if mediaAsset?.kind != .image,
+               clip.sourceStart > 0.001 || clip.sourceEnd < sourceEndLimit - 0.001 {
+                Button("Expand to source bounds") {
+                    onEdit(.trim(clipID: clip.id, sourceStart: 0, sourceEnd: sourceEndLimit))
+                }
+            }
             if index > 0 { Button("Move left") { onEdit(.move(clipID: clip.id, toIndex: index - 1)) } }
             if index < clipCount - 1 { Button("Move right") { onEdit(.move(clipID: clip.id, toIndex: index + 1)) } }
             Button("Remove clip", role: .destructive) { onEdit(.delete(clipID: clip.id)) }
@@ -469,6 +497,8 @@ private struct VideoClipBlock: View {
             .overlay(RoundedRectangle(cornerRadius: 1).fill(.white).frame(width: 2, height: 20))
             .frame(width: 16, height: 42)
             .contentShape(Rectangle())
+            .offset(x: ((active ?? (leading ? clip.sourceStart : clip.sourceEnd))
+                        - (leading ? clip.sourceStart : clip.sourceEnd)) * pixelsPerSecond)
             .onHover { hoveredTrim = $0 ? (leading ? .leading : .trailing) : nil }
             .animation(reduceMotion ? nil : StudioMotion.hover, value: hovered)
             .gesture(
@@ -477,9 +507,9 @@ private struct VideoClipBlock: View {
                         if !selected { onSelect() }
                         let delta = Double(value.translation.width) / pixelsPerSecond
                         if leading {
-                            leadingTrim = (clip.sourceStart + delta).clamped(to: clip.sourceStart...(clip.sourceEnd - 0.1))
+                            leadingTrim = (clip.sourceStart + delta).clamped(to: 0...(clip.sourceEnd - 0.1))
                         } else {
-                            trailingTrim = (clip.sourceEnd + delta).clamped(to: (clip.sourceStart + 0.1)...clip.sourceEnd)
+                            trailingTrim = (clip.sourceEnd + delta).clamped(to: (clip.sourceStart + 0.1)...sourceEndLimit)
                         }
                     }
                     .onEnded { _ in
@@ -492,17 +522,17 @@ private struct VideoClipBlock: View {
                         }
                     }
             )
-            .help(leading ? "Drag to trim the start" : "Drag to trim the end")
+            .help(leading ? "Drag to trim or restore the start" : "Drag to trim or restore the end")
             .accessibilityLabel(leading ? "Trim clip start" : "Trim clip end")
             .accessibilityValue((active ?? (leading ? clip.sourceStart : clip.sourceEnd)).editorTimecode)
             .accessibilityIdentifier("video.clip.\(clip.id.uuidString).\(leading ? "trimStart" : "trimEnd")")
             .accessibilityAdjustableAction { direction in
                 let delta = direction == .increment ? 0.1 : -0.1
                 if leading {
-                    let start = (clip.sourceStart + delta).clamped(to: clip.sourceStart...(clip.sourceEnd - 0.1))
+                    let start = (clip.sourceStart + delta).clamped(to: 0...(clip.sourceEnd - 0.1))
                     onEdit(.trim(clipID: clip.id, sourceStart: start, sourceEnd: clip.sourceEnd))
                 } else {
-                    let end = (clip.sourceEnd + delta).clamped(to: (clip.sourceStart + 0.1)...clip.sourceEnd)
+                    let end = (clip.sourceEnd + delta).clamped(to: (clip.sourceStart + 0.1)...sourceEndLimit)
                     onEdit(.trim(clipID: clip.id, sourceStart: clip.sourceStart, sourceEnd: end))
                 }
             }

@@ -690,6 +690,7 @@ struct EditorInspectorView: View {
             if let placement = selectedVideoPlacement,
                let index = timeline.placements.firstIndex(where: { $0.clip.id == placement.clip.id }) {
                 let selectedAsset = timeline.asset(for: placement.clip)
+                let sourceBounds = timeline.sourceBounds(for: placement.clip)
                 InspectorSection("Trim and arrange") {
                     Text(L10n.format("On timeline %@–%@", placement.start.editorTimecode, placement.end.editorTimecode))
                         .font(.system(size: 10, design: .monospaced))
@@ -729,8 +730,8 @@ struct EditorInspectorView: View {
                                           sourceEnd: trimEndDraft))
                     }
                     .disabled(isVideoEditing || !trimStartDraft.isFinite || !trimEndDraft.isFinite
-                              || trimStartDraft < placement.clip.sourceStart
-                              || trimEndDraft > placement.clip.sourceEnd
+                              || trimStartDraft < sourceBounds.lowerBound
+                              || trimEndDraft > sourceBounds.upperBound
                               || trimEndDraft - trimStartDraft < 0.1
                               || (abs(trimStartDraft - placement.clip.sourceStart) < 0.001
                                   && abs(trimEndDraft - placement.clip.sourceEnd) < 0.001))

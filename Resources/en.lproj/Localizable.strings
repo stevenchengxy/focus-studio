@@ -1291,8 +1291,16 @@
 "MCP ready." = "MCP ready.";
 "MCP registered; Focus Studio is not accepting calls." = "MCP registered; Focus Studio is not accepting calls.";
 "Manage" = "Manage";
+"Select, rename, or move media to Trash" = "Select, rename, or move media to Trash";
+"Select, rename, or move projects to Trash" = "Select, rename, or move projects to Trash";
 "Preview" = "Preview";
 "Select media" = "Select media";
+"Deselect media" = "Deselect media";
+"Rename media" = "Rename media";
+"Media name" = "Media name";
+"Enter a name for this media." = "Enter a name for this media.";
+"A media name cannot be empty." = "A media name cannot be empty.";
+"Expand to source bounds" = "Expand to source bounds";
 "Select %@" = "Select %@";
 "Media actions: %@" = "Media actions: %@";
 "Move shared media to Trash?" = "Move shared media to Trash?";

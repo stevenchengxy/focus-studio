@@ -52,12 +52,41 @@ enum GlobalMediaLibraryRegression {
             && restored.allSatisfy { FileManager.default.fileExists(atPath: $0.filePath) },
             "Shared items survive relaunch after original input files disappear")
 
+        let sharedFile = URL(fileURLWithPath: added[0].filePath)
+        let sharedBytes = SHA256.hash(data: try Data(contentsOf: sharedFile))
+        for invalidTitle in ["  \n ", String(repeating: "x", count: 121)] {
+            do {
+                _ = try await reopened.rename(id: added[0].id, to: invalidTitle)
+                preconditionFailure("Invalid media titles must be rejected")
+            } catch {}
+        }
+        let renamedTitle = "产品素材 🎬 — Café"
+        let renamed = try await reopened.rename(id: added[0].id, to: " \n\(renamedTitle) ")
+        precondition(renamed.title == renamedTitle && renamed.filePath == added[0].filePath,
+                     "Renaming shared media changes only its display title")
+        let renamedCatalog = GlobalMediaLibraryStore(directory: shared, inspector: inspector)
+        let renamedReloaded = try await renamedCatalog.assets()
+        let renamedBytes = SHA256.hash(data: try Data(contentsOf: sharedFile))
+        precondition(renamedReloaded.first?.title == renamedTitle
+            && renamedReloaded.first?.id == added[0].id
+            && renamedBytes == sharedBytes,
+            "Shared media rename persists without changing its UUID or file bytes")
+
         let model = StudioModel(store: inspector)
         await model.reloadProjects()
         await model.reloadGlobalMediaAssets()
         precondition(model.globalMediaAssets.count == 2 && model.projects.count == 1
             && model.projects[0].mediaAssets == nil,
             "Shared items never silently migrate into existing projects")
+        precondition(model.globalMediaAssets.first?.title == renamedTitle,
+                     "The home media card reflects the saved shared-media title")
+        let homeRenamed = await model.renameGlobalMediaAsset(id: added[0].id, to: "Demo intro")
+        precondition(homeRenamed,
+                     "The home rename action should update its media card")
+        let homeReloaded = try await GlobalMediaLibraryStore(directory: shared, inspector: inspector).assets()
+        precondition(model.globalMediaAssets.first?.title == "Demo intro"
+            && homeReloaded.first?.title == "Demo intro",
+            "Home media renames must persist in the shared catalog")
         let working = try await model.importGlobalMediaToProject(assetIDs: [added[0].id], projectID: original.id)
         guard let privateAsset = working.mediaAssets?.first else {
             preconditionFailure("Shared item must appear in working project")
@@ -95,7 +124,7 @@ enum GlobalMediaLibraryRegression {
             && featured.first?.id == newestID && !featured.contains(where: { $0.id == added[1].id })
             && expanded.count == 9 && expanded.first?.id == newestID,
             "Home media cards show newest additions first, including the ninth item")
-        print("GlobalMediaLibraryRegression: PASS (atomic import, durable shared copies, independent project copy, recoverable shared deletion, newest home cards visible)")
+        print("GlobalMediaLibraryRegression: PASS (atomic import, durable shared copies, metadata-only shared rename, independent project copy, recoverable shared deletion, newest home cards visible)")
     }
 
     private static func makeImage(_ url: URL) throws {
