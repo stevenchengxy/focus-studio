@@ -29,6 +29,7 @@ public enum AIAssistantToolCatalog {
             AnalyzeDemoPacingTool(),
             CreateDemoCutTool(),
             GetTimelineTool(),
+            ResolveTimelineFrameTool(),
             SplitClipTool(),
             TrimClipTool(),
             DeleteClipTool(),
@@ -930,7 +931,7 @@ struct GenerateVideoTool: AIAssistantTool {
 
 struct CaptureFrameTool: AIAssistantTool {
     let name = "capture_frame"
-    let summary = "Render one styled frame of the current recording (background, padding, zoom, captions) as a PNG, e.g. to use as a first/last frame or reference image for generate_video."
+    let summary = "Render one styled frame as a PNG. For frame-accurate cut inspection, pass a time from resolve_timeline_frame with exact_frame=true; exact rendering may take longer."
 
     var parametersSchema: [String: Any] {
         [
@@ -939,6 +940,8 @@ struct CaptureFrameTool: AIAssistantTool {
             "properties": [
                 "time": ["type": "number", "description": "Seconds into the recording."],
                 "width": ["type": "integer", "minimum": 640, "maximum": 3840, "default": 1920, "description": "Width of the frame in pixels, from 640 to 3840 (default 1920)."],
+                "exact_frame": ["type": "boolean", "default": false,
+                                "description": "Snap time to the project's output frame grid and request that precise frame with zero AVFoundation time tolerance. Slower than the default fast preview; use with resolve_timeline_frame.time_seconds for a cut."],
             ],
         ]
     }
@@ -950,9 +953,25 @@ struct CaptureFrameTool: AIAssistantTool {
     ) async throws -> AIToolResult {
         let arguments = AIToolArguments(raw)
         guard let time = arguments.double("time") else { throw AIToolError.invalidArgument("Missing required argument \"time\" (seconds).") }
+        if arguments.has("exact_frame"), arguments.bool("exact_frame") == nil {
+            throw AIToolError.invalidArgument("exact_frame must be true or false.")
+        }
         var project = try await AIToolSupport.requireProject(context)
         guard project.duration.isFinite, project.duration > 0 else { throw AIToolError.failed("The recording has no duration.") }
-        let clampedTime = time.clamped(to: 0...max(0, project.duration - 0.05))
+        let exact = arguments.bool("exact_frame") ?? false
+        let frameRate = project.settings.frameRate.clamped(to: 1...120)
+        var exactIndex: Int?
+        let clampedTime: Double
+        if exact {
+            guard let frameCount = TimelineFrameGrid.count(duration: project.duration, rate: frameRate) else {
+                throw AIToolError.failed("The recording has no valid output frames.")
+            }
+            let index = TimelineFrameGrid.index(at: time.clamped(to: 0...project.duration), rate: frameRate, count: frameCount)
+            exactIndex = index
+            clampedTime = TimelineFrameGrid.time(index: index, rate: frameRate)
+        } else {
+            clampedTime = time.clamped(to: 0...max(0, project.duration - 0.05))
+        }
         project.settings.exportWidth = (arguments.int("width") ?? 1_920).clamped(to: 640...3_840)
 
         progress(context.tr("Rendering frame…"))
@@ -960,21 +979,30 @@ struct CaptureFrameTool: AIAssistantTool {
         let generator = AVAssetImageGenerator(asset: prepared.asset)
         generator.videoComposition = prepared.videoComposition
         generator.appliesPreferredTrackTransform = true
-        generator.requestedTimeToleranceBefore = CMTime(seconds: 0.05, preferredTimescale: 600)
-        generator.requestedTimeToleranceAfter = CMTime(seconds: 0.05, preferredTimescale: 600)
-        let (image, _) = try await generator.image(at: CMTime(seconds: clampedTime, preferredTimescale: 600))
+        let tolerance = exact ? CMTime.zero : CMTime(seconds: 0.05, preferredTimescale: 600)
+        generator.requestedTimeToleranceBefore = tolerance
+        generator.requestedTimeToleranceAfter = tolerance
+        let (image, actualTime) = try await generator.image(at: CMTime(seconds: clampedTime, preferredTimescale: 600))
         let output = try context.newAssetURL(prefix: "frame", fileExtension: "png")
         try AIToolSupport.writePNG(image, to: output)
         let text = context.format("Frame captured at %@ s: %@ (%lld × %lld)", AIToolSupport.seconds(clampedTime), output.lastPathComponent, image.width, image.height)
-        let data: AIJSONValue = [
+        var fields: [String: AIJSONValue] = [
             "project_id": AIJSONValue(project.id.uuidString),
             "path": AIJSONValue(output),
-            "time": .rounded(clampedTime),
+            "time": exact ? AIJSONValue(clampedTime) : .rounded(clampedTime),
             "width": AIJSONValue(image.width),
             "height": AIJSONValue(image.height),
             "size_bytes": AIJSONValue(Int(clamping: AIToolSupport.fileSize(output))),
         ]
-        return AIToolResult(text: text + "\n" + output.path, attachments: [output], data: data)
+        if let exactIndex {
+            fields["exact_frame_requested"] = true
+            fields["frame_index"] = AIJSONValue(exactIndex)
+            fields["frame_rate"] = AIJSONValue(frameRate)
+            fields["actual_time_seconds"] = AIJSONValue(actualTime.seconds)
+            fields["frame_matches_request"] = AIJSONValue(
+                actualTime.isValid && abs(actualTime.seconds - clampedTime) < 0.5 / Double(frameRate))
+        }
+        return AIToolResult(text: text + "\n" + output.path, attachments: [output], data: .object(fields))
     }
 }
 

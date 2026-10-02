@@ -952,6 +952,7 @@
 "TIMELINE" = "时间轴";
 "Add chapter at playhead" = "在播放头处添加章节";
 "Click or drag to scrub" = "点击或拖动定位画面";
+"Hover to preview; click or drag the ruler to place the playhead" = "悬停预览；点击或拖动时间刻度，松开后确认播放位置";
 
 /* Recording automation guidance */
 "No automatic zoom cues" = "没有可用的自动缩放事件";

@@ -128,6 +128,7 @@ public enum ProjectVideoRenderer {
 
     /// Builds the common composition used by preview playback and final export.
     public static func prepare(project: RecordingProject) async throws -> PreparedProjectVideo {
+        try Task.checkCancellation()
         let sourceURL = URL(fileURLWithPath: project.sourceVideoPath)
         guard FileManager.default.fileExists(atPath: sourceURL.path) else {
             throw ProjectRenderError.sourceDoesNotExist(sourceURL)
@@ -142,6 +143,7 @@ public enum ProjectVideoRenderer {
         }
         let sourceVideoTimeRange = try await sourceVideoTrack.load(.timeRange)
         let sourceVideoDuration = sourceVideoTimeRange.duration.seconds
+        try Task.checkCancellation()
         guard sourceDurationSeconds.isFinite, sourceDurationSeconds > 0,
               sourceVideoDuration.isFinite, sourceVideoDuration > 0 else {
             throw ProjectRenderError.invalidSourceDuration
@@ -175,6 +177,7 @@ public enum ProjectVideoRenderer {
                                     transform: CGAffineTransform)] = [:]
         var importedImages: [UUID: CIImage] = [:]
         for media in timeline.mediaAssets where usedAssetIDs.contains(media.id) {
+            try Task.checkCancellation()
             let url = try resolveMediaURL(path: media.filePath,
                                           relativeTo: sourceURL.deletingLastPathComponent())
             switch media.kind {
@@ -357,6 +360,10 @@ public enum ProjectVideoRenderer {
             }
         }
 
+        // A cancelled editor preview may have already loaded several media
+        // tracks. Avoid building its expensive frame graph after a newer edit.
+        try Task.checkCancellation()
+
         let audioMix: AVAudioMix?
         if audioMixParameters.isEmpty {
             audioMix = nil
@@ -373,6 +380,7 @@ public enum ProjectVideoRenderer {
                 tintHex: project.settings.resolvedClickAnimation.colorHex
             )
         }
+        try Task.checkCancellation()
         let frameRenderer = ProjectFrameRenderer(
             project: project,
             geometry: geometry,
@@ -417,6 +425,7 @@ public enum ProjectVideoRenderer {
         videoComposition.renderSize = geometry.outputSize
         videoComposition.frameDuration = CMTime(value: 1, timescale: CMTimeScale(frameRate))
         videoComposition.sourceTrackIDForFrameTiming = kCMPersistentTrackID_Invalid
+        try Task.checkCancellation()
 
         return PreparedProjectVideo(
             asset: composition,
@@ -953,6 +962,12 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
     private let captionStyle: CaptionStyle
     /// Caption pills rasterized once per chapter for this canvas and style.
     private let captionArtwork: [UUID: CIImage]
+    // These Core Image graphs depend only on project settings, not frame time.
+    // Set them before the renderer is shared with AVFoundation's frame callbacks.
+    private var staticBackground = CIImage(color: .clear)
+    private var staticCaptureCanvas = CIImage(color: .clear)
+    private var staticScreenMask = CIImage(color: .clear)
+    private var staticTransparentCanvas = CIImage(color: .clear)
 
     init(project: RecordingProject, geometry: RenderGeometry, cursorGraphics: CursorGraphicSet) {
         self.project = project
@@ -1114,15 +1129,46 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
             captionArtwork[chapter.id] = CIImage(cgImage: artwork.image)
         }
         self.captionArtwork = captionArtwork
+
+        let canvasRect = CGRect(origin: .zero, size: geometry.outputSize)
+        let background = background(in: canvasRect)
+        self.staticBackground = background
+        let radius = max(0, project.settings.cornerRadius)
+            .clamped(to: 0...min(geometry.screenFrame.width, geometry.screenFrame.height) / 2)
+        let mask = roundedRectangleMask(frame: geometry.screenFrame, radius: radius)
+        self.staticScreenMask = mask
+        let transparent = CIImage(color: .clear).cropped(to: canvasRect)
+        self.staticTransparentCanvas = transparent
+        if project.settings.shadow > 0 {
+            let strength = project.settings.shadow.clamped(to: 0...1)
+            let blurRadius = max(4, 32 * strength)
+            let shadowMask = mask
+                .transformed(by: CGAffineTransform(translationX: 0, y: -10 * strength))
+                .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: blurRadius])
+                .cropped(to: canvasRect)
+            let shadowColor = CIImage(
+                color: CIColor(red: 0, green: 0, blue: 0, alpha: 0.58 * strength)
+            ).cropped(to: canvasRect)
+            let shadow = shadowColor.applyingFilter(
+                "CIBlendWithMask",
+                parameters: [
+                    kCIInputBackgroundImageKey: transparent,
+                    kCIInputMaskImageKey: shadowMask
+                ]
+            )
+            self.staticCaptureCanvas = shadow.composited(over: background)
+        } else {
+            self.staticCaptureCanvas = background
+        }
     }
 
     func render(sourceImage: CIImage, seconds rawSeconds: Double) -> CIImage {
         let seconds = rawSeconds.isFinite ? max(0, rawSeconds) : 0
         let canvasRect = CGRect(origin: .zero, size: geometry.outputSize)
-        var canvas = background(in: canvasRect)
+        let canvas = staticCaptureCanvas
 
         let sourceExtent = sourceImage.extent
-        guard sourceExtent.width > 0, sourceExtent.height > 0 else { return canvas }
+        guard sourceExtent.width > 0, sourceExtent.height > 0 else { return staticBackground }
         let normalizedSource = sourceImage.transformed(
             by: CGAffineTransform(translationX: -sourceExtent.minX, y: -sourceExtent.minY)
         )
@@ -1194,30 +1240,8 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
             }
         }
 
-        let radius = max(0, project.settings.cornerRadius)
-            .clamped(to: 0...min(geometry.screenFrame.width, geometry.screenFrame.height) / 2)
-        let screenMask = roundedRectangleMask(frame: geometry.screenFrame, radius: radius)
-        let transparentCanvas = CIImage(color: .clear).cropped(to: canvasRect)
-
-        if project.settings.shadow > 0 {
-            let strength = project.settings.shadow.clamped(to: 0...1)
-            let blurRadius = max(4, 32 * strength)
-            let shadowMask = screenMask
-                .transformed(by: CGAffineTransform(translationX: 0, y: -10 * strength))
-                .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: blurRadius])
-                .cropped(to: canvasRect)
-            let shadowColor = CIImage(
-                color: CIColor(red: 0, green: 0, blue: 0, alpha: 0.58 * strength)
-            ).cropped(to: canvasRect)
-            let shadow = shadowColor.applyingFilter(
-                "CIBlendWithMask",
-                parameters: [
-                    kCIInputBackgroundImageKey: transparentCanvas,
-                    kCIInputMaskImageKey: shadowMask
-                ]
-            )
-            canvas = shadow.composited(over: canvas)
-        }
+        let screenMask = staticScreenMask
+        let transparentCanvas = staticTransparentCanvas
 
         var screenLayer = placedSource.applyingFilter(
             "CIBlendWithMask",
@@ -1258,7 +1282,7 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
     func renderImported(sourceImage: CIImage, seconds rawSeconds: Double) -> CIImage {
         let seconds = rawSeconds.isFinite ? max(0, rawSeconds) : 0
         let canvasRect = CGRect(origin: .zero, size: geometry.outputSize)
-        var canvas = background(in: canvasRect)
+        var canvas = staticBackground
         let source = sourceImage.extent
         guard source.width > 0, source.height > 0 else { return canvas }
         let scale = min(geometry.screenFrame.width / source.width,
@@ -1287,7 +1311,7 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
         let radius = max(0, project.settings.cornerRadius)
             .clamped(to: 0...min(frame.width, frame.height) / 2)
         let mask = roundedRectangleMask(frame: frame, radius: radius)
-        let transparent = CIImage(color: .clear).cropped(to: canvasRect)
+        let transparent = staticTransparentCanvas
         let layer = image.applyingFilter("CIBlendWithMask", parameters: [
             kCIInputBackgroundImageKey: transparent,
             kCIInputMaskImageKey: mask

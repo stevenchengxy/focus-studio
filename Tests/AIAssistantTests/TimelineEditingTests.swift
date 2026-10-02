@@ -17,6 +17,37 @@ extension AIAssistantTests {
         check(initialData["clip_count"]?.intValue == 1 && initialData["duration"]?.doubleValue == 6, "a legacy recording exposes one editable clip before any mutation")
         guard let firstID = initialData["clips"]?[0]?["id"]?.stringValue else { fatalError("FAIL: initial clip ID") }
 
+        let resolver = ResolveTimelineFrameTool()
+        let approximate = try await resolver.run(arguments: ["project_id": source.id.uuidString, "at_seconds": 2.06],
+                                                 context: context, progress: { _ in })
+        let frame = try structured(approximate, "resolve_timeline_frame")
+        check(frame["frame_rate"]?.intValue == 30 && frame["frame_count"]?.intValue == 180
+              && frame["frame_index"]?.intValue == 61
+              && abs((frame["time_seconds"]?.doubleValue ?? -1) - 61.0 / 30.0) < 0.000_000_001
+              && frame["clip_id"]?.stringValue == firstID
+              && abs((frame["source_time_seconds"]?.doubleValue ?? -1) - 61.0 / 30.0) < 0.000_000_001
+              && frame["can_split_here"] == true,
+              "a read-only frame lookup snaps to the exact output grid and returns its clip/source position")
+        check(app.videoEditCalls.isEmpty && box.project == source,
+              "resolving a frame never mutates the editor or timeline")
+        let exactSeconds = frame["time_seconds"]!.doubleValue!
+        let roundTrip = try await resolver.run(arguments: ["project_id": source.id.uuidString, "at_seconds": exactSeconds],
+                                               context: context, progress: { _ in })
+        check(roundTrip.data?["frame_index"]?.intValue == 61,
+              "an exact resolved time maps back to the same frame despite floating-point rounding")
+        let lastFrame = try await resolver.run(arguments: ["project_id": source.id.uuidString, "at_seconds": 6],
+                                               context: context, progress: { _ in })
+        check(lastFrame.data?["frame_index"]?.intValue == 179
+              && lastFrame.data?["next_frame_time_seconds"]?.doubleValue == 6,
+              "the project end resolves to the last visible output frame")
+        for invalid: [String: Any] in [[:], ["at_seconds": 1, "frame_index": 30],
+                                       ["at_seconds": -0.01], ["at_seconds": 6.01],
+                                       ["frame_index": 180], ["frame_index": 2.5]] {
+            await expectThrows("invalid or ambiguous timeline-frame position") {
+                _ = try await resolver.run(arguments: invalid, context: context, progress: { _ in })
+            }
+        }
+
         let split = try await SplitClipTool().run(arguments: ["project_id": source.id.uuidString, "clip_id": firstID, "at": 2.0], context: context, progress: { _ in })
         let splitData = try structured(split, "split_clip")
         guard let copyID = splitData["project_id"]?.stringValue,
@@ -25,6 +56,13 @@ extension AIAssistantTests {
         check(copyID != source.id.uuidString && leftID == firstID && rightID != firstID && splitData["clip_count"]?.intValue == 2,
               "first split returns a separate working project and stable/unique clip IDs")
         check(app.projects.first == source && app.videoEditCalls.count == 1, "source project remains untouched by a clip edit")
+
+        let nextClipFrame = try await resolver.run(arguments: ["project_id": copyID, "frame_index": 61],
+                                                  context: context, progress: { _ in })
+        check(nextClipFrame.data?["clip_id"]?.stringValue == rightID
+              && nextClipFrame.data?["clip_index"]?.intValue == 1
+              && abs((nextClipFrame.data?["source_time_seconds"]?.doubleValue ?? -1) - 61.0 / 30.0) < 0.000_000_001,
+              "after a split, the same frame resolves to the correct new clip and unchanged source time")
 
         let projectID = copyID
         let trim = try await TrimClipTool().run(arguments: ["project_id": projectID, "clip_id": leftID, "source_start": 0.5, "source_end": 2.0], context: context, progress: { _ in })

@@ -323,7 +323,12 @@ public struct MCPToolCatalog: Sendable {
         ),
         MCPToolSpec(
             tool: GetTimelineTool(), title: "Read video timeline",
-            description: "Read every clip in the project's video track with stable clip IDs, ordered zero-based indices, source in/out points, output timeline positions, source-audio gain and outgoing transitions. This does not edit or open the project. Use its IDs and current times before split, trim, delete, reorder, transition or clip-audio calls.",
+            description: "Read every clip in the project's video track with stable clip IDs, ordered zero-based indices, source in/out points, output timeline positions, source-audio gain and outgoing transitions. This does not edit or open the project. For a precise visual cut, resolve_timeline_frame maps a time or output-frame index to an exact output time and source clip before split_clip.",
+            scope: .projectReadOnly, annotations: .reads
+        ),
+        MCPToolSpec(
+            tool: ResolveTimelineFrameTool(), title: "Resolve video frame",
+            description: "Resolve exactly one approximate output time (at_seconds) or zero-based output frame_index against this project's export frame-rate grid. Returns the exact output time, containing clip ID and source time, plus whether a split is safe there. Read-only: it does not move the editor playhead, start playback, capture an image or change the project. Use capture_frame with returned time_seconds to inspect the picture, then split_clip with that exact time if desired.",
             scope: .projectReadOnly, annotations: .reads
         ),
         MCPToolSpec(
@@ -454,7 +459,7 @@ public struct MCPToolCatalog: Sendable {
         // Output.
         MCPToolSpec(
             tool: CaptureFrameTool(), title: "Capture frame",
-            description: "Render one frame of a project as it will export (background, padding, zoom, captions) at a time in seconds, to check the look. Returns the frame as an image and saves it as a PNG in the project's assets folder (its path is in the result). Focus Studio opens the project in its editor.",
+            description: "Render one frame of a project as it will export (background, padding, zoom, captions) at a time in seconds. With exact_frame: true, snap the requested time to the project's output frame grid and use zero image-generator time tolerance; this can take longer. The result reports frame_index, actual_time_seconds and frame_matches_request so you can verify the requested frame was shown. Returns an image and saves a PNG in the project's assets folder. Focus Studio opens the project in its editor.",
             scope: .project, annotations: MCPToolAnnotations(readOnly: false), returnsImage: true
         ),
         MCPToolSpec(
@@ -504,7 +509,7 @@ public struct MCPToolCatalog: Sendable {
 
     Record: get_status → list_recording_sources → start_recording (bounded duration, countdown and control bar) → demo → stop_recording. wait_for_recording waits for a manual take. For Codex use interaction_mode codex; call capture_recording_frame before each perform_recording_action or perform_recording_text. observation_id is single-use; x/y use the full image. Text needs a focused webpage field and never presses Enter. Actions from your own tools are not intercepted.
 
-    Edit: get_timeline → split_clip/trim_clip/delete_clip/move_clip. Media: list_global_media_assets or import_global_media_asset → add_global_media_to_project → insert_media_asset (use the returned local ID). import_media_asset imports directly to a project. Adjust transitions, audio and zooms; preview with capture_frame, export_project. First edit creates a copy: use its project_id. Undo/redo with undo_clip_edit/redo_clip_edit. Preserve answers and speech. import_video creates a project from a file.
+    Edit: get_timeline → resolve_timeline_frame (exact output time; read-only, no seek) → capture_frame → split_clip/trim_clip/delete_clip/move_clip. Media: list_global_media_assets or import_global_media_asset → add_global_media_to_project → insert_media_asset (use returned local ID). import_media_asset imports to a project. Adjust transitions, audio and zooms; preview with capture_frame, export_project. First edit creates a copy: use its project_id. Undo/redo with undo_clip_edit/redo_clip_edit. Preserve answers and speech. import_video creates a project from a file.
 
     Conventions:
     - Times are seconds in the recording.

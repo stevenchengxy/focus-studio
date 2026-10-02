@@ -952,6 +952,7 @@
 "TIMELINE" = "TIMELINE";
 "Add chapter at playhead" = "Add chapter at playhead";
 "Click or drag to scrub" = "Click or drag to scrub";
+"Hover to preview; click or drag the ruler to place the playhead" = "Hover to preview; click or drag the ruler to place the playhead";
 
 /* Recording automation guidance */
 "No automatic zoom cues" = "No automatic zoom cues";

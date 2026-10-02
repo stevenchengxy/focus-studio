@@ -141,7 +141,6 @@ struct EditorVideoTimelineView: View {
     let currentTime: Double
     @Binding var selectedClipID: UUID?
     let onSelect: (UUID) -> Void
-    let onSeek: (Double) -> Void
     let onEdit: (DemoVideoEditOperation) -> Void
     let onInsertMedia: (UUID, Int) -> Void
     let isEditing: Bool
@@ -195,7 +194,6 @@ struct EditorVideoTimelineView: View {
                     selected: selectedClipID == placement.clip.id,
                     isEditing: isEditing,
                     onSelect: { onSelect(placement.clip.id) },
-                    onSeek: onSeek,
                     onEdit: onEdit
                 )
                 .offset(x: placement.start / duration * timelineWidth, y: 18)
@@ -345,7 +343,6 @@ private struct VideoClipBlock: View {
     let selected: Bool
     let isEditing: Bool
     let onSelect: () -> Void
-    let onSeek: (Double) -> Void
     let onEdit: (DemoVideoEditOperation) -> Void
 
     @State private var leadingTrim: Double?
@@ -411,10 +408,7 @@ private struct VideoClipBlock: View {
                 .padding(.horizontal, 6)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
-                .onTapGesture {
-                    onSelect()
-                    onSeek(placement.start)
-                }
+                .onTapGesture(perform: onSelect)
                 .gesture(
                     DragGesture(minimumDistance: 7, coordinateSpace: .named("video-timeline"))
                         .onChanged { value in
@@ -426,11 +420,9 @@ private struct VideoClipBlock: View {
                                               + Double(value.translation.width) / pixelsPerSecond)
                                 .clamped(to: 0...duration)
                             let destination = placements.firstIndex { targetTime < $0.end } ?? clipCount - 1
-                            withAnimation(reduceMotion ? nil : StudioMotion.hover) {
-                                moveOffset = 0
-                                if destination != index {
-                                    onEdit(.move(clipID: clip.id, toIndex: destination))
-                                }
+                            moveOffset = 0
+                            if destination != index {
+                                onEdit(.move(clipID: clip.id, toIndex: destination))
                             }
                         }
                 )

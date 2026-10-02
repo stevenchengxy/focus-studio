@@ -605,6 +605,27 @@ extension AIAssistantTests {
         let frame = try await CaptureFrameTool().run(arguments: ["time": 0.5, "width": 800], context: context, progress: { _ in })
         let frameData = try structured(frame, "capture_frame")
         check(frameData["path"]?.stringValue == frame.attachments.first?.path && frameData["width"] == 800 && frameData["time"] == 0.5 && (frameData["size_bytes"]?.intValue ?? 0) > 0, "capture_frame data: \(frameData)")
+        check(frameData["exact_frame_requested"] == nil && frameData["frame_index"] == nil,
+              "ordinary capture keeps the fast, tolerant preview path")
+        let exact = try await CaptureFrameTool().run(arguments: ["time": 1.5, "width": 800, "exact_frame": true],
+                                                     context: context, progress: { _ in })
+        let exactData = try structured(exact, "capture_frame exact")
+        check(exactData["exact_frame_requested"] == true
+              && exactData["frame_index"]?.intValue == 44
+              && exactData["frame_rate"]?.intValue == 30
+              && abs((exactData["time"]?.doubleValue ?? -1) - 44.0 / 30.0) < 0.000_000_001
+              && exactData["frame_matches_request"] == true,
+              "exact capture snaps the end to the last output frame and verifies the rendered timestamp: \(exactData)")
+        let captureSchema = CaptureFrameTool().parametersSchema["properties"] as? [String: Any]
+        check((captureSchema?["exact_frame"] as? [String: Any])?["type"] as? String == "boolean",
+              "capture_frame exposes an optional exact-frame preview")
+        await expectToolError("invalid exact-frame option", {
+            _ = try await CaptureFrameTool().run(arguments: ["time": 0.5, "exact_frame": "unclear"],
+                                                 context: context, progress: { _ in })
+        }) {
+            if case let .invalidArgument(message) = $0 { return message.contains("exact_frame") }
+            return false
+        }
 
         // Cancelling stops AVFoundation, leaves no partial file and surfaces as cancellation.
         let long = media.appendingPathComponent("long.mp4")

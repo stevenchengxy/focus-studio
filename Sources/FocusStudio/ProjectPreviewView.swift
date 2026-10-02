@@ -10,7 +10,9 @@ struct ProjectPreviewView: View {
     var seekRevision: Int
     @Binding var renderError: String?
     @State private var isSeeking = false
-    @State private var seekGeneration = 0
+    @State private var pendingSeekTime: Double?
+    @State private var seekTask: Task<Void, Never>?
+    @State private var seekTaskGeneration = UUID()
 
     @State private var player = AVPlayer()
     @State private var isLoading = true
@@ -100,6 +102,11 @@ struct ProjectPreviewView: View {
         .onDisappear {
             isVisible = false
             renderGeneration = UUID()
+            seekTaskGeneration = UUID()
+            seekTask?.cancel()
+            seekTask = nil
+            pendingSeekTime = nil
+            isSeeking = false
             player.pause()
             removeTimeObserver()
             player.replaceCurrentItem(with: nil)
@@ -114,18 +121,38 @@ struct ProjectPreviewView: View {
         }
         .onChange(of: seekRevision) { _, _ in
             guard isVisible else { return }
-            seekGeneration += 1
-            let generation = seekGeneration
             isSeeking = true
-            player.seek(
-                to: CMTime(seconds: currentTime, preferredTimescale: 60000),
-                toleranceBefore: .zero,
-                toleranceAfter: .zero
-            ) { _ in
-                Task { @MainActor in
-                    guard generation == seekGeneration else { return }
-                    isSeeking = false
+            // Dragging the ruler can submit many positions before AVPlayer
+            // decodes one exact frame. Keep the newest position and allow only
+            // one seek at a time, so obsolete decode requests cannot pile up.
+            pendingSeekTime = currentTime
+            if seekTask != nil { player.currentItem?.cancelPendingSeeks() }
+            drainSeeksIfNeeded()
+        }
+    }
+
+    private func drainSeeksIfNeeded() {
+        guard seekTask == nil else { return }
+        let generation = UUID()
+        seekTaskGeneration = generation
+        seekTask = Task { @MainActor in
+            while !Task.isCancelled, seekTaskGeneration == generation,
+                  let seconds = pendingSeekTime {
+                pendingSeekTime = nil
+                await player.seek(
+                    to: CMTime(seconds: seconds, preferredTimescale: 60_000),
+                    toleranceBefore: .zero,
+                    toleranceAfter: .zero
+                )
+                if pendingSeekTime != nil {
+                    // Limit continuous scrubbing to the display cadence while
+                    // preserving the final exact frame after the drag stops.
+                    try? await Task.sleep(for: .milliseconds(16))
                 }
+            }
+            if seekTaskGeneration == generation {
+                seekTask = nil
+                isSeeking = false
             }
         }
     }
