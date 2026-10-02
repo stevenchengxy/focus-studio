@@ -952,6 +952,7 @@
 "TIMELINE" = "时间轴";
 "Add chapter at playhead" = "在播放头处添加章节";
 "Click or drag to scrub" = "点击或拖动定位画面";
+"Hover to preview; click or drag the ruler to place the playhead" = "悬停预览；点击或拖动时间刻度，松开后确认播放位置";
 
 /* Recording automation guidance */
 "No automatic zoom cues" = "没有可用的自动缩放事件";
@@ -1305,4 +1306,31 @@
 "Use prepare_clip_ai_reference with these exact IDs to prepare a non-destructive reference. Suggest 2–3 visual treatments that keep real product UI and source audio separate from generated visuals. Do not call paid generation or alter the original clip until I confirm the treatment, video model and estimated price." = "请使用这些准确 ID 调用 prepare_clip_ai_reference，准备非破坏性的参考素材。提出 2–3 个视觉方案，保持真实产品界面与原声和生成画面分离。在我确认方案、视频模型及预估费用之前，不要启动付费生成或改动原片段。";
 "MCP ready." = "MCP 已就绪。";
 "MCP registered; Focus Studio is not accepting calls." = "MCP 已登记；Focus Studio 当前尚未接收工具调用。";
+"Manage" = "管理";
+"Select, rename, or move media to Trash" = "选择、重命名或删除素材";
+"Select, rename, or move projects to Trash" = "选择、重命名或删除项目";
+"Preview" = "预览";
+"Select media" = "选择素材";
+"Deselect media" = "取消选择素材";
+"Rename media" = "重命名素材";
+"Media name" = "素材名称";
+"Enter a name for this media." = "请输入素材名称。";
+"A media name cannot be empty." = "素材名称不能为空。";
+"Expand to source bounds" = "恢复至源视频边界";
+"Select %@" = "选择 %@";
+"Media actions: %@" = "素材操作：%@";
+"Move shared media to Trash?" = "将通用素材移到废纸篓？";
+"Only shared copies will be moved to Trash. Media already added to a demo stays in that project." = "只会移动通用素材库中的副本。已加入演示项目的素材不受影响。";
+"Record. Edit. Export." = "录制 · 剪辑 · 导出";
 "This paid generation cannot start because its model, settings, or price could not be verified. Review the model and duration in Settings, then try again." = "无法验证本次付费生成的模型、参数或价格，因此没有启动任务。请在设置中检查模型与时长后重试。";
+"Clip actions" = "片段操作";
+"Fine tune transition" = "细调转场";
+"Exit" = "出场";
+"Entrance" = "入场";
+"Exit curve" = "出场曲线";
+"Entry curve" = "入场曲线";
+"Linear" = "匀速";
+"Ease in" = "渐快";
+"Ease out" = "渐慢";
+"Apply transition" = "应用转场";
+"%.2f s" = "%.2f 秒";

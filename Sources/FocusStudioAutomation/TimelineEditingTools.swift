@@ -1,6 +1,26 @@
 import FocusStudioCore
 import Foundation
 
+/// The project's output-frame grid, shared by read-only positioning and
+/// opt-in exact-frame image capture. Time values are seconds, not source
+/// movie frame numbers (which may use a different cadence).
+enum TimelineFrameGrid {
+    static func count(duration: Double, rate: Int) -> Int? {
+        let scaled = duration * Double(rate)
+        guard duration.isFinite, duration > 0, scaled.isFinite,
+              scaled < Double(Int.max) / 2 else { return nil }
+        return max(1, Int(ceil(scaled - 0.000_000_01)))
+    }
+
+    static func index(at seconds: Double, rate: Int, count: Int) -> Int {
+        // A time produced by time(index:rate:) can multiply back to just
+        // below its integer frame due to binary floating-point rounding.
+        min(count - 1, max(0, Int(floor(seconds * Double(rate) + 0.000_000_1))))
+    }
+
+    static func time(index: Int, rate: Int) -> Double { Double(index) / Double(rate) }
+}
+
 /// The video track is a list of source ranges with stable clip IDs. The same
 /// operations back the editor and the assistant, so a tool cannot invent an
 /// edit that the visible timeline cannot reproduce.
@@ -35,11 +55,18 @@ enum TimelineToolSupport {
                 "timeline_end": .rounded(placement.end),
                 "source_start": .rounded(clip.sourceStart),
                 "source_end": .rounded(clip.sourceEnd),
+                "source_min": .rounded(timeline.sourceBounds(for: clip).lowerBound),
+                "source_max": .rounded(timeline.sourceBounds(for: clip).upperBound),
                 "duration": .rounded(placement.duration),
                 "source_audio_volume": .rounded(clip.sourceAudioVolume),
                 "media_asset_id": clip.mediaAssetID.map { AIJSONValue($0.uuidString) } ?? .null,
                 "transition_after": transition.map { value -> AIJSONValue in
-                    ["preset": AIJSONValue(value.preset.rawValue), "duration": .rounded(value.duration)]
+                    ["preset": AIJSONValue(value.preset.rawValue),
+                     "duration": .rounded(value.duration),
+                     "outgoing_duration": .rounded(value.resolvedOutgoingDuration),
+                     "incoming_duration": .rounded(value.resolvedIncomingDuration),
+                     "outgoing_curve": AIJSONValue(value.resolvedOutgoingCurve.rawValue),
+                     "incoming_curve": AIJSONValue(value.resolvedIncomingCurve.rawValue)]
                 } ?? .null,
             ]
         }
@@ -94,6 +121,83 @@ public struct GetTimelineTool: AIAssistantTool {
     }
 }
 
+/// Resolve a human or model's approximate position onto the project's output
+/// frame grid. This deliberately does not seek the editor: inspection is a
+/// preview, while moving the white playhead is an explicit UI action.
+public struct ResolveTimelineFrameTool: AIAssistantTool {
+    public let name = "resolve_timeline_frame"
+    public let summary = "Find the exact output frame at a time or zero-based frame index, with its clip ID and source time. Read-only: it does not move the editor playhead or edit the video."
+    public init() {}
+
+    public var parametersSchema: [String: Any] {
+        ["type": "object", "properties": [
+            "project_id": TimelineToolSupport.projectProperty,
+            "at_seconds": ["type": "number", "minimum": 0,
+                           "description": "Approximate output-timeline seconds from 0 to project duration. Supply this or frame_index, not both. The project duration selects the last visible frame."],
+            "frame_index": ["type": "integer", "minimum": 0,
+                            "description": "Exact zero-based output frame index, 0 or higher. Supply this or at_seconds, not both."],
+        ]]
+    }
+
+    public func run(arguments raw: [String: Any], context: AIAssistantContext,
+                    progress: @escaping @Sendable (String) -> Void) async throws -> AIToolResult {
+        let arguments = AIToolArguments(raw)
+        guard arguments.has("at_seconds") != arguments.has("frame_index") else {
+            throw AIToolError.invalidArgument("Supply exactly one of at_seconds or frame_index.")
+        }
+        let project = try await DemoEditingSupport.project(raw, context: context)
+        let timeline = try DemoVideoTimeline(project: project)
+        let rate = project.settings.frameRate.clamped(to: 1...120)
+        guard let frameCount = TimelineFrameGrid.count(duration: timeline.duration, rate: rate) else {
+            throw AIToolError.failed("The video timeline has no valid output frames.")
+        }
+
+        let index: Int
+        if arguments.has("at_seconds") {
+            guard let seconds = arguments.double("at_seconds"),
+                  seconds >= 0, seconds <= timeline.duration else {
+                throw AIToolError.invalidArgument("at_seconds must be between 0 and the output timeline duration.")
+            }
+            index = TimelineFrameGrid.index(at: seconds, rate: rate, count: frameCount)
+        } else {
+            guard let number = arguments.double("frame_index"),
+                  number >= 0, number.rounded() == number,
+                  let requested = Int(exactly: number), requested < frameCount else {
+                throw AIToolError.invalidArgument("frame_index must be an integer from 0 to \(frameCount - 1).")
+            }
+            index = requested
+        }
+
+        let time = TimelineFrameGrid.time(index: index, rate: rate)
+        guard let clipIndex = timeline.placements.firstIndex(where: { time >= $0.start && time < $0.end }) else {
+            throw AIToolError.failed("No clip contains output frame \(index). Refresh get_timeline.")
+        }
+        let placement = timeline.placements[clipIndex]
+        let sourceTime = placement.clip.sourceStart + time - placement.start
+        // The clip editor requires at least 0.1 seconds on both sides.
+        let canSplit = time > placement.start + 0.1 && time < placement.end - 0.1
+        let data: AIJSONValue = [
+            "project_id": AIJSONValue(project.id.uuidString),
+            "frame_rate": AIJSONValue(rate),
+            "frame_count": AIJSONValue(frameCount),
+            "frame_index": AIJSONValue(index),
+            "time_seconds": AIJSONValue(time),
+            "next_frame_time_seconds": AIJSONValue(min(timeline.duration, TimelineFrameGrid.time(index: index + 1, rate: rate))),
+            "clip_id": AIJSONValue(placement.clip.id.uuidString),
+            "clip_index": AIJSONValue(clipIndex),
+            "clip_timeline_start": AIJSONValue(placement.start),
+            "clip_timeline_end": AIJSONValue(placement.end),
+            "source_time_seconds": AIJSONValue(sourceTime),
+            "media_asset_id": placement.clip.mediaAssetID.map { AIJSONValue($0.uuidString) } ?? .null,
+            "can_split_here": AIJSONValue(canSplit),
+        ]
+        let message = context.isChinese
+            ? "第 \(index) 帧位于 \(AIToolSupport.seconds(time)) 秒，片段 \(clipIndex + 1)。仅定位预览，未移动播放针。"
+            : "Frame \(index) is at \(AIToolSupport.seconds(time)) s in clip \(clipIndex + 1). This read-only lookup did not move the playhead."
+        return AIToolResult(text: message + "\n" + String(decoding: try data.jsonData(), as: UTF8.self), data: data)
+    }
+}
+
 public struct SplitClipTool: AIAssistantTool {
     public let name = "split_clip"
     public let summary = "Split one clip at an absolute output-timeline time. The returned timeline has stable IDs for the resulting clips; first edit creates a separate working copy."
@@ -114,14 +218,14 @@ public struct SplitClipTool: AIAssistantTool {
 
 public struct TrimClipTool: AIAssistantTool {
     public let name = "trim_clip"
-    public let summary = "Set a clip's in/out points in source-video seconds. It retains the same clip ID and retimes later clips; read get_timeline first."
+    public let summary = "Set or restore a clip's in/out points in source-video seconds. It retains the same clip ID and retimes later clips; get_timeline shows the full source_min/source_max bounds."
     public init() {}
     public var parametersSchema: [String: Any] {
         ["type": "object", "required": ["clip_id", "source_start", "source_end"], "properties": [
             "project_id": TimelineToolSupport.projectProperty,
             "clip_id": TimelineToolSupport.clipProperty,
-            "source_start": ["type": "number", "description": "New in point in seconds of the source recording."],
-            "source_end": ["type": "number", "description": "New out point in seconds of the source recording; must be after source_start."],
+            "source_start": ["type": "number", "description": "New in point in seconds of this clip's source; may extend an earlier trim as far as source_min."],
+            "source_end": ["type": "number", "description": "New out point in seconds of this clip's source; must be after source_start and may extend an earlier trim as far as source_max."],
         ]]
     }
     public func run(arguments raw: [String: Any], context: AIAssistantContext, progress: @escaping @Sendable (String) -> Void) async throws -> AIToolResult {
@@ -170,7 +274,7 @@ public struct MoveClipTool: AIAssistantTool {
 
 public struct SetTransitionTool: AIAssistantTool {
     public let name = "set_transition"
-    public let summary = "Set the transition after one clip: cut, fadeToBlack or flash. Duration is 0.1–2 seconds for a visual effect; cut uses zero."
+    public let summary = "Set the transition after one clip. Optionally shape the outgoing and incoming sides separately with durations and visual curves."
     public init() {}
     public var parametersSchema: [String: Any] {
         ["type": "object", "required": ["clip_id", "preset", "duration"], "properties": [
@@ -178,6 +282,10 @@ public struct SetTransitionTool: AIAssistantTool {
             "clip_id": TimelineToolSupport.clipProperty,
             "preset": ["type": "string", "enum": ["cut", "fadeToBlack", "flash"], "description": "Visual transition after this clip; the final clip cannot have an outgoing transition."],
             "duration": ["type": "number", "minimum": 0, "maximum": 2, "description": "Seconds. Use 0 for cut, or 0.1–2 for fadeToBlack/flash."],
+            "outgoing_duration": ["type": "number", "minimum": 0, "maximum": 2, "description": "Optional 0–2 seconds fading the outgoing clip before the join. Supply with incoming_duration; their sum must equal duration."],
+            "incoming_duration": ["type": "number", "minimum": 0, "maximum": 2, "description": "Optional 0–2 seconds revealing the incoming clip after the join. Supply with outgoing_duration; their sum must equal duration."],
+            "outgoing_curve": ["type": "string", "enum": ["linear", "smooth", "easeIn", "easeOut"], "description": "Optional visual curve before the join; requires both side durations. Default linear."],
+            "incoming_curve": ["type": "string", "enum": ["linear", "smooth", "easeIn", "easeOut"], "description": "Optional visual curve after the join; requires both side durations. Default linear."],
         ]]
     }
     public func run(arguments raw: [String: Any], context: AIAssistantContext, progress: @escaping @Sendable (String) -> Void) async throws -> AIToolResult {
@@ -189,7 +297,29 @@ public struct SetTransitionTool: AIAssistantTool {
         guard (preset == .cut && duration == 0) || (preset != .cut && (0.1...2).contains(duration)) else {
             throw AIToolError.invalidArgument("Use duration 0 for cut, or 0.1–2 seconds for fadeToBlack/flash.")
         }
-        return try await TimelineToolSupport.edit(raw, context: context, operation: .setTransition(fromClipID: try TimelineToolSupport.clipID(args), preset: preset, duration: duration), progress: progress)
+        let clipID = try TimelineToolSupport.clipID(args)
+        let hasSideParameters = ["outgoing_duration", "incoming_duration", "outgoing_curve", "incoming_curve"].contains { raw[$0] != nil }
+        if hasSideParameters {
+            guard preset != .cut,
+                  let outgoing = args.double("outgoing_duration"),
+                  let incoming = args.double("incoming_duration"),
+                  outgoing >= 0, incoming >= 0,
+                  abs(outgoing + incoming - duration) < 0.000_001 else {
+                throw AIToolError.invalidArgument("Supply both non-negative side durations; their sum must equal the effect duration.")
+            }
+            let outgoingCurve = args.string("outgoing_curve").flatMap(DemoTransitionCurve.init(rawValue:)) ?? .linear
+            let incomingCurve = args.string("incoming_curve").flatMap(DemoTransitionCurve.init(rawValue:)) ?? .linear
+            if raw["outgoing_curve"] != nil && args.string("outgoing_curve").flatMap(DemoTransitionCurve.init(rawValue:)) == nil
+                || raw["incoming_curve"] != nil && args.string("incoming_curve").flatMap(DemoTransitionCurve.init(rawValue:)) == nil {
+                throw AIToolError.invalidArgument("Transition curves must be linear, smooth, easeIn or easeOut.")
+            }
+            return try await TimelineToolSupport.edit(raw, context: context,
+                operation: .setTransitionParameters(fromClipID: clipID, preset: preset,
+                                                    outgoingDuration: outgoing, incomingDuration: incoming,
+                                                    outgoingCurve: outgoingCurve, incomingCurve: incomingCurve), progress: progress)
+        }
+        return try await TimelineToolSupport.edit(raw, context: context,
+            operation: .setTransition(fromClipID: clipID, preset: preset, duration: duration), progress: progress)
     }
 }
 

@@ -17,6 +17,37 @@ extension AIAssistantTests {
         check(initialData["clip_count"]?.intValue == 1 && initialData["duration"]?.doubleValue == 6, "a legacy recording exposes one editable clip before any mutation")
         guard let firstID = initialData["clips"]?[0]?["id"]?.stringValue else { fatalError("FAIL: initial clip ID") }
 
+        let resolver = ResolveTimelineFrameTool()
+        let approximate = try await resolver.run(arguments: ["project_id": source.id.uuidString, "at_seconds": 2.06],
+                                                 context: context, progress: { _ in })
+        let frame = try structured(approximate, "resolve_timeline_frame")
+        check(frame["frame_rate"]?.intValue == 30 && frame["frame_count"]?.intValue == 180
+              && frame["frame_index"]?.intValue == 61
+              && abs((frame["time_seconds"]?.doubleValue ?? -1) - 61.0 / 30.0) < 0.000_000_001
+              && frame["clip_id"]?.stringValue == firstID
+              && abs((frame["source_time_seconds"]?.doubleValue ?? -1) - 61.0 / 30.0) < 0.000_000_001
+              && frame["can_split_here"] == true,
+              "a read-only frame lookup snaps to the exact output grid and returns its clip/source position")
+        check(app.videoEditCalls.isEmpty && box.project == source,
+              "resolving a frame never mutates the editor or timeline")
+        let exactSeconds = frame["time_seconds"]!.doubleValue!
+        let roundTrip = try await resolver.run(arguments: ["project_id": source.id.uuidString, "at_seconds": exactSeconds],
+                                               context: context, progress: { _ in })
+        check(roundTrip.data?["frame_index"]?.intValue == 61,
+              "an exact resolved time maps back to the same frame despite floating-point rounding")
+        let lastFrame = try await resolver.run(arguments: ["project_id": source.id.uuidString, "at_seconds": 6],
+                                               context: context, progress: { _ in })
+        check(lastFrame.data?["frame_index"]?.intValue == 179
+              && lastFrame.data?["next_frame_time_seconds"]?.doubleValue == 6,
+              "the project end resolves to the last visible output frame")
+        for invalid: [String: Any] in [[:], ["at_seconds": 1, "frame_index": 30],
+                                       ["at_seconds": -0.01], ["at_seconds": 6.01],
+                                       ["frame_index": 180], ["frame_index": 2.5]] {
+            await expectThrows("invalid or ambiguous timeline-frame position") {
+                _ = try await resolver.run(arguments: invalid, context: context, progress: { _ in })
+            }
+        }
+
         let split = try await SplitClipTool().run(arguments: ["project_id": source.id.uuidString, "clip_id": firstID, "at": 2.0], context: context, progress: { _ in })
         let splitData = try structured(split, "split_clip")
         guard let copyID = splitData["project_id"]?.stringValue,
@@ -26,17 +57,76 @@ extension AIAssistantTests {
               "first split returns a separate working project and stable/unique clip IDs")
         check(app.projects.first == source && app.videoEditCalls.count == 1, "source project remains untouched by a clip edit")
 
+        let nextClipFrame = try await resolver.run(arguments: ["project_id": copyID, "frame_index": 61],
+                                                  context: context, progress: { _ in })
+        check(nextClipFrame.data?["clip_id"]?.stringValue == rightID
+              && nextClipFrame.data?["clip_index"]?.intValue == 1
+              && abs((nextClipFrame.data?["source_time_seconds"]?.doubleValue ?? -1) - 61.0 / 30.0) < 0.000_000_001,
+              "after a split, the same frame resolves to the correct new clip and unchanged source time")
+
         let projectID = copyID
         let trim = try await TrimClipTool().run(arguments: ["project_id": projectID, "clip_id": leftID, "source_start": 0.5, "source_end": 2.0], context: context, progress: { _ in })
         let trimmed = try structured(trim, "trim_clip")
         check(trimmed["project_id"]?.stringValue == projectID && trimmed["duration"]?.doubleValue == 5.5
-              && trimmed["clips"]?[0]?["id"]?.stringValue == leftID && trimmed["clips"]?[0]?["source_start"]?.doubleValue == 0.5,
+              && trimmed["clips"]?[0]?["id"]?.stringValue == leftID && trimmed["clips"]?[0]?["source_start"]?.doubleValue == 0.5
+              && trimmed["clips"]?[0]?["source_min"]?.doubleValue == 0
+              && trimmed["clips"]?[0]?["source_max"]?.doubleValue == 6,
               "trim keeps the clip identity, applies source in/out points and retimes the track")
+        let restored = try await TrimClipTool().run(arguments: ["project_id": projectID, "clip_id": leftID, "source_start": 0, "source_end": 2], context: context, progress: { _ in })
+        check(restored.data?["duration"]?.doubleValue == 6
+              && restored.data?["clips"]?[0]?["source_start"]?.doubleValue == 0,
+              "Codex can extend a previously trimmed clip back to its original source boundary")
+        _ = try await TrimClipTool().run(arguments: ["project_id": projectID, "clip_id": leftID, "source_start": 0.5, "source_end": 2], context: context, progress: { _ in })
 
         let transition = try await SetTransitionTool().run(arguments: ["project_id": projectID, "clip_id": leftID, "preset": "fadeToBlack", "duration": 0.4], context: context, progress: { _ in })
         check(transition.data?["clips"]?[0]?["transition_after"]?["preset"]?.stringValue == "fadeToBlack"
-              && transition.data?["clips"]?[0]?["transition_after"]?["duration"]?.doubleValue == 0.4,
-              "transition receipt identifies the rendered preset and duration at the outgoing boundary")
+              && transition.data?["clips"]?[0]?["transition_after"]?["duration"]?.doubleValue == 0.4
+              && transition.data?["clips"]?[0]?["transition_after"]?["outgoing_duration"]?.doubleValue == 0.2
+              && transition.data?["clips"]?[0]?["transition_after"]?["incoming_duration"]?.doubleValue == 0.2,
+              "an existing symmetric transition call reports its effective in/out durations")
+        let shaped = try await SetTransitionTool().run(arguments: [
+            "project_id": projectID, "clip_id": leftID, "preset": "fadeToBlack", "duration": 0.4,
+            "outgoing_duration": 0.1, "incoming_duration": 0.3,
+            "outgoing_curve": "easeIn", "incoming_curve": "easeOut",
+        ], context: context, progress: { _ in })
+        let shapedReceipt = shaped.data?["clips"]?[0]?["transition_after"]
+        check(shapedReceipt?["duration"]?.doubleValue == 0.4
+              && shapedReceipt?["outgoing_duration"]?.doubleValue == 0.1
+              && shapedReceipt?["incoming_duration"]?.doubleValue == 0.3
+              && shapedReceipt?["outgoing_curve"]?.stringValue == "easeIn"
+              && shapedReceipt?["incoming_curve"]?.stringValue == "easeOut",
+              "Codex can set independently timed and curved transition sides and inspect the result")
+        let reread = try await GetTimelineTool().run(arguments: ["project_id": projectID], context: context, progress: { _ in })
+        check(reread.data?["clips"]?[0]?["transition_after"] == shapedReceipt,
+              "get_timeline returns the persisted transition parameters, not only the edit receipt")
+        let beforeInvalidTransition = box.project
+        let beforeInvalidCalls = app.videoEditCalls.count
+        await expectThrows("side durations must sum to the overall transition duration") {
+            _ = try await SetTransitionTool().run(arguments: [
+                "project_id": projectID, "clip_id": leftID, "preset": "flash", "duration": 0.4,
+                "outgoing_duration": 0.1, "incoming_duration": 0.2,
+            ], context: context, progress: { _ in })
+        }
+        await expectThrows("both side durations are required") {
+            _ = try await SetTransitionTool().run(arguments: [
+                "project_id": projectID, "clip_id": leftID, "preset": "flash", "duration": 0.4,
+                "outgoing_duration": 0.1,
+            ], context: context, progress: { _ in })
+        }
+        await expectThrows("an unknown visual curve is rejected") {
+            _ = try await SetTransitionTool().run(arguments: [
+                "project_id": projectID, "clip_id": leftID, "preset": "flash", "duration": 0.4,
+                "outgoing_duration": 0.1, "incoming_duration": 0.3, "incoming_curve": "bounce",
+            ], context: context, progress: { _ in })
+        }
+        await expectThrows("a transition side cannot exceed its adjacent clip") {
+            _ = try await SetTransitionTool().run(arguments: [
+                "project_id": projectID, "clip_id": leftID, "preset": "flash", "duration": 1.7,
+                "outgoing_duration": 1.6, "incoming_duration": 0.1,
+            ], context: context, progress: { _ in })
+        }
+        check(box.project == beforeInvalidTransition && app.videoEditCalls.count == beforeInvalidCalls,
+              "invalid transition parameters leave the working project and edit history unchanged")
         let audio = try await SetClipAudioTool().run(arguments: ["project_id": projectID, "clip_id": leftID, "volume": 0.0], context: context, progress: { _ in })
         check(audio.data?["clips"]?[0]?["source_audio_volume"]?.doubleValue == 0,
               "clip-audio receipt identifies the muted segment")

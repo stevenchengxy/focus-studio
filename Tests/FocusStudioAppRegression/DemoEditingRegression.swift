@@ -318,6 +318,15 @@ enum DemoEditingRegression {
                    "Undo also restores ordinary editor metadata without discarding the timeline")
         let titleRedone = try await model.redoVideoEdit(projectID: working.id)
         try expect(titleRedone.title == "Edited title", "Redo restores the editor title change")
+        var rapid = titleRedone
+        for index in 0..<80 {
+            rapid.title = "Drag snapshot \(index)"
+            try expect(model.updateActiveProject(rapid), "Rapid editor snapshots remain accepted")
+        }
+        await model.flushProjectEdits()
+        let latestSaved = try await fixture.store.loadProjects().first(where: { $0.id == working.id })
+        try expect(latestSaved?.title == "Drag snapshot 79",
+                   "Coalesced editor saves must persist the last snapshot after a drag")
         let copied = try await fixture.store.createVideoEditingCopy(from: redone, edited: redone, title: "Next working copy")
         try expect(copied.mediaAssets?.count == 2
                    && copied.mediaAssets?.allSatisfy { $0.filePath.contains(copied.id.uuidString) } == true,
