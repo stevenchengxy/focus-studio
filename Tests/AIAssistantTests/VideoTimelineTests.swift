@@ -43,6 +43,32 @@ extension AIAssistantTests {
                 && actualTrimmedClickTimes.count == expectedTrimmedClickTimes.count
                 && zip(actualTrimmedClickTimes, expectedTrimmedClickTimes).allSatisfy { abs($0 - $1) < 0.000_001 },
               "trimming remaps interaction times without changing the source: \(actualTrimmedClickTimes)")
+        let shortened = try JSONDecoder().decode(RecordingProject.self, from: JSONEncoder().encode(project))
+        let shortenedTimeline = try DemoVideoTimeline(project: shortened)
+        check(shortenedTimeline.sourceBounds(for: shortenedTimeline.clips[0]) == 0...3,
+              "a saved trimmed clip still exposes the full immutable recording")
+        let restoredStart = try shortenedTimeline.applying(
+            .trim(clipID: thirdID, sourceStart: 2, sourceEnd: 3), to: shortened)
+        check(abs(restoredStart.duration - 3) < 0.000_001
+                && restoredStart.videoClips?.first?.sourceStart == 2
+                && restoredStart.videoClips?.first?.sourceEnd == 3
+                && abs(restoredStart.resolvedClickEvents.first!.time - 0.5) < 0.000_001,
+              "dragging a previously shortened leading edge outward restores source frames and retimes retained events")
+        let shortenedEnd = try DemoVideoTimeline(project: restoredStart).applying(
+            .trim(clipID: thirdID, sourceStart: 2, sourceEnd: 2.7), to: restoredStart)
+        let restoredEnd = try DemoVideoTimeline(project: shortenedEnd).applying(
+            .trim(clipID: thirdID, sourceStart: 2, sourceEnd: 3), to: shortenedEnd)
+        check(abs(restoredEnd.duration - 3) < 0.000_001
+                && restoredEnd.videoClips?.first?.sourceEnd == 3,
+              "dragging a previously shortened trailing edge outward restores the source end")
+        await expectThrows("a restored trim cannot move before the source movie") {
+            _ = try shortenedTimeline.applying(
+                .trim(clipID: thirdID, sourceStart: -0.1, sourceEnd: 3), to: shortened)
+        }
+        await expectThrows("a restored trim cannot move after the source movie") {
+            _ = try shortenedTimeline.applying(
+                .trim(clipID: thirdID, sourceStart: 2.2, sourceEnd: 3.1), to: shortened)
+        }
         project = try DemoVideoTimeline(project: project).applying(
             .setTransition(fromClipID: thirdID, preset: .fadeToBlack, duration: 0.4), to: project)
         project = try DemoVideoTimeline(project: project).applying(.setClipAudio(clipID: thirdID, volume: 0), to: project)
@@ -54,6 +80,60 @@ extension AIAssistantTests {
         let restoredTimeline = try DemoVideoTimeline(project: restored)
         check(restoredTimeline.clips.first?.sourceAudioVolume == 0,
               "timeline edits survive a project JSON round trip")
+        let legacyTransitionJSON = Data("""
+            {"fromClipID":"\(thirdID.uuidString)","preset":"fadeToBlack","duration":0.4}
+            """.utf8)
+        let legacyTransition = try JSONDecoder().decode(DemoVideoTransition.self, from: legacyTransitionJSON)
+        check(legacyTransition.outgoingDuration == nil && legacyTransition.incomingDuration == nil
+                && legacyTransition.resolvedOutgoingDuration == 0.2
+                && legacyTransition.resolvedIncomingDuration == 0.2
+                && legacyTransition.resolvedOutgoingCurve == .linear
+                && legacyTransition.resolvedIncomingCurve == .linear,
+              "a transition saved before in/out controls still decodes as an even linear effect")
+        let shaped = try restoredTimeline.applying(
+            .setTransitionParameters(fromClipID: thirdID, preset: .fadeToBlack,
+                                     outgoingDuration: 0.1, incomingDuration: 0.3,
+                                     outgoingCurve: .easeIn, incomingCurve: .easeOut), to: restored)
+        let shapedRoundTrip = try JSONDecoder().decode(RecordingProject.self, from: JSONEncoder().encode(shaped))
+        let shapedTimeline = try DemoVideoTimeline(project: shapedRoundTrip)
+        let shapedTransition = shapedTimeline.transition(after: thirdID)
+        check(shapedTransition?.duration == 0.4
+                && shapedTransition?.resolvedOutgoingDuration == 0.1
+                && shapedTransition?.resolvedIncomingDuration == 0.3
+                && shapedTransition?.resolvedOutgoingCurve == .easeIn
+                && shapedTransition?.resolvedIncomingCurve == .easeOut,
+              "different exit/entry times and visual curves survive a full project JSON round trip")
+        check(DemoTransitionCurve.easeIn.value(at: 0.5) == 0.25
+                && DemoTransitionCurve.easeOut.value(at: 0.5) == 0.75
+                && DemoTransitionCurve.smooth.value(at: 0.5) == 0.5,
+              "transition curves shape the two visual halves independently")
+        let keptEffect = try shapedTimeline.clipped(to: DemoTimelineEdit(
+            keepRanges: [.init(start: 0, end: 1.3)], sourceDuration: shapedTimeline.duration))
+        check(keptEffect.transition(after: thirdID)?.resolvedOutgoingDuration == 0.1
+                && keptEffect.transition(after: thirdID)?.resolvedIncomingDuration == 0.3
+                && keptEffect.transition(after: thirdID)?.resolvedIncomingCurve == .easeOut,
+              "a full join preserved by a keep-range cut retains its asymmetric effect")
+        let cutEffect = try shapedTimeline.clipped(to: DemoTimelineEdit(
+            keepRanges: [.init(start: 0, end: 0.8), .init(start: 0.9, end: 1.3)],
+            sourceDuration: shapedTimeline.duration))
+        check(cutEffect.transition(after: thirdID)?.preset == .cut,
+              "a keep-range cut through the incoming effect removes that incomplete transition")
+        await expectThrows("an exit cannot extend beyond its outgoing clip") {
+            _ = try restoredTimeline.applying(
+                .setTransitionParameters(fromClipID: thirdID, preset: .flash,
+                                         outgoingDuration: 0.85, incomingDuration: 0.15,
+                                         outgoingCurve: .linear, incomingCurve: .linear), to: restored)
+        }
+        let longEntry = try restoredTimeline.applying(
+            .setTransitionParameters(fromClipID: thirdID, preset: .fadeToBlack,
+                                     outgoingDuration: 0.1, incomingDuration: 0.75,
+                                     outgoingCurve: .linear, incomingCurve: .linear), to: restored)
+        await expectThrows("incoming and outgoing effects cannot overlap inside a middle clip") {
+            _ = try DemoVideoTimeline(project: longEntry).applying(
+                .setTransitionParameters(fromClipID: originalID, preset: .flash,
+                                         outgoingDuration: 0.4, incomingDuration: 0.1,
+                                         outgoingCurve: .linear, incomingCurve: .linear), to: longEntry)
+        }
         let prepared = try await ProjectVideoRenderer.prepare(project: restored)
         check(abs(prepared.duration - 2.8) < 0.000_001 && prepared.audioMix != nil,
               "preview composes the edited clips and source-audio mix")
@@ -185,6 +265,17 @@ extension AIAssistantTests {
         project = try DemoVideoTimeline(project: project).applying(
             .setTransition(fromClipID: imageClipID, preset: .fadeToBlack, duration: 0.2), to: project)
         let videoClipID = try DemoVideoTimeline(project: project).clips[1].id
+        let shortenedImportedMovie = try DemoVideoTimeline(project: project)
+        let restoredImportedMovie = try shortenedImportedMovie.applying(
+            .trim(clipID: videoClipID, sourceStart: 0, sourceEnd: 1.2), to: project)
+        check(abs(restoredImportedMovie.duration - (project.duration + 0.4)) < 0.000_001
+                && restoredImportedMovie.videoClips?[1].sourceEnd == 1.2
+                && shortenedImportedMovie.sourceBounds(for: shortenedImportedMovie.clips[1]) == 0...1.2,
+              "an imported movie can extend to its own source duration, independent of the recording")
+        await expectThrows("an imported clip cannot extend beyond its source") {
+            _ = try shortenedImportedMovie.applying(
+                .trim(clipID: videoClipID, sourceStart: 0, sourceEnd: 1.3), to: project)
+        }
         project = try DemoVideoTimeline(project: project).applying(
             .split(clipID: videoClipID, at: 1.4), to: project)
         let edited = try DemoVideoTimeline(project: project)

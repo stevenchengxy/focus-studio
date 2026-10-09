@@ -18,6 +18,7 @@ wait_for_recording
 analyze_demo_pacing
 create_demo_cut
 get_timeline
+resolve_timeline_frame
 list_media_assets
 list_global_media_assets
 import_global_media_asset

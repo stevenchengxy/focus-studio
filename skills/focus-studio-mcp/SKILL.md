@@ -36,7 +36,7 @@ recording shows a countdown and a control bar. Focus Studio is the only writer o
 | Status and library | `get_status`, `list_projects`, `get_project`, `rename_project`, `delete_project` |
 | New projects from files | `import_video`, `create_screenshot_demo` |
 | Recording | `list_recording_sources`, `start_recording`, `capture_recording_frame`, `perform_recording_action`, `perform_recording_text`, `stop_recording`, `wait_for_recording` |
-| Editing (by `project_id`) | `analyze_demo_pacing`, `create_demo_cut`, `get_timeline`, `split_clip`, `trim_clip`, `delete_clip`, `move_clip`, `set_transition`, `set_clip_audio`, `set_image_duration`, `undo_clip_edit`, `redo_clip_edit`, `update_zoom`, `add_zoom`, `remove_zoom`, `set_zoom_style`, `update_settings`, `set_chapters`, `set_background_image`, `set_background_music`, `set_sound_effects` |
+| Editing (by `project_id`) | `analyze_demo_pacing`, `create_demo_cut`, `get_timeline`, `resolve_timeline_frame`, `split_clip`, `trim_clip`, `delete_clip`, `move_clip`, `set_transition`, `set_clip_audio`, `set_image_duration`, `undo_clip_edit`, `redo_clip_edit`, `update_zoom`, `add_zoom`, `remove_zoom`, `set_zoom_style`, `update_settings`, `set_chapters`, `set_background_image`, `set_background_music`, `set_sound_effects` |
 | Shared media library | `list_global_media_assets`, `import_global_media_asset`, `add_global_media_to_project` |
 | Current project's media | `list_media_assets`, `import_media_asset`, `insert_media_asset` |
 | Output | `capture_frame`, `export_project`, `assemble_video`, `list_assets` |
@@ -59,7 +59,14 @@ Use `update_zoom` with an existing `zoom_id` for individual start/end/target/sca
 `set_zoom_style` for global motion, before those local edits; automatic regeneration can change segments.
 If these newer tools are absent from the connected catalog, update Focus Studio before claiming to use them.
 
-For precise clip work, call `get_timeline` first. `split_clip.at` is an absolute **output** time;
+For precise clip work, call `get_timeline` first. Use `resolve_timeline_frame` with
+either approximate `at_seconds` or a zero-based `frame_index` to obtain the
+exact output-frame `time_seconds`, containing `clip_id` and `source_time_seconds`.
+This lookup is read-only: it does not move the editor's confirmed white playhead.
+Use `capture_frame` at that returned time with `exact_frame: true` to inspect
+the image. This slower path reports `frame_matches_request`; if true, pass the
+exact time and clip ID to `split_clip` when `can_split_here` is also true.
+`split_clip.at` is an absolute **output** time;
 `trim_clip.source_start` and `source_end` are positions in the immutable **source** movie. Use IDs from the
 latest receipt, since a split creates another clip ID. `move_clip.to_index` starts at zero. `set_transition`
 supports `cut`, `fadeToBlack` and `flash` on a clip with a following clip; `set_clip_audio.volume` controls
