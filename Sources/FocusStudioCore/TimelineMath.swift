@@ -239,6 +239,7 @@ public enum TimelineMath {
             updated.isInstant = previous.isInstant
             updated.zoomEaseIn = previous.zoomEaseIn
             updated.zoomEaseOut = previous.zoomEaseOut
+            updated.motionPreset = previous.motionPreset
             return updated
         }
         project.zoomSegments = (manual + automatic).sorted { $0.start < $1.start }
@@ -310,6 +311,9 @@ public enum TimelineMath {
         // Folding in timeline order lets a newer click finish at its own target.
         var focusX = 0.5
         var focusY = 0.5
+        var rotation = 0.0
+        var offsetX = 0.0
+        var offsetY = 0.0
         var previousVisible: (x: Double, y: Double)?
         for entry in active {
             let fullScale = max(1, entry.segment.scale)
@@ -343,14 +347,64 @@ public enum TimelineMath {
             }
             focusX += (visibleX - focusX) * weight
             focusY += (visibleY - focusY) * weight
+            let motion = motionOffset(
+                for: entry.segment, at: time, settings: settings
+            )
+            // The newer cue takes over progressively, just like the focal
+            // point. An ordinary click therefore also settles an authored move.
+            rotation += (motion.rotation - rotation) * entry.amount
+            offsetX += (motion.x - offsetX) * entry.amount
+            offsetY += (motion.y - offsetY) * entry.amount
             previousVisible = (visibleX, visibleY)
         }
         return ZoomState(
             scale: scale,
             centerX: clampedFocus(focusX, scale: scale),
             centerY: clampedFocus(focusY, scale: scale),
-            progress: combinedAmount
+            progress: combinedAmount,
+            rotationRadians: rotation,
+            offsetX: offsetX,
+            offsetY: offsetY
         )
+    }
+
+    private static func motionOffset(
+        for segment: ZoomSegment,
+        at time: Double,
+        settings: ProjectSettings
+    ) -> (rotation: Double, x: Double, y: Double) {
+        guard segment.motionPreset != .classic, !segment.isInstant else { return (0, 0, 0) }
+        let timing = ZoomTiming.resolve(segment, settings: settings)
+        let enter = timing.easeIn > 0
+            ? ((time - timing.start) / timing.easeIn).clamped(to: 0...1)
+            : 1
+        // A raised sine is at rest at both ends, so a preset never causes an
+        // abrupt pose change when it enters the timeline or finishes settling.
+        let entranceSine = sin(.pi * enter)
+        let entrance = entranceSine * entranceSine
+        let direction = segment.targetX >= 0.5 ? 1.0 : -1.0
+        switch segment.motionPreset {
+        case .classic:
+            return (0, 0, 0)
+        case .tiltReveal:
+            // About three degrees, with a small diagonal travel, then level
+            // before the viewer needs to read the focused interface.
+            return (direction * 0.052 * entrance,
+                    direction * 0.016 * entrance,
+                    -direction * 0.012 * entrance)
+        case .slideFocus:
+            return (0,
+                    direction * 0.050 * entrance,
+                    (segment.targetY >= 0.5 ? 1 : -1) * 0.010 * entrance)
+        case .softDrift:
+            let holdStart = timing.start + timing.easeIn
+            let holdEnd = timing.end - timing.easeOut
+            guard holdEnd > holdStart else { return (0, 0, 0) }
+            let hold = ((time - holdStart) / (holdEnd - holdStart)).clamped(to: 0...1)
+            let driftSine = sin(.pi * hold)
+            let drift = driftSine * driftSine
+            return (0, direction * 0.012 * drift, -0.007 * drift)
+        }
     }
 
     /// Retimes existing automatic zooms when the global Hold control changes.

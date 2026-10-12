@@ -88,6 +88,7 @@ enum FocusStudioE2E {
             try await CursorVisibilityValidation.run(project: project, outputDirectory: outputDirectory)
             try await PauseRecordingValidation.run(sourceURL: sourceURL, outputDirectory: outputDirectory)
             try await validateZoomTimingRendering(project: project, outputDirectory: outputDirectory)
+            try await validateZoomMotionPresetRendering(project: project, outputDirectory: outputDirectory)
             let chapterCaptionDifference = try await validateChapterCaptionRendering(
                 project: project,
                 exportedURL: renderedURL,
@@ -1584,6 +1585,90 @@ enum FocusStudioE2E {
         }
         let report = ZoomTimingValidationReport(status: "PASS", outputPaths: outputPaths, variants: timingVariants, maximumPreviewExportDifference: maximumPreviewExportDifference, frameComparisons: frameComparisons)
         try Data(try jsonString(report).utf8).write(to: outputDirectory.appendingPathComponent("focus-studio-zoom-timing-report.json"), options: .atomic)
+    }
+
+    /// A selectable camera move must survive a project round-trip, visibly
+    /// differ from the classic move, and use the same frames in the editor
+    /// preview and exported movie. Frames before and after the cue must remain
+    /// identical, so a flourish cannot leak into the adjacent shot.
+    private static func validateZoomMotionPresetRendering(
+        project: RecordingProject,
+        outputDirectory: URL
+    ) async throws {
+        var fixture = project
+        fixture.title = "Zoom motion preset validation"
+        fixture.cursorSamples = []
+        fixture.clickEvents = []
+        fixture.typingActivity = []
+        fixture.chapters = nil
+        fixture.settings.showClickRing = false
+        fixture.settings.motionBlur = 0
+        var cue = ZoomSegment(
+            start: 0.25, end: 2.125, targetX: 0.32, targetY: 0.63,
+            scale: 2, kind: .manual, zoomEaseIn: 0.6, zoomEaseOut: 0.5
+        )
+        let probes = [0.125, 0.375, 0.5, 0.75, 1.25, 1.875, 2.25]
+        var baseline: [Double: CGImage] = [:]
+
+        for preset in ZoomMotionPreset.allCases {
+            cue.motionPreset = preset
+            fixture.zoomSegments = [cue]
+            let restored = try JSONDecoder().decode(
+                RecordingProject.self,
+                from: JSONEncoder().encode(fixture)
+            )
+            try require(
+                restored.zoomSegments.first?.motionPreset == preset,
+                "zoom motion preset must survive save/reopen"
+            )
+            let preview = makeImageGenerator(
+                for: try await ProjectVideoRenderer.prepare(project: restored)
+            )
+            let outputURL = outputDirectory.appendingPathComponent(
+                "focus-studio-zoom-motion-\(preset.rawValue).mp4"
+            )
+            _ = try await ProjectVideoRenderer.export(project: restored, to: outputURL)
+            let exported = AVAssetImageGenerator(asset: AVURLAsset(url: outputURL))
+            exported.requestedTimeToleranceBefore = .zero
+            exported.requestedTimeToleranceAfter = .zero
+            var largestDifference = 0.0
+            for seconds in probes {
+                let time = CMTime(seconds: seconds, preferredTimescale: 600)
+                let (previewFrame, _) = try await preview.image(at: time)
+                let (exportedFrame, _) = try await exported.image(at: time)
+                try require(
+                    imageDifference(previewFrame, exportedFrame).meanAbsolute < 3,
+                    "\(preset) preview/export diverged at \(seconds)s"
+                )
+                if preset == .classic {
+                    baseline[seconds] = exportedFrame
+                } else if let classicFrame = baseline[seconds] {
+                    let difference = imageDifference(exportedFrame, classicFrame).meanAbsolute
+                    if seconds < cue.start || seconds > cue.end {
+                        try require(
+                            difference < 2,
+                            "\(preset) changed a frame outside its zoom interval"
+                        )
+                    } else {
+                        largestDifference = max(largestDifference, difference)
+                    }
+                }
+                if seconds == 0.5 || seconds == 1.25 {
+                    try writeReviewFrame(
+                        exportedFrame,
+                        to: outputDirectory.appendingPathComponent(
+                            "focus-studio-zoom-motion-\(preset.rawValue)-\(seconds).png"
+                        )
+                    )
+                }
+            }
+            if preset != .classic {
+                try require(
+                    largestDifference > 0.4,
+                    "\(preset) did not produce a visible alternative camera move"
+                )
+            }
+        }
     }
 
     /// Chapter captions are part of the shared compositor: the pill must show

@@ -112,6 +112,10 @@ extension AIAssistantTests {
         let addZoom = catalog.tool(named: "add_zoom")!
         check(addZoom.inputSchema["required"] == ["project_id", "start", "end", "x", "y"], "add_zoom keeps its own required arguments: \(addZoom.inputSchema["required"] ?? .null)")
         check(addZoom.description.contains("top-left") && addZoom.description.contains("seconds"), "add_zoom explains coordinates and times")
+        let motionValues = Set(addZoom.inputSchema["properties"]?["motion_preset"]?["enum"]?.arrayValue?.compactMap(\.stringValue) ?? [])
+        check(motionValues == Set(["classic", "tiltReveal", "slideFocus", "softDrift"]), "add_zoom advertises all camera motion presets")
+        let updateMotionValues = Set(catalog.tool(named: "update_zoom")?.inputSchema["properties"]?["motion_preset"]?["enum"]?.arrayValue?.compactMap(\.stringValue) ?? [])
+        check(updateMotionValues == motionValues && catalog.tool(named: "update_zoom")!.description.contains("zoom_id"), "update_zoom can apply a preset to one stable zoom ID")
         let start = catalog.tool(named: "start_recording")!
         check(start.inputSchema["required"] == ["source"], "start_recording requires only its source")
         check(start.inputSchema["properties"]?["duration"]?["minimum"] == 1 && start.inputSchema["properties"]?["duration"]?["maximum"] == 600 && start.inputSchema["properties"]?["duration"]?["type"] == "number", "start_recording takes a bounded duration: \(start.inputSchema["properties"]?["duration"] ?? .null)")

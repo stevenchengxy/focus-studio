@@ -737,7 +737,7 @@ extension AIToolSupport {
     }
 
     static func zoomLine(_ segment: ZoomSegment) -> String {
-        var text = "\(seconds(segment.start))–\(seconds(segment.end)) s at (\(String(format: "%.2f", segment.targetX)), \(String(format: "%.2f", segment.targetY))) ×\(String(format: "%.2f", segment.scale)) \(segment.kind.rawValue)"
+        var text = "\(seconds(segment.start))–\(seconds(segment.end)) s at (\(String(format: "%.2f", segment.targetX)), \(String(format: "%.2f", segment.targetY))) ×\(String(format: "%.2f", segment.scale)) \(segment.kind.rawValue), motion \(segment.motionPreset.rawValue)"
         if !segment.isEnabled { text += " (disabled)" }
         return text
     }
@@ -1575,7 +1575,7 @@ struct CloseEditorTool: AIAssistantTool {
 
 public struct AddZoomTool: AIAssistantTool {
     public let name = "add_zoom"
-    public let summary = "Add a manual zoom to the open project: the camera moves to (x, y) on the recording between start and end seconds. Existing automatic zooms stay."
+    public let summary = "Add a manual zoom with an optional motion preset to the open project: the camera moves to (x, y) on the recording between start and end seconds. Existing automatic zooms stay."
 
     static let minimumDuration = 0.2
     static let scaleRange = 1.1...3.0
@@ -1592,6 +1592,7 @@ public struct AddZoomTool: AIAssistantTool {
                 "x": ["type": "number", "minimum": 0, "maximum": 1, "description": "Horizontal centre of the zoom, 0 = left edge, 1 = right edge."],
                 "y": ["type": "number", "minimum": 0, "maximum": 1, "description": "Vertical centre, 0 = top, 1 = bottom."],
                 "scale": ["type": "number", "minimum": 1.1, "maximum": 3, "description": "Magnification, from 1.1 to 3; by default the project's zoom scale."],
+                "motion_preset": ZoomMotionToolSupport.property,
             ],
         ]
     }
@@ -1603,6 +1604,7 @@ public struct AddZoomTool: AIAssistantTool {
     ) async throws -> AIToolResult {
         let arguments = AIToolArguments(raw)
         let project = try await AIToolSupport.requireProject(context)
+        let motionPreset = try ZoomMotionToolSupport.requested(arguments) ?? .classic
         func number(_ key: String) throws -> Double {
             guard arguments.has(key) else { throw AIToolError.invalidArgument("Missing required argument \"\(key)\".") }
             guard let value = arguments.double(key) else { throw AIToolError.invalidArgument("\"\(key)\" must be a number.") }
@@ -1629,7 +1631,7 @@ public struct AddZoomTool: AIAssistantTool {
             scale = requested.clamped(to: Self.scaleRange)
             if scale != requested { notes.append("scale clamped to \(String(format: "%.2f", scale))") }
         }
-        let segment = ZoomSegment(start: start, end: min(end, duration), targetX: x, targetY: y, scale: scale, kind: .manual)
+        let segment = ZoomSegment(start: start, end: min(end, duration), targetX: x, targetY: y, scale: scale, kind: .manual, motionPreset: motionPreset)
         let updated = try await AIToolSupport.edit(context, projectID: project.id) { current -> (index: Int, count: Int) in
             current.zoomSegments.append(segment)
             let index = AIToolSupport.orderedZooms(current).first { $0.segment.id == segment.id }?.index ?? current.zoomSegments.count

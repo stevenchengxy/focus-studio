@@ -126,6 +126,28 @@ extension AIAssistantTests {
         box.project = zoomProject
         let analysis = try await AnalyzeDemoPacingTool().run(arguments: [:], context: context, progress: { _ in })
         check(analysis.data?["source_audio_present"]?.boolValue == true && analysis.data?["edited_duration"]?.doubleValue == 3, "pacing tool actually inspects media audio before suggesting cuts")
+
+        var motionProject = makeProject(sourceVideoPath: video.path, duration: 3)
+        motionProject.zoomSegments = []
+        let motionBox = ProjectBox(motionProject)
+        let motionContext = makeContext(root: root.appendingPathComponent("motion-presets"), box: motionBox)
+        let addedMotion = try await AddZoomTool().run(arguments: ["start": 0.2, "end": 2.6, "x": 0.45, "y": 0.55, "motion_preset": "tiltReveal"], context: motionContext, progress: { _ in })
+        let motionID = addedMotion.data?["zoom_id"]?.stringValue ?? ""
+        check(addedMotion.data?["zoom"]?["motion_preset"] == "tiltReveal" && motionBox.project?.zoomSegments.first?.motionPreset == .tiltReveal,
+              "add_zoom stores and returns the diagonal motion preset")
+        let motionReport = AIProjectReport.data(of: motionBox.project!, isOpen: true, assetsDirectory: nil)
+        check(motionReport["zooms"]?.arrayValue?.first?["motion_preset"] == "tiltReveal"
+              && motionReport["zoom_motion_presets"]?.arrayValue?.count == ZoomMotionPreset.allCases.count,
+              "get_project exposes each zoom's preset and enumerates available motion styles")
+        let revisedMotion = try await UpdateZoomTool().run(arguments: ["zoom_id": motionID, "motion_preset": "softDrift"], context: motionContext, progress: { _ in })
+        check(revisedMotion.data?["zoom"]?["motion_preset"] == "softDrift"
+              && motionBox.project?.zoomSegments.first?.id.uuidString == motionID,
+              "update_zoom changes only motion while preserving the zoom identity")
+        let beforeBadMotion = motionBox.project
+        await expectThrows("unknown motion preset rejected") {
+            _ = try await UpdateZoomTool().run(arguments: ["zoom_id": motionID, "motion_preset": "glitch"], context: motionContext, progress: { _ in })
+        }
+        check(motionBox.project == beforeBadMotion, "an invalid preset leaves the zoom unchanged")
     }
 
     @MainActor

@@ -1,4 +1,5 @@
 import FocusStudioCore
+import CoreGraphics
 import Foundation
 
 /// Camera-motion guarantees behind the "Cinematic" curve, envelope blending,
@@ -36,6 +37,84 @@ func zoomMotionFailures() -> [String] {
     settings.zoomChainGap = 99
     expect(settings.resolvedZoomChainGap == ProjectSettings.maximumZoomChainGap, "chain gap is clamped")
     settings.zoomChainGap = nil
+
+    // --- Per-segment camera moves ------------------------------------------
+    let presetZoom = ZoomSegment(
+        start: 1, end: 4, targetX: 0.75, targetY: 0.4, scale: 1.8,
+        kind: .manual, zoomEaseIn: 0.8, zoomEaseOut: 0.5,
+        motionPreset: .tiltReveal
+    )
+    let classic = ZoomSegment(
+        start: presetZoom.start, end: presetZoom.end,
+        targetX: presetZoom.targetX, targetY: presetZoom.targetY,
+        scale: presetZoom.scale, kind: .manual,
+        zoomEaseIn: presetZoom.zoomEaseIn, zoomEaseOut: presetZoom.zoomEaseOut
+    )
+    let tiltStart = TimelineMath.zoomState(at: 1, segments: [presetZoom], settings: settings)
+    let tiltMid = TimelineMath.zoomState(at: 1.4, segments: [presetZoom], settings: settings)
+    let tiltSettled = TimelineMath.zoomState(at: 1.8, segments: [presetZoom], settings: settings)
+    expect(abs(tiltStart.rotationRadians) < 1e-9 && abs(tiltSettled.rotationRadians) < 1e-9
+           && abs(tiltMid.rotationRadians) > 0.02,
+           "tilt reveal starts and settles level, with its angle confined to entry")
+    let ordinary = TimelineMath.zoomState(at: 1.4, segments: [classic], settings: settings)
+    expect(ordinary.rotationRadians == 0 && ordinary.offsetX == 0 && ordinary.offsetY == 0,
+           "classic keeps the existing zoom path with no added camera pose")
+
+    var slide = presetZoom
+    slide.motionPreset = .slideFocus
+    let slideMid = TimelineMath.zoomState(at: 1.4, segments: [slide], settings: settings)
+    let slideSettled = TimelineMath.zoomState(at: 2, segments: [slide], settings: settings)
+    expect(abs(slideMid.offsetX) > 0.02 && slideMid.rotationRadians == 0
+           && abs(slideSettled.offsetX) < 1e-9,
+           "slide focus travels laterally on entry and rests at the selected focus")
+
+    var drift = presetZoom
+    drift.motionPreset = .softDrift
+    let driftMid = TimelineMath.zoomState(at: 2.4, segments: [drift], settings: settings)
+    expect(abs(driftMid.offsetX) > 0.005
+           && abs(TimelineMath.zoomState(at: 1.8, segments: [drift], settings: settings).offsetX) < 1e-9
+           && abs(TimelineMath.zoomState(at: 3.5, segments: [drift], settings: settings).offsetX) < 1e-9,
+           "soft drift only moves during the readable hold, then returns to rest")
+    var instantDrift = drift
+    instantDrift.isInstant = true
+    let instantState = TimelineMath.zoomState(at: 2.4, segments: [instantDrift], settings: settings)
+    expect(instantState.rotationRadians == 0 && instantState.offsetX == 0 && instantState.offsetY == 0,
+           "instant zooms must not retain an authored camera move")
+
+    let camera = ZoomFrameTransform(state: tiltMid, width: 1920, height: 1080)
+    let inverse = camera.affineTransform.inverted()
+    for x in [0.0, 1920.0] {
+        for y in [0.0, 1080.0] {
+            let source = CGPoint(x: x, y: y).applying(inverse)
+            expect(source.x >= -0.001 && source.x <= 1920.001
+                   && source.y >= -0.001 && source.y <= 1080.001,
+                   "tilt's overscan must cover every output corner without exposed edges")
+        }
+    }
+    let hotspot = camera.mappedPoint(x: 0.75, y: 0.4)
+    let transformedHotspot = CGPoint(x: 0.75 * 1920, y: 0.6 * 1080)
+        .applying(camera.affineTransform)
+    expect(abs(hotspot.x - transformedHotspot.x / 1920) < 1e-9
+           && abs(hotspot.y - (1 - transformedHotspot.y / 1080)) < 1e-9,
+           "the recorded cursor hotspot and click ring use the footage matrix")
+    let classicCamera = ZoomFrameTransform(state: ordinary, width: 1920, height: 1080)
+    expect(abs(classicCamera.effectiveScale - ordinary.scale) < 1e-9,
+           "classic adds no overscan or surprise magnification")
+    if let encoded = try? JSONEncoder().encode(presetZoom),
+       var legacy = (try? JSONSerialization.jsonObject(with: encoded)) as? [String: Any] {
+        legacy.removeValue(forKey: "motionPreset")
+        if let oldData = try? JSONSerialization.data(withJSONObject: legacy),
+           let decoded = try? JSONDecoder().decode(ZoomSegment.self, from: oldData) {
+            expect(decoded.motionPreset == .classic,
+                   "projects saved before camera presets decode with the original look")
+        } else {
+            failures.append("old project zoom could not be decoded")
+        }
+        expect((try? JSONDecoder().decode(ZoomSegment.self, from: encoded))?.motionPreset == .tiltReveal,
+               "authored motion preset survives project JSON roundtrip")
+    } else {
+        failures.append("authored motion preset could not be encoded")
+    }
 
     // --- Eased pan without a constraint kink --------------------------------
     settings.zoomScale = 2
@@ -162,10 +241,12 @@ func zoomMotionFailures() -> [String] {
     legacyJitter.zoomSegments[0].targetY = jitterClicks[1].y
     legacyJitter.zoomSegments[0].scale = 2.3
     legacyJitter.zoomSegments[0].isEnabled = false
+    legacyJitter.zoomSegments[0].motionPreset = .tiltReveal
     TimelineMath.regenerateAutomaticZoomSegments(in: &legacyJitter)
     expect(legacyJitter.zoomSegments.count == 1 && legacyJitter.zoomSegments[0].id == jitterID
-           && legacyJitter.zoomSegments[0].scale == 2.3 && !legacyJitter.zoomSegments[0].isEnabled,
-           "regenerating an older moving-anchor cue must keep source-matched IDs, custom scale, and disabled state")
+           && legacyJitter.zoomSegments[0].scale == 2.3 && !legacyJitter.zoomSegments[0].isEnabled
+           && legacyJitter.zoomSegments[0].motionPreset == .tiltReveal,
+           "regenerating an older moving-anchor cue must keep source-matched IDs, custom scale, motion and disabled state")
 
     let partialOverlap = TimelineMath.generateZoomSegments(from: [
         ClickEvent(time: 1, x: 0.3, y: 0.5, button: .left),

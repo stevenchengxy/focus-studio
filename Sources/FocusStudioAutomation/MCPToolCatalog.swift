@@ -242,7 +242,7 @@ public struct MCPToolCatalog: Sendable {
         ),
         MCPToolSpec(
             tool: GetProjectTool(), title: "Get project",
-            description: "Describe one project without opening it: title, duration and source size; look, zoom style and audio settings under the argument names update_settings, set_zoom_style and set_sound_effects take; export_width and frame_rate (change them with update_settings' exportWidth and frameRate, or for one export with export_project's width and frame_rate); the zooms with their ids and numbers (the first 80 in time order, with zoom_count); the chapters (the first 50, with chapter_count; long text is shortened with …); and the recorded clicks and typing moments (at most 200 of each, spread evenly over the recording, with their totals), as times in seconds and positions from 0 to 1 measured from the top-left corner of the recording. Use it to plan zooms and chapters.",
+            description: "Read a project without opening it: title, duration, look, audio and export settings; available zoom_motion_presets and the first 70 zooms with ID, time and motion_preset; chapters and sampled clicks/typing. Counts report full totals. Coordinates are 0–1 from top-left; times are seconds.",
             scope: .projectReadOnly, annotations: .reads
         ),
         MCPToolSpec(
@@ -410,12 +410,12 @@ public struct MCPToolCatalog: Sendable {
         ),
         MCPToolSpec(
             tool: UpdateZoomTool(), title: "Adjust one zoom",
-            description: "Adjust one zoom by its stable zoom_id from get_project or add_zoom: change start/end seconds, target, scale, easing or enabled state without replacing its ID or other zooms. The edited zoom becomes manual so later automatic regeneration preserves this decision. Use the current project's timeline, especially after create_demo_cut, and preview both ends of the adjusted zoom.",
+            description: "Edit one zoom by stable zoom_id from get_project: change timing, target, scale, motion_preset, easing or enabled state. Presets: classic, tiltReveal (diagonal), slideFocus (side glide), softDrift (gentle drift). Keeps its ID and other zooms; marks this one manual. Preview the moving shot.",
             scope: .project, annotations: MCPToolAnnotations(readOnly: false, idempotent: true)
         ),
         MCPToolSpec(
             tool: AddZoomTool(), title: "Add zoom",
-            description: "Add a manual zoom to a project: from start to end (seconds into the recording) the camera moves to (x, y), each from 0 to 1 measured from the top-left corner of the recording, magnified by scale (default: the project's zoom scale). Existing zooms stay. Returns the zoom's id and number. Focus Studio opens the project in its editor, so the person sees the change.",
+            description: "Add a manual zoom from start to end seconds, targeting x/y 0–1 from the top-left with optional scale. motion_preset: classic (default), tiltReveal (diagonal), slideFocus (side glide), softDrift (gentle drift). Existing zooms stay; returns its ID and opens the editor.",
             scope: .project, annotations: MCPToolAnnotations(readOnly: false)
         ),
         MCPToolSpec(
