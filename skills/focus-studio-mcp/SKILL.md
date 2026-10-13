@@ -55,7 +55,8 @@ and a first video-track edit opens a separate working project. Use its returned 
 A long pause in input is only
 a candidate cut; inspect generated answers, loading animations and audio before removing it.
 
-Use `update_zoom` with an existing `zoom_id` for individual start/end/target/scale changes. Use
+Use `update_zoom` with an existing `zoom_id` for individual start/end/target/scale or `motion_preset` changes. `get_project.zooms[]` reports each preset; `get_project.zoom_motion_presets` lists valid values: `classic` (direct, best for dense UI), `tiltReveal` (diagonal tilt then restore), `slideFocus` (sideward reveal), and `softDrift` (gentle floating move). `add_zoom` also accepts `motion_preset`; omission keeps `classic`. Preview moving frames or a draft export to assess the effect; a single still frame cannot prove the motion.
+Use
 `set_zoom_style` for global motion, before those local edits; automatic regeneration can change segments.
 If these newer tools are absent from the connected catalog, update Focus Studio before claiming to use them.
 

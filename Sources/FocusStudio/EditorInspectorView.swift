@@ -31,6 +31,37 @@ enum EditorTool: String, CaseIterable, Identifiable {
     }
 }
 
+// Shared labels keep the inspector, timeline and accessibility descriptions
+// consistent without storing localized text in project files.
+extension ZoomMotionPreset {
+    var displayTitle: String {
+        switch self {
+        case .classic: return "Classic push-in"
+        case .tiltReveal: return "Tilt reveal"
+        case .slideFocus: return "Slide to focus"
+        case .softDrift: return "Soft drift"
+        }
+    }
+
+    var displayDescription: String {
+        switch self {
+        case .classic: return "Push straight toward the detail, then return."
+        case .tiltReveal: return "Approach at an angle, then settle back to level."
+        case .slideFocus: return "Glide sideways into the detail, then return."
+        case .softDrift: return "Float gently around the detail before returning."
+        }
+    }
+
+    var timelineSymbol: String? {
+        switch self {
+        case .classic: return nil
+        case .tiltReveal: return "rotate.right"
+        case .slideFocus: return "arrow.right"
+        case .softDrift: return "wind"
+        }
+    }
+}
+
 struct EditorInspectorView: View {
     @EnvironmentObject private var model: StudioModel
     @Environment(\.textCompletion) private var textCompletion
@@ -184,6 +215,21 @@ struct EditorInspectorView: View {
                         .font(.system(size: 10))
                         .foregroundStyle(StudioTheme.secondaryText)
                 }
+            }
+            InspectorSection("Camera move") {
+                Picker("Motion preset", selection: zoom.motionPreset) {
+                    ForEach(ZoomMotionPreset.allCases, id: \.self) { preset in
+                        Text(LocalizedStringKey(preset.displayTitle)).tag(preset)
+                    }
+                }
+                .disabled(zoom.wrappedValue.isInstant)
+                .accessibilityIdentifier("editor.zoomMotionPreset")
+                Text(LocalizedStringKey(zoom.wrappedValue.isInstant
+                    ? "Turn off Instant animation to use a camera move."
+                    : zoom.wrappedValue.motionPreset.displayDescription))
+                    .font(.system(size: 10))
+                    .foregroundStyle(StudioTheme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             InspectorSection("Scale") {
                 LabeledSlider(value: zoom.scale, range: 1.1...3, suffix: "×", decimals: 2)

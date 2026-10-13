@@ -1183,13 +1183,12 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
         let zoom = zoomState(at: seconds)
         let sourceSize = sourceCropRect.size
         let zoomScale = max(1, zoom.scale)
-        let zoomTranslation = CGAffineTransform(
-            translationX: sourceSize.width / 2 - zoom.centerX * sourceSize.width * zoomScale,
-            y: sourceSize.height / 2 - (1 - zoom.centerY) * sourceSize.height * zoomScale
+        let camera = ZoomFrameTransform(
+            state: zoom,
+            width: Double(sourceSize.width), height: Double(sourceSize.height)
         )
         let zoomedSource = croppedSource
-            .transformed(by: CGAffineTransform(scaleX: zoomScale, y: zoomScale))
-            .transformed(by: zoomTranslation)
+            .transformed(by: camera.affineTransform)
             .cropped(to: CGRect(origin: .zero, size: sourceSize))
 
         let placementScale = geometry.screenFrame.width / sourceSize.width
@@ -1252,12 +1251,12 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
         )
 
         if project.settings.showClickRing,
-           let clickRing = clickRingLayer(at: seconds, zoom: zoom, canvasRect: canvasRect) {
+           let clickRing = clickRingLayer(at: seconds, camera: camera, canvasRect: canvasRect) {
             screenLayer = clickRing.composited(over: screenLayer)
         }
         // Feedback sits beneath the pointer so a bright ring never obscures the
         // cursor's hotspot or the I-beam while typing.
-        if let pointer = cursorLayer(at: seconds, zoom: zoom, canvasRect: canvasRect) {
+        if let pointer = cursorLayer(at: seconds, camera: camera, canvasRect: canvasRect) {
             screenLayer = pointer.composited(over: screenLayer)
         }
 
@@ -1297,14 +1296,12 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
             .transformed(by: CGAffineTransform(translationX: -source.minX, y: -source.minY))
         let zoom = TimelineMath.zoomState(at: seconds, segments: importedZoomSegments,
                                           settings: timelineSettings)
-        let zoomScale = max(1, zoom.scale)
-        let translation = CGAffineTransform(
-            translationX: source.width / 2 - zoom.centerX * source.width * zoomScale,
-            y: source.height / 2 - (1 - zoom.centerY) * source.height * zoomScale
+        let camera = ZoomFrameTransform(
+            state: zoom,
+            width: Double(source.width), height: Double(source.height)
         )
         let image = normalized
-            .transformed(by: CGAffineTransform(scaleX: zoomScale, y: zoomScale))
-            .transformed(by: translation)
+            .transformed(by: camera.affineTransform)
             .cropped(to: CGRect(origin: .zero, size: source.size))
             .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
             .transformed(by: CGAffineTransform(translationX: frame.minX, y: frame.minY))
@@ -1493,7 +1490,7 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
         return (filter.outputImage ?? CIImage(color: .white)).cropped(to: frame)
     }
 
-    private func cursorLayer(at seconds: Double, zoom: ZoomState, canvasRect: CGRect) -> CIImage? {
+    private func cursorLayer(at seconds: Double, camera: ZoomFrameTransform, canvasRect: CGRect) -> CIImage? {
         guard project.resolvedCursorOverlayVisible,
               let sourcePosition = cursorPosition(at: seconds),
               let croppedPosition = sourceCropInsets.croppedPoint(
@@ -1504,7 +1501,7 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
         else {
             return nil
         }
-        let point = transformedPoint(x: croppedPosition.x, y: croppedPosition.y, zoom: zoom)
+        let point = camera.mappedPoint(x: croppedPosition.x, y: croppedPosition.y)
         guard point.x >= -0.1, point.x <= 1.1, point.y >= -0.1, point.y <= 1.1 else {
             return nil
         }
@@ -1562,7 +1559,7 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
         return incoming.composited(over: outgoing)
     }
 
-    private func clickRingLayer(at seconds: Double, zoom: ZoomState, canvasRect: CGRect) -> CIImage? {
+    private func clickRingLayer(at seconds: Double, camera: ZoomFrameTransform, canvasRect: CGRect) -> CIImage? {
         let settings = project.settings.resolvedClickAnimation
         let color = CIColor(hex: settings.colorHex) ?? CIColor(red: 0.545, green: 0.482, blue: 1)
         let outputScale = min(canvasRect.width, canvasRect.height) / 1080
@@ -1572,7 +1569,7 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
             let click = sortedClicks[clickIndex]
             let age = seconds - click.time
             if age >= settings.duration { break }
-            let point = transformedPoint(x: click.x, y: click.y, zoom: zoom)
+            let point = camera.mappedPoint(x: click.x, y: click.y)
             let canvasPoint = CGPoint(
                 x: geometry.screenFrame.minX + point.x * geometry.screenFrame.width,
                 y: geometry.screenFrame.maxY - point.y * geometry.screenFrame.height
@@ -1653,13 +1650,6 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
         let idleTime = seconds - max(recentMotionTime, recentClickTime)
         if idleTime <= 1.4 { return 1 }
         return 1 - TimelineMath.smootherStep((idleTime - 1.4) / 0.35)
-    }
-
-    private func transformedPoint(x: Double, y: Double, zoom: ZoomState) -> CGPoint {
-        CGPoint(
-            x: 0.5 + (x - zoom.centerX) * zoom.scale,
-            y: 0.5 + (y - zoom.centerY) * zoom.scale
-        )
     }
 
     private func zoomState(at seconds: Double) -> ZoomState {

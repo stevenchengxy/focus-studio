@@ -13,7 +13,9 @@ public enum AIProjectReport {
     /// recording comes to about 10k) and carry their totals; cursor samples
     /// are never included. Zooms and chapters are the first ones in time
     /// order, and long texts are shortened with "…".
-    static let maximumDataZooms = 80
+    // Per-zoom motion names add bytes to each row; keep a large enough
+    // headroom for long-session reports under the MCP output budget.
+    static let maximumDataZooms = 70
     static let maximumDataClicks = 200
     static let maximumDataTyping = 200
     static let maximumDataChapters = 50
@@ -43,6 +45,7 @@ public enum AIProjectReport {
         let audio = settings.resolvedProductDemoAudio
         let music = audio.backgroundMusicPath.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent } ?? "none"
         lines.append("Zoom style: automatic zooms \(settings.autoZoomEnabled ? "on" : "off") | hold \(seconds(settings.zoomHold)) s | ease in \(seconds(settings.zoomEaseIn)) s | ease out \(seconds(settings.zoomEaseOut)) s | chain gap \(seconds(settings.resolvedZoomChainGap)) s")
+        lines.append("Zoom motion presets (per segment): classic = direct zoom; tiltReveal = diagonal tilt in and restore; slideFocus = sideward reveal; softDrift = subtle floating move. Set motion_preset in add_zoom or update_zoom.")
         if settings.autoZoomEnabled, project.zoomSegments.isEmpty, !TimelineMath.hasAutomaticZoomInput(in: project) {
             lines.append("No eligible clicks or typing were captured inside the visible crop. Browser/AX automation may not emit system input events. Use add_zoom at your observed interaction times; enabling automatic zooms cannot recover missing events.")
         }
@@ -110,6 +113,7 @@ public enum AIProjectReport {
             "export_width": AIJSONValue(settings.exportWidth),
             "frame_rate": AIJSONValue(settings.frameRate),
             "zoom_count": AIJSONValue(zooms.count),
+            "zoom_motion_presets": .array(ZoomMotionPreset.allCases.map { AIJSONValue($0.rawValue) }),
             "zooms": .array(zooms.prefix(maximumDataZooms).map { zoomData(index: $0.index, segment: $0.segment) }),
             "chapter_count": AIJSONValue(chapters.count),
             "chapters": .array(chapters.prefix(maximumDataChapters).enumerated().map { chapterData(index: $0.offset + 1, chapter: $0.element) }),
@@ -205,6 +209,7 @@ public enum AIProjectReport {
             "x": .rounded(segment.targetX),
             "y": .rounded(segment.targetY),
             "scale": .rounded(segment.scale),
+            "motion_preset": AIJSONValue(segment.motionPreset.rawValue),
             // Null means the project's zoomEaseIn/zoomEaseOut is inherited.
             "ease_in": segment.zoomEaseIn.map { .rounded($0) } ?? .null,
             "ease_out": segment.zoomEaseOut.map { .rounded($0) } ?? .null,

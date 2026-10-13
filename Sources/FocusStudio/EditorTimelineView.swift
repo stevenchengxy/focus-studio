@@ -655,7 +655,7 @@ private struct RulerRow: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Playback position")
         .accessibilityValue(currentTime.editorTimecode)
-        .accessibilityHint("Hover to preview; click or drag the ruler to place the playhead")
+        .accessibilityHint("Hover to inspect time; click or drag to place the playhead")
         .accessibilityIdentifier("timeline.ruler")
         .accessibilityAdjustableAction { direction in
             let frame = Int((currentTime * Double(frameRate)).rounded())
@@ -663,7 +663,7 @@ private struct RulerRow: View {
             currentTime = TimelineFramePosition.time(
                 for: frame, duration: duration, frameRate: frameRate)
         }
-        .help("Hover to preview; click or drag the ruler to place the playhead")
+        .help("Hover to inspect time; click or drag to place the playhead")
     }
 
     private func tickInterval(pixelsPerSecond: Double) -> Double {
@@ -825,7 +825,8 @@ private struct ZoomBlockView: View {
                 .stroke(Color.white.opacity(isSelected ? 0.9 : (isHovering ? 0.35 : 0.12)), lineWidth: 1.5)
             HStack(spacing: 0) {
                 resizeHandle(isLeading: true)
-                moveHandle(showDuration: width >= 84)
+                moveHandle(showDuration: width >= (displayedSegment.motionPreset == .classic ? 84 : 150),
+                           showPresetIcon: width >= 64)
                     .frame(maxWidth: .infinity)
                 resizeHandle(isLeading: false)
             }
@@ -857,10 +858,15 @@ private struct ZoomBlockView: View {
         }
     }
 
-    private func moveHandle(showDuration: Bool) -> some View {
+    private func moveHandle(showDuration: Bool, showPresetIcon: Bool) -> some View {
         HStack(spacing: 5) {
             Text(verbatim: "\(ordinal)")
                 .font(.system(size: 9, weight: .semibold, design: .monospaced))
+            if showPresetIcon, let symbol = displayedSegment.motionPreset.timelineSymbol {
+                Image(systemName: symbol)
+                    .font(.system(size: 8, weight: .semibold))
+                    .accessibilityHidden(true)
+            }
             if showDuration {
                 Text("·")
                 Text("\(seconds(displayedSegment.end - displayedSegment.start))s")
@@ -890,7 +896,12 @@ private struct ZoomBlockView: View {
         )
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text("Move zoom \(ordinal)"))
-        .accessibilityValue("Start \(seconds(displayedSegment.start)) seconds, end \(seconds(displayedSegment.end)) seconds")
+        .accessibilityValue(L10n.format(
+            "Camera move: %@, from %@ to %@ seconds",
+            L10n.tr(displayedSegment.motionPreset.displayTitle),
+            seconds(displayedSegment.start),
+            seconds(displayedSegment.end)
+        ))
         .accessibilityHint("Drag to move the whole interval. Adjust to move by one tenth of a second.")
         .accessibilityIdentifier("zoom.\(segment.id.uuidString).move")
         .accessibilityAction { onSelect() }

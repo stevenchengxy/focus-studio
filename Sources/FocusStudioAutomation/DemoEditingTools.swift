@@ -23,6 +23,25 @@ enum DemoEditingSupport {
     static let projectProperty: [String: Any] = ["type": "string", "description": "Project UUID; defaults to the open project."]
 }
 
+/// Keep the model-facing motion names consistent across add_zoom and update_zoom.
+/// Presets affect only the authored camera motion; the target and timing remain
+/// separate, so an assistant can switch a look without replacing a zoom ID.
+enum ZoomMotionToolSupport {
+    static let description = "Motion: classic (direct), tiltReveal (diagonal tilt in/out, 斜向展示后复原), slideFocus (side glide), softDrift (gentle drift)."
+
+    static var property: [String: Any] {
+        ["type": "string", "enum": ZoomMotionPreset.allCases.map(\.rawValue), "description": description]
+    }
+
+    static func requested(_ args: AIToolArguments) throws -> ZoomMotionPreset? {
+        guard args.has("motion_preset") else { return nil }
+        guard let value = args.string("motion_preset"), let preset = ZoomMotionPreset(rawValue: value) else {
+            throw AIToolError.invalidArgument("motion_preset must be one of: \(ZoomMotionPreset.allCases.map(\.rawValue).joined(separator: ", ")).")
+        }
+        return preset
+    }
+}
+
 public struct AnalyzeDemoPacingTool: AIAssistantTool {
     public let name = "analyze_demo_pacing"
     public let summary = "Suggest source-time keep ranges from complete recorded input, without changing the project. Input silence is not proof of visual inactivity; inspect loading/results/reading before cutting. Source audio and enabled chapters are protected."
@@ -106,7 +125,7 @@ public struct CreateDemoCutTool: AIAssistantTool {
 
 public struct UpdateZoomTool: AIAssistantTool {
     public let name = "update_zoom"
-    public let summary = "Adjust one zoom's timing, target, scale, easing or enabled state by stable zoom_id; preserve all other zooms. The zoom becomes manual, retaining automatic-event provenance so regeneration cannot replace it."
+    public let summary = "Adjust one zoom's timing, target, scale, motion preset, easing or enabled state by stable zoom_id; preserve all other zooms. The zoom becomes manual, retaining automatic-event provenance so regeneration cannot replace it."
     public init() {}
     public var parametersSchema: [String: Any] {
         ["type": "object", "required": ["zoom_id"], "properties": [
@@ -115,6 +134,7 @@ public struct UpdateZoomTool: AIAssistantTool {
             "x": ["type": "number", "minimum": 0, "maximum": 1, "description": "Horizontal focus, from 0 (left) to 1 (right)."],
             "y": ["type": "number", "minimum": 0, "maximum": 1, "description": "Vertical focus, from 0 (top) to 1 (bottom)."],
             "scale": ["type": "number", "minimum": 1.1, "maximum": 3, "description": "Magnification, from 1.1 to 3."],
+            "motion_preset": ZoomMotionToolSupport.property,
             "ease_in": ["type": "number", "minimum": 0, "maximum": 5, "description": "Seconds to zoom in, from 0 to 5; omitted preserves the existing value."],
             "ease_out": ["type": "number", "minimum": 0, "maximum": 5, "description": "Seconds to zoom out, from 0 to 5; omitted preserves the existing value."],
             "enabled": ["type": "boolean"],
@@ -124,6 +144,7 @@ public struct UpdateZoomTool: AIAssistantTool {
         let args = AIToolArguments(raw)
         guard let id = args.string("zoom_id").flatMap(UUID.init(uuidString:)) else { throw AIToolError.invalidArgument("zoom_id must identify one zoom from get_project.") }
         let project = try await DemoEditingSupport.project(raw, context: context)
+        let motionPreset = try ZoomMotionToolSupport.requested(args)
         let numeric = ["start", "end", "x", "y", "scale", "ease_in", "ease_out"]
         var values: [String: Double] = [:]
         for key in numeric where args.has(key) {
@@ -135,7 +156,7 @@ public struct UpdateZoomTool: AIAssistantTool {
             guard let value = args.bool("enabled") else { throw AIToolError.invalidArgument("enabled must be boolean.") }
             enabled = value
         } else { enabled = nil }
-        guard !values.isEmpty || enabled != nil else { throw AIToolError.invalidArgument("Supply at least one zoom property to update.") }
+        guard !values.isEmpty || enabled != nil || motionPreset != nil else { throw AIToolError.invalidArgument("Supply at least one zoom property to update.") }
         let edits = values
         let updated = try await AIToolSupport.edit(context, projectID: project.id) { current -> (zoom: ZoomSegment, index: Int) in
             guard let index = current.zoomSegments.firstIndex(where: { $0.id == id }) else { throw AIToolError.invalidArgument("This zoom is no longer in the project. Read get_project again.") }
@@ -146,6 +167,7 @@ public struct UpdateZoomTool: AIAssistantTool {
             segment.start = edits["start"] ?? segment.start; segment.end = edits["end"] ?? segment.end
             segment.targetX = edits["x"] ?? segment.targetX; segment.targetY = edits["y"] ?? segment.targetY
             segment.scale = edits["scale"] ?? segment.scale
+            if let motionPreset { segment.motionPreset = motionPreset }
             if let value = edits["ease_in"] { segment.zoomEaseIn = value }
             if let value = edits["ease_out"] { segment.zoomEaseOut = value }
             if let enabled { segment.isEnabled = enabled }

@@ -10,7 +10,7 @@ import Foundation
 /// A library project in full, read without opening it in the editor.
 public struct GetProjectTool: AIAssistantTool {
     public let name = "get_project"
-    public let summary = "Describe one library project without opening it: title, duration, source size, look, zoom style, audio and export settings, the zooms with their ids (the first 80 in time order, with zoom_count), the chapters (the first 50, with chapter_count; long text is shortened with …), and the recorded clicks and typing moments (at most 200 of each, spread evenly over the recording, with their totals; times in seconds; positions 0–1 from the top-left corner)."
+    public let summary = "Describe one library project without opening it: title, duration, source size, look, zoom style, audio and export settings, available zoom motion presets and the zooms with their ids and individual preset (the first 70 in time order, with zoom_count), the chapters (the first 50, with chapter_count; long text is shortened with …), and the recorded clicks and typing moments (at most 200 of each, spread evenly over the recording, with their totals; times in seconds; positions 0–1 from the top-left corner)."
 
     public init() {}
 
@@ -41,7 +41,7 @@ public struct GetProjectTool: AIAssistantTool {
         let title = AIProjectSummary(project: project).displayTitle
         var lines = ["Project \"\(title)\" (id \(project.id.uuidString), \(isOpen ? "open in the editor" : "not open in the editor"))"]
         lines.append(AIProjectReport.summary(of: project, assetsDirectory: assets ?? context.assetsDirectory))
-        lines.append("Recorded input: \(project.clickEvents.count) clicks, \((project.typingActivity ?? []).count) typing moments. The structured result lists up to 200 of each, sampled evenly, and the first 80 zooms with their ids.")
+        lines.append("Recorded input: \(project.clickEvents.count) clicks, \((project.typingActivity ?? []).count) typing moments. The structured result lists up to 200 of each, sampled evenly, and the first 70 zooms with their ids and motion presets.")
         let data = AIProjectReport.data(of: project, isOpen: isOpen, assetsDirectory: assets, musicTracks: tracks)
         return AIToolResult(text: lines.joined(separator: "\n"), data: data)
     }

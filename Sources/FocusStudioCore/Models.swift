@@ -158,6 +158,15 @@ public enum ZoomKind: String, Codable, Sendable, CaseIterable {
     case manual
 }
 
+/// The visual path of an individual zoom. Captured clicks continue to use the
+/// original camera move unless the editor explicitly changes their preset.
+public enum ZoomMotionPreset: String, Codable, Sendable, CaseIterable {
+    case classic
+    case tiltReveal
+    case slideFocus
+    case softDrift
+}
+
 /// Identifies the captured cue which a hand-edited block has taken over.
 /// This prevents later automatic regeneration from putting the original cue
 /// back underneath the user's shorter, moved, or disabled manual block.
@@ -206,6 +215,7 @@ public struct ZoomSegment: Codable, Hashable, Sendable, Identifiable {
     /// Nil inherits the project transition duration. Optional for old projects.
     public var zoomEaseIn: Double?
     public var zoomEaseOut: Double?
+    public var motionPreset: ZoomMotionPreset
     public var automaticSource: ZoomAutomaticSource?
 
     public init(
@@ -220,6 +230,7 @@ public struct ZoomSegment: Codable, Hashable, Sendable, Identifiable {
         isInstant: Bool = false,
         zoomEaseIn: Double? = nil,
         zoomEaseOut: Double? = nil,
+        motionPreset: ZoomMotionPreset = .classic,
         automaticSource: ZoomAutomaticSource? = nil
     ) {
         self.id = id
@@ -233,7 +244,48 @@ public struct ZoomSegment: Codable, Hashable, Sendable, Identifiable {
         self.isInstant = isInstant
         self.zoomEaseIn = zoomEaseIn
         self.zoomEaseOut = zoomEaseOut
+        self.motionPreset = motionPreset
         self.automaticSource = automaticSource
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, start, end, targetX, targetY, scale, kind, isEnabled, isInstant
+        case zoomEaseIn, zoomEaseOut, motionPreset, automaticSource
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        start = try values.decode(Double.self, forKey: .start)
+        end = try values.decode(Double.self, forKey: .end)
+        targetX = try values.decode(Double.self, forKey: .targetX)
+        targetY = try values.decode(Double.self, forKey: .targetY)
+        scale = try values.decode(Double.self, forKey: .scale)
+        kind = try values.decode(ZoomKind.self, forKey: .kind)
+        isEnabled = try values.decode(Bool.self, forKey: .isEnabled)
+        isInstant = try values.decode(Bool.self, forKey: .isInstant)
+        zoomEaseIn = try values.decodeIfPresent(Double.self, forKey: .zoomEaseIn)
+        zoomEaseOut = try values.decodeIfPresent(Double.self, forKey: .zoomEaseOut)
+        // Missing or newer unknown presets preserve old recordings' appearance.
+        motionPreset = (try? values.decode(ZoomMotionPreset.self, forKey: .motionPreset)) ?? .classic
+        automaticSource = try values.decodeIfPresent(ZoomAutomaticSource.self, forKey: .automaticSource)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(start, forKey: .start)
+        try values.encode(end, forKey: .end)
+        try values.encode(targetX, forKey: .targetX)
+        try values.encode(targetY, forKey: .targetY)
+        try values.encode(scale, forKey: .scale)
+        try values.encode(kind, forKey: .kind)
+        try values.encode(isEnabled, forKey: .isEnabled)
+        try values.encode(isInstant, forKey: .isInstant)
+        try values.encodeIfPresent(zoomEaseIn, forKey: .zoomEaseIn)
+        try values.encodeIfPresent(zoomEaseOut, forKey: .zoomEaseOut)
+        try values.encode(motionPreset, forKey: .motionPreset)
+        try values.encodeIfPresent(automaticSource, forKey: .automaticSource)
     }
 }
 
@@ -858,11 +910,23 @@ public struct ZoomState: Hashable, Sendable {
     public var centerX: Double
     public var centerY: Double
     public var progress: Double
+    /// Positive angles rotate the footage counterclockwise in render pixels.
+    public var rotationRadians: Double
+    /// Screen-frame fractions (x right, y down), applied to footage and cursor.
+    public var offsetX: Double
+    public var offsetY: Double
 
-    public init(scale: Double = 1, centerX: Double = 0.5, centerY: Double = 0.5, progress: Double = 0) {
+    public init(
+        scale: Double = 1, centerX: Double = 0.5, centerY: Double = 0.5,
+        progress: Double = 0, rotationRadians: Double = 0,
+        offsetX: Double = 0, offsetY: Double = 0
+    ) {
         self.scale = scale
         self.centerX = centerX
         self.centerY = centerY
         self.progress = progress
+        self.rotationRadians = rotationRadians
+        self.offsetX = offsetX
+        self.offsetY = offsetY
     }
 }

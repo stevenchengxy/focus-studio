@@ -105,6 +105,7 @@ obsolete project ID, clip ID or output time can target a different position. Do 
 - `start`, `end`: seconds in the edited project's timeline;
 - `x`, `y`: target in the full recorded frame, normalized 0–1 from top-left;
 - `scale`: magnification, 1.1–3;
+- `motion_preset`: `classic` (direct), `tiltReveal` (diagonal tilt and restore), `slideFocus` (sideward reveal), or `softDrift` (subtle floating move). `get_project.zooms[]` reports the current value;
 - `ease_in`, `ease_out`: transition durations in seconds, 0–5;
 - `enabled`: whether this segment participates in rendering.
 
@@ -120,6 +121,7 @@ For example, after looking up the segment's real ID:
 
 This changes that segment while keeping its ID. The result becomes a manual camera edit, so later automatic
 zoom regeneration should not be used to overwrite it. The interval must stay inside the project and be at least 0.2 s; out-of-range values are rejected.
+For a request like “斜着展示，再复原”, choose `tiltReveal` on the intended zoom ID. Use `add_zoom` with the same `motion_preset` only when there is no existing zoom. Preview motion across the full segment in an exported draft; still frames alone do not confirm the animation.
 Extending `end` does not add video duration; to show a result longer, retain enough source footage in the cut.
 
 For all-project motion, `set_zoom_style` uses camelCase keys such as `zoomEaseIn`, `zoomEaseOut`, `zoomHold` and
