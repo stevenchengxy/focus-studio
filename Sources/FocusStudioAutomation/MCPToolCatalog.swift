@@ -242,7 +242,7 @@ public struct MCPToolCatalog: Sendable {
         ),
         MCPToolSpec(
             tool: GetProjectTool(), title: "Get project",
-            description: "Read a project without opening it: title, duration, look, audio and export settings; available zoom_motion_presets and the first 70 zooms with ID, time and motion_preset; chapters and sampled clicks/typing. Counts report full totals. Coordinates are 0–1 from top-left; times are seconds.",
+            description: "Read a project without opening it: title, duration, look, audio and export settings; available zoom_motion_presets and the first 70 zooms; region_effects with stable IDs, source rectangles and visible output ranges (null when trimmed away); chapters and sampled clicks/typing. Counts report full totals. Coordinates are 0–1 from top-left; times are seconds.",
             scope: .projectReadOnly, annotations: .reads
         ),
         MCPToolSpec(
@@ -424,6 +424,21 @@ public struct MCPToolCatalog: Sendable {
             scope: .project, annotations: MCPToolAnnotations(readOnly: false, destructive: true)
         ),
         MCPToolSpec(
+            tool: AddRegionEffectTool(), title: "Add local highlight",
+            description: "Add a fixed rectangular highlight to one clip. Inspect capture_frame with source_frame:true first. Supply clip_id, start/end in output seconds, and x/y/width/height normalized to the uncropped source image from top-left. Presets spotlight/lift/tilt; backgrounds dim/blur/none. One enabled highlight at a time; no object tracking or privacy redaction. Returns a stable effect_id and opens the editor.",
+            scope: .project, annotations: MCPToolAnnotations(readOnly: false)
+        ),
+        MCPToolSpec(
+            tool: UpdateRegionEffectTool(), title: "Adjust local highlight",
+            description: "Update one local highlight by effect_id from get_project.region_effects. Changes timing, source-normalized rectangle, preset, background, scale, intensity, entrance/exit or enabled state; omitted values and clip binding remain. Times are output seconds within its clip. Fixed selection does not track scrolling. Preview the moving shot afterwards.",
+            scope: .project, annotations: MCPToolAnnotations(readOnly: false, idempotent: true)
+        ),
+        MCPToolSpec(
+            tool: DeleteRegionEffectTool(), title: "Delete local highlight",
+            description: "Remove one local highlight by stable effect_id from get_project.region_effects, including a trimmed-away highlight. Source media and video clips stay intact. Use undo_clip_edit to undo a recent removal while editor history is available.",
+            scope: .project, annotations: MCPToolAnnotations(readOnly: false, destructive: true)
+        ),
+        MCPToolSpec(
             tool: SetZoomStyleTool(), title: "Set zoom style",
             description: "Tune how a project's zooms move: screen animation, zoom scale, how long an automatic zoom holds on a click, ease-in and ease-out durations in seconds, how close clicks are chained into one zoom, and whether automatic zooms are on. Only the given keys change; a new chain gap or turning automatic zooms back on regenerates the automatic zooms. Focus Studio opens the project in its editor.",
             scope: .project, annotations: MCPToolAnnotations(readOnly: false, destructive: true, idempotent: true)
@@ -459,7 +474,7 @@ public struct MCPToolCatalog: Sendable {
         // Output.
         MCPToolSpec(
             tool: CaptureFrameTool(), title: "Capture frame",
-            description: "Render one frame of a project as it will export (background, padding, zoom, captions) at a time in seconds. With exact_frame: true, snap the requested time to the project's output frame grid and use zero image-generator time tolerance; this can take longer. The result reports frame_index, actual_time_seconds and frame_matches_request so you can verify the requested frame was shown. Returns an image and saves a PNG in the project's assets folder. Focus Studio opens the project in its editor.",
+            description: "Capture one frame at output time in seconds. By default renders the styled export. source_frame:true returns the uncropped source before zoom, framing and effects, with clip_id, source_time_seconds and coordinate_space for region selection. With exact_frame:true, snap to the output frame grid and use zero time tolerance (slower). Reports frame_index and frame_matches_request; source capture reports actual_source_time_seconds, styled capture actual_time_seconds. Returns an image, saves a PNG and opens the editor.",
             scope: .project, annotations: MCPToolAnnotations(readOnly: false), returnsImage: true
         ),
         MCPToolSpec(

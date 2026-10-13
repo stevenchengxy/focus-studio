@@ -183,6 +183,7 @@ struct ProjectPreviewView: View {
             mediaAssets: project.mediaAssets?.filter { referencedIDs.contains($0.id) } ?? [],
             editCutTimes: project.editCutTimes,
             zoomSegments: project.zoomSegments,
+            regionEffects: project.regionEffects,
             chapters: project.chapters,
             settings: project.settings
         )
@@ -223,6 +224,7 @@ private struct RenderKey: Hashable {
     let mediaAssets: [DemoMediaAsset]
     let editCutTimes: [Double]?
     let zoomSegments: [ZoomSegment]
+    let regionEffects: [RegionEffect]?
     let chapters: [DemoChapter]?
     let settings: ProjectSettings
 }

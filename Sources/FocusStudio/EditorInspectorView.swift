@@ -8,6 +8,7 @@ import UniformTypeIdentifiers
 enum EditorTool: String, CaseIterable, Identifiable {
     case video
     case zoom
+    case focus
     case captions
     case design
     case cursor
@@ -16,11 +17,12 @@ enum EditorTool: String, CaseIterable, Identifiable {
     case export
 
     var id: String { rawValue }
-    var title: String { rawValue.capitalized }
+    var title: String { self == .focus ? "Local emphasis" : rawValue.capitalized }
     var icon: String {
         switch self {
         case .video: return "film.stack"
         case .zoom: return "plus.magnifyingglass"
+        case .focus: return "viewfinder"
         case .captions: return "captions.bubble"
         case .design: return "paintpalette"
         case .cursor: return "cursorarrow"
@@ -69,6 +71,7 @@ struct EditorInspectorView: View {
     @Binding var selectedZoomID: UUID?
     @Binding var selectedChapterID: UUID?
     @Binding var selectedClipID: UUID?
+    @Binding var selectedRegionEffectID: UUID?
     @Binding var currentTime: Double
     let tool: EditorTool
     let isVideoEditing: Bool
@@ -83,6 +86,7 @@ struct EditorInspectorView: View {
     let onImportSharedMedia: (UUID) -> Void
     let onSaveMediaToShared: (UUID) -> Void
     let isImportingMedia: Bool
+    let onSelectRegion: (UUID?) -> Void
     @State private var isGeneratingChapters = false
     @State private var captionsMessage: String?
     @State private var trimStartDraft = 0.0
@@ -161,6 +165,10 @@ struct EditorInspectorView: View {
                         .accessibilityIdentifier("editor.selectedZoom")
                     }
                     zoomInspector
+                case .focus:
+                    EditorRegionEffectInspector(project: $project, selectedID: $selectedRegionEffectID,
+                                                currentTime: $currentTime, onSelectRegion: onSelectRegion)
+                        .disabled(isVideoEditing)
                 case .captions:
                     captionsInspector
                 case .design:

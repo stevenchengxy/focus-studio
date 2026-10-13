@@ -1318,6 +1318,8 @@ public final class AIAssistantSession: ObservableObject {
         case "import_global_media_asset": return demoText("Adding to shared media…", "正在导入通用素材…")
         case "add_global_media_to_project": return demoText("Copying media into this project…", "正在复制素材到当前项目…")
         case "list_media_assets": return demoText("Checking this project's media…", "正在查看当前项目素材库…")
+        case "add_region_effect", "update_region_effect": return demoText("Adjusting local highlight…", "正在调整局部强调…")
+        case "delete_region_effect": return demoText("Removing local highlight…", "正在删除局部强调…")
         case "import_media_asset": return demoText("Adding media to the library…", "正在导入素材…")
         case "insert_media_asset": return demoText("Adding media to the video track…", "正在将素材加入视频滑轨…")
         case "get_status": return demoText("Checking recording readiness…", "正在检查录制状态…")
@@ -1344,6 +1346,8 @@ public final class AIAssistantSession: ObservableObject {
                 : demoText("Video track updated.", "已更新视频滑轨。")
         case "undo_clip_edit": return demoText("Last video edit undone.", "已撤销上一步视频剪辑。")
         case "redo_clip_edit": return demoText("Last video edit redone.", "已重做上一步视频剪辑。")
+        case "add_region_effect", "update_region_effect": return demoText("Local highlight updated. Preview its entrance and return.", "局部强调已更新，可以预览入场与回位。")
+        case "delete_region_effect": return demoText("Local highlight removed.", "已删除局部强调。")
         case "list_global_media_assets": return demoText("Shared media checked.", "已查看通用素材库。")
         case "import_global_media_asset": return demoText("Media added to the shared library.", "素材已加入通用素材库。")
         case "add_global_media_to_project": return demoText("Media copied into this project.", "素材已复制到当前项目。")
@@ -1434,6 +1438,7 @@ public final class AIAssistantSession: ObservableObject {
         - Refer to local files by full path or by a file name from list_assets. Use capture_frame when a clip should match the current look, then pass the frame as first_frame or reference_images.
         - Zoom positions are normalized: x 0–1 from left to right, y 0–1 from top to bottom; times are seconds within the recording (see the project summary for duration, clicks and existing zooms).
         - Each zoom can have one motion_preset. get_project lists the available canonical values and reports the preset for each zoom ID. Interpret “斜着展示、再复原”, “diagonal tilt”, or “angled reveal” as tiltReveal; a sideward camera slide as slideFocus; a quiet floating approach as softDrift; and an ordinary readable click focus as classic. Use add_zoom for a new segment or update_zoom with its existing zoom_id to change only its preset. Prefer classic for dense UI or text, and preview the exported moving shot before calling a decorative motion successful; still frames alone cannot verify animation.
+        - For “局部强调”, “突出这个按钮/卡片”, “背景压暗/模糊”, or “卡片浮起再回位”, use region effects rather than enlarging the whole screen: get_timeline → capture_frame with source_frame=true at the chosen OUTPUT time → inspect that uncropped SOURCE image → add_region_effect with its clip_id, output start/end and source-normalized x/y/width/height. The styled preview includes zoom/crop/padding and is not a source-coordinate reference. Use spotlight for clear local focus, lift for a floating card, tilt for an angled card that settles level; background dim/blur/none, ease_in/ease_out in seconds. Do not invent a rectangle if you cannot inspect the image; ask which area or use the user's explicit coordinates. Selections are fixed rectangles, not object tracking; keep the time range within one stable page state and one clip, and never claim blur is privacy redaction. Enabled local effects cannot overlap. get_project.region_effects lists stable IDs including trimmed-away effects; update_region_effect preserves identity, delete_region_effect removes just that effect, and undo_clip_edit/redo_clip_edit use editor history. Preview entrance, readable hold and return with styled capture_frame and a moving export before claiming completion.
         - After a tool result decide whether another call is needed; otherwise reply with what happened and up to three short follow-up suggestions.
         - If a tool fails, explain the problem in one sentence and, when possible, suggest the fix (open a project, grant Screen Recording permission, configure the Ark key).
         - Reply in \(Self.languageName(context.uiLanguage)). Keep replies to one to three sentences, no Markdown headings.

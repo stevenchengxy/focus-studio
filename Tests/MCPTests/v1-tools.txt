@@ -37,6 +37,9 @@ redo_clip_edit
 update_zoom
 add_zoom
 remove_zoom
+add_region_effect
+update_region_effect
+delete_region_effect
 set_zoom_style
 update_settings
 set_chapters

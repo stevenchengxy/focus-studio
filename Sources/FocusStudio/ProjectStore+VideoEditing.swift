@@ -23,6 +23,7 @@ extension ProjectStore {
         try FileManager.default.copyItem(at: source, to: media)
 
         var project = edited
+        project.materializeRegionEffectClipIdentity()
         project.id = id
         project.title = title
         project.createdAt = Date()

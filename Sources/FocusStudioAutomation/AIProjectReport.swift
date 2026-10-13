@@ -46,6 +46,7 @@ public enum AIProjectReport {
         let music = audio.backgroundMusicPath.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent } ?? "none"
         lines.append("Zoom style: automatic zooms \(settings.autoZoomEnabled ? "on" : "off") | hold \(seconds(settings.zoomHold)) s | ease in \(seconds(settings.zoomEaseIn)) s | ease out \(seconds(settings.zoomEaseOut)) s | chain gap \(seconds(settings.resolvedZoomChainGap)) s")
         lines.append("Zoom motion presets (per segment): classic = direct zoom; tiltReveal = diagonal tilt in and restore; slideFocus = sideward reveal; softDrift = subtle floating move. Set motion_preset in add_zoom or update_zoom.")
+        lines.append("Local highlights: \(project.regionEffects?.count ?? 0). Use capture_frame source_frame=true to inspect the uncropped source, then add_region_effect with clip_id and output start/end. Presets spotlight/lift/tilt; fixed rectangle, no object tracking. get_project lists stable effect IDs, including trimmed-away effects.")
         if settings.autoZoomEnabled, project.zoomSegments.isEmpty, !TimelineMath.hasAutomaticZoomInput(in: project) {
             lines.append("No eligible clicks or typing were captured inside the visible crop. Browser/AX automation may not emit system input events. Use add_zoom at your observed interaction times; enabling automatic zooms cannot recover missing events.")
         }
@@ -95,6 +96,7 @@ public enum AIProjectReport {
         let zooms = AIToolSupport.orderedZooms(project)
         let chapters = (project.chapters ?? []).sorted(by: ChapterMath.precedes)
         let typing = project.resolvedTypingActivity
+        let regionPlacements = (try? RegionEffectTimeline(project: project).placements) ?? []
         let clickItems = sampled(project.clickEvents.sorted { $0.time < $1.time }, limit: maximumDataClicks)
             .map { click -> AIJSONValue in [.rounded(click.time), .rounded(click.x), .rounded(click.y)] }
         let typingItems = sampled(typing.sorted { $0.time < $1.time }, limit: maximumDataTyping)
@@ -115,6 +117,12 @@ public enum AIProjectReport {
             "zoom_count": AIJSONValue(zooms.count),
             "zoom_motion_presets": .array(ZoomMotionPreset.allCases.map { AIJSONValue($0.rawValue) }),
             "zooms": .array(zooms.prefix(maximumDataZooms).map { zoomData(index: $0.index, segment: $0.segment) }),
+            "region_effect_count": AIJSONValue(project.regionEffects?.count ?? 0),
+            "region_effect_presets": .array(RegionEffectPreset.allCases.map { AIJSONValue($0.rawValue) }),
+            "region_effect_backgrounds": .array(RegionEffectBackground.allCases.map { AIJSONValue($0.rawValue) }),
+            "region_effects": .array((project.regionEffects ?? []).prefix(128).map { effect in
+                RegionEffectToolSupport.data(effect, placement: regionPlacements.first { $0.effect.id == effect.id })
+            }),
             "chapter_count": AIJSONValue(chapters.count),
             "chapters": .array(chapters.prefix(maximumDataChapters).enumerated().map { chapterData(index: $0.offset + 1, chapter: $0.element) }),
             "clicks": [

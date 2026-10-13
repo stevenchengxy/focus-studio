@@ -73,6 +73,11 @@ enum FocusStudioE2E {
             // Exercise the atomic replacement path used after NSSavePanel confirms overwrite.
             try Data("stale-output".utf8).write(to: renderedURL, options: .atomic)
             let project = makeProject(sourceURL: sourceURL, specification: specification)
+            if CommandLine.arguments.contains("--region-effects-only") {
+                try await validateRegionEffectRendering(project: project, outputDirectory: outputDirectory)
+                print(#"{"status":"PASS","suite":"region-effects"}"#)
+                return
+            }
             let export = try await ProjectVideoRenderer.export(project: project, to: renderedURL)
             let validation = try await validate(
                 sourceURL: sourceURL,
@@ -89,6 +94,7 @@ enum FocusStudioE2E {
             try await PauseRecordingValidation.run(sourceURL: sourceURL, outputDirectory: outputDirectory)
             try await validateZoomTimingRendering(project: project, outputDirectory: outputDirectory)
             try await validateZoomMotionPresetRendering(project: project, outputDirectory: outputDirectory)
+            try await validateRegionEffectRendering(project: project, outputDirectory: outputDirectory)
             let chapterCaptionDifference = try await validateChapterCaptionRendering(
                 project: project,
                 exportedURL: renderedURL,
@@ -1669,6 +1675,222 @@ enum FocusStudioE2E {
                 )
             }
         }
+    }
+
+    /// Exercise the actual AVFoundation frame graph for capture, imported video
+    /// and stills, including crop coordinates and a simultaneous camera zoom.
+    private static func validateRegionEffectRendering(
+        project: RecordingProject, outputDirectory: URL
+    ) async throws {
+        var base = project
+        base.title = "Local highlight validation"
+        base.zoomSegments = []
+        base.chapters = nil
+        base.typingActivity = []
+        base.clickEvents = []
+        base.cursorSamples = []
+        base.settings.showCursor = false
+        base.settings.showClickRing = false
+        base.settings.motionBlur = 0
+        base.settings.zoomFollowsCursor = 0
+        let clip = DemoVideoClip(sourceStart: 0, sourceEnd: project.duration)
+        base.videoClips = [clip]
+        let stillURL = outputDirectory.appendingPathComponent("region-effect-source.png")
+        let source = AVAssetImageGenerator(asset: AVURLAsset(url: URL(fileURLWithPath: project.sourceVideoPath)))
+        let (sourceFrame, _) = try await source.image(at: .zero)
+        try writeReviewFrame(sourceFrame, to: stillURL)
+        let probes = [0.125, 0.375, 0.75, 1.25, 1.875, 2.25]
+        var results: [[String: Any]] = []
+        for variant in ["spotlight", "lift", "tilt", "cropped-zoom", "imported-video", "imported-image"] {
+            var fixture = base
+            if variant == "cropped-zoom" {
+                fixture.settings.sourceCropInsets = SourceCropInsets(top: 0.12, leading: 0.08, bottom: 0.06, trailing: 0.04)
+                fixture.zoomSegments = [ZoomSegment(start: 0, end: project.duration,
+                    targetX: 0.5, targetY: 0.5, scale: 1.3, kind: .manual,
+                    zoomEaseIn: 0.2, zoomEaseOut: 0.2)]
+            }
+            if variant.hasPrefix("imported-") {
+                let still = variant == "imported-image"
+                let media = DemoMediaAsset(title: variant,
+                    filePath: still ? stillURL.path : project.sourceVideoPath,
+                    kind: still ? .image : .video, duration: still ? 0 : project.duration,
+                    width: project.sourceWidth, height: project.sourceHeight)
+                fixture.mediaAssets = [media]
+                fixture.videoClips![0].mediaAssetID = media.id
+                // Imported pixels must not inherit the capture crop.
+                fixture.settings.sourceCropInsets = SourceCropInsets(top: 0.2, leading: 0.1)
+            }
+            let preset: RegionEffectPreset = variant == "spotlight" || variant == "cropped-zoom"
+                ? .spotlight : (variant == "lift" || variant == "imported-image" ? .lift : .tilt)
+            let cue = RegionEffect(clipID: clip.id, sourceStart: 0.25, sourceEnd: 2.125,
+                rect: NormalizedRegionRect(x: 0.2, y: 0.2, width: 0.4, height: 0.4),
+                preset: preset, background: variant == "imported-image" ? .blur : .dim,
+                scale: 1.6, intensity: 0.65, easeIn: 0.5, easeOut: 0.4)
+            let baseline = makeImageGenerator(for: try await ProjectVideoRenderer.prepare(project: fixture))
+            fixture.regionEffects = [cue]
+            let restored = try JSONDecoder().decode(RecordingProject.self, from: JSONEncoder().encode(fixture))
+            try require(restored.regionEffects == [cue], "local highlights must survive save/reopen")
+            let preview = makeImageGenerator(for: try await ProjectVideoRenderer.prepare(project: restored))
+            let output = outputDirectory.appendingPathComponent("focus-studio-region-\(variant).mp4")
+            _ = try await ProjectVideoRenderer.export(project: restored, to: output)
+            let exported = AVAssetImageGenerator(asset: AVURLAsset(url: output))
+            exported.requestedTimeToleranceBefore = .zero
+            exported.requestedTimeToleranceAfter = .zero
+            var largestDifference = 0.0
+            var maximumPreviewExportDifference = 0.0
+            for seconds in probes {
+                let time = CMTime(seconds: seconds, preferredTimescale: 600)
+                let (previewFrame, _) = try await preview.image(at: time)
+                let (exportedFrame, _) = try await exported.image(at: time)
+                let (baseFrame, _) = try await baseline.image(at: time)
+                let consistency = imageDifference(previewFrame, exportedFrame).meanAbsolute
+                maximumPreviewExportDifference = max(maximumPreviewExportDifference, consistency)
+                try require(consistency < 3, "\(variant) region preview/export diverged at \(seconds)s")
+                let difference = imageDifference(previewFrame, baseFrame).meanAbsolute
+                if seconds < cue.sourceStart || seconds > cue.sourceEnd {
+                    try require(difference < 0.05, "\(variant) region did not restore the original frame")
+                } else {
+                    largestDifference = max(largestDifference, difference)
+                }
+                if seconds == 0.375 || seconds == 1.25 {
+                    try writeReviewFrame(exportedFrame, to: outputDirectory.appendingPathComponent(
+                        "focus-studio-region-\(variant)-\(seconds).png"))
+                }
+                if (variant == "spotlight" || variant == "cropped-zoom"), seconds == 1.25 {
+                    let geometry = ProjectVideoRenderer.geometry(for: restored)
+                    let screen = geometry.screenFrame
+                    var clearCenter = CGPoint(x: 0.4, y: 0.4)
+                    if variant == "cropped-zoom" {
+                        let crop = restored.settings.sourceCropInsets!
+                        var zoom = restored.zoomSegments[0]
+                        let focus = crop.croppedPoint(x: zoom.targetX, y: zoom.targetY)!
+                        zoom.targetX = focus.x; zoom.targetY = focus.y
+                        let size = crop.sourceRect(in: CGSize(width: restored.sourceWidth, height: restored.sourceHeight)).size
+                        let camera = ZoomFrameTransform(state: TimelineMath.zoomState(at: seconds,
+                            segments: [zoom], settings: restored.settings), width: size.width, height: size.height)
+                        let cropped = crop.croppedPoint(x: clearCenter.x, y: clearCenter.y)!
+                        clearCenter = camera.mappedPoint(x: cropped.x, y: cropped.y)
+                    }
+                    let clearArea = CGRect(x: screen.minX + screen.width * clearCenter.x - 8,
+                        y: geometry.outputSize.height - screen.maxY + screen.height * clearCenter.y - 8,
+                        width: 16, height: 16).integral
+                    guard let selected = previewFrame.cropping(to: clearArea),
+                          let untouched = baseFrame.cropping(to: clearArea) else {
+                        throw E2EError.assertionFailed("could not inspect selected region")
+                    }
+                    try require(imageDifference(selected, untouched).meanAbsolute < 0.1,
+                        "\(variant) spotlight must preserve the source pixels at the correctly mapped selection")
+                }
+            }
+            try require(largestDifference > 1, "\(variant) region effect was not visible")
+            results.append(["variant": variant, "output": output.path,
+                "maximumPreviewExportDifference": maximumPreviewExportDifference,
+                "largestEffectDifference": largestDifference])
+        }
+        // A zero background strength is exactly "none", including during
+        // entry/exit. The foreground card animation must remain enabled.
+        var zeroIntensityChecks: [[String: Any]] = []
+        let original = makeImageGenerator(for: try await ProjectVideoRenderer.prepare(project: base))
+        for preset in RegionEffectPreset.allCases {
+            var zero = base
+            zero.regionEffects = [RegionEffect(clipID: clip.id, sourceStart: 0.25, sourceEnd: 2.125,
+                rect: NormalizedRegionRect(x: 0.2, y: 0.2, width: 0.4, height: 0.4),
+                preset: preset, background: .blur, scale: 1.6, intensity: 0,
+                easeIn: 0.5, easeOut: 0.4)]
+            var none = zero
+            none.regionEffects![0].background = .none
+            let zeroFrames = makeImageGenerator(for: try await ProjectVideoRenderer.prepare(project: zero))
+            let noneFrames = makeImageGenerator(for: try await ProjectVideoRenderer.prepare(project: none))
+            var maximumDifference = 0.0
+            for seconds in probes {
+                let time = CMTime(seconds: seconds, preferredTimescale: 600)
+                let (zeroFrame, _) = try await zeroFrames.image(at: time)
+                let (noneFrame, _) = try await noneFrames.image(at: time)
+                let difference = imageDifference(zeroFrame, noneFrame).meanAbsolute
+                maximumDifference = max(maximumDifference, difference)
+                try require(difference < 0.05,
+                    "\(preset) blur intensity zero must preserve the unprocessed background at \(seconds)s")
+                if preset != .spotlight, seconds == 1.25 {
+                    let (originalFrame, _) = try await original.image(at: time)
+                    try require(imageDifference(zeroFrame, originalFrame).meanAbsolute > 1,
+                        "\(preset) intensity zero must not disable the foreground card animation")
+                }
+            }
+            zeroIntensityChecks.append(["preset": preset.rawValue, "probes": probes.count,
+                "maximumDifferenceFromNone": maximumDifference])
+        }
+        // A routed synthetic pointer appears only at the lifted hotspot, never
+        // once in the background and again on the foreground card.
+        var pointerProject = base
+        pointerProject.settings.showCursor = true
+        pointerProject.settings.cursorScale = 1
+        pointerProject.cursorSamples = [CursorSample(time: 0, x: 0.25, y: 0.4),
+                                        CursorSample(time: project.duration, x: 0.25, y: 0.4)]
+        pointerProject.regionEffects = [RegionEffect(clipID: clip.id, sourceStart: 0.25, sourceEnd: 2.125,
+            rect: NormalizedRegionRect(x: 0.2, y: 0.2, width: 0.4, height: 0.4), preset: .lift,
+            scale: 1.6)]
+        let pointer = makeImageGenerator(for: try await ProjectVideoRenderer.prepare(project: pointerProject))
+        pointerProject.settings.showCursor = false
+        let noPointer = makeImageGenerator(for: try await ProjectVideoRenderer.prepare(project: pointerProject))
+        let time = CMTime(seconds: 1.25, preferredTimescale: 600)
+        let (withPointer, _) = try await pointer.image(at: time)
+        let (withoutPointer, _) = try await noPointer.image(at: time)
+        let geometry = ProjectVideoRenderer.geometry(for: pointerProject)
+        let screen = geometry.screenFrame
+        func pointerProbe(x: Double) -> CGRect {
+            CGRect(x: screen.minX + screen.width * x - 3,
+                y: geometry.outputSize.height - screen.maxY + screen.height * 0.4 - 3,
+                width: 25, height: 34).integral
+        }
+        guard let oldWith = withPointer.cropping(to: pointerProbe(x: 0.25)),
+              let oldWithout = withoutPointer.cropping(to: pointerProbe(x: 0.25)),
+              let newWith = withPointer.cropping(to: pointerProbe(x: 0.16)),
+              let newWithout = withoutPointer.cropping(to: pointerProbe(x: 0.16)) else {
+            throw E2EError.assertionFailed("could not inspect lifted pointer")
+        }
+        try require(imageDifference(oldWith, oldWithout).meanAbsolute < 0.1,
+            "lifted pointer left a duplicate at its original hotspot")
+        try require(imageDifference(newWith, newWithout).meanAbsolute > 0.1,
+            "lifted pointer did not follow the selected region")
+        try writeReviewFrame(withPointer, to: outputDirectory.appendingPathComponent("focus-studio-region-pointer.png"))
+        // This measures warm offline frame extraction (seek/decode plus the
+        // actual CI composition), not native timeline interaction or UI FPS.
+        // Report distributions, never impose a machine-dependent threshold.
+        var benchmarks: [[String: Any]] = []
+        for variant in ["baseline", "lift-dim", "tilt-blur"] {
+            var benchmark = base
+            if variant != "baseline" {
+                benchmark.regionEffects = [RegionEffect(clipID: clip.id,
+                    sourceStart: 0, sourceEnd: project.duration,
+                    rect: NormalizedRegionRect(x: 0.2, y: 0.2, width: 0.4, height: 0.4),
+                    preset: variant == "lift-dim" ? .lift : .tilt,
+                    background: variant == "lift-dim" ? .dim : .blur,
+                    scale: 1.6, easeIn: 0.5, easeOut: 0.4)]
+            }
+            let prepared = try await ProjectVideoRenderer.prepare(project: benchmark)
+            let frames = makeImageGenerator(for: prepared)
+            var elapsed: [Double] = []
+            for index in 0..<38 {
+                let frame = index < 6 ? index : index - 6
+                let seconds = 0.05 + Double(frame) / 32 * (project.duration - 0.1)
+                let started = ProcessInfo.processInfo.systemUptime
+                let (image, _) = try await frames.image(at: CMTime(seconds: seconds, preferredTimescale: 60_000))
+                try require(image.width == Int(prepared.geometry.outputSize.width), "benchmark frame has wrong dimensions")
+                let milliseconds = (ProcessInfo.processInfo.systemUptime - started) * 1_000
+                if index >= 6 { elapsed.append(milliseconds) }
+            }
+            elapsed.sort()
+            benchmarks.append(["variant": variant, "samples": elapsed.count,
+                "medianMilliseconds": elapsed[elapsed.count / 2],
+                "p95Milliseconds": elapsed[Int((Double(elapsed.count - 1) * 0.95).rounded(.up))],
+                "width": prepared.geometry.outputSize.width, "height": prepared.geometry.outputSize.height])
+        }
+        let report = try JSONSerialization.data(withJSONObject: ["status": "PASS", "variants": results,
+            "zeroIntensityBackgroundChecks": zeroIntensityChecks,
+            "warmOfflineFrameExtraction": benchmarks,
+            "benchmarkScope": "AVAssetImageGenerator seek/decode and actual CI composition; excludes prepare; 6 warm-up and 32 measured frames; not UI FPS"],
+            options: [.prettyPrinted, .sortedKeys])
+        try report.write(to: outputDirectory.appendingPathComponent("focus-studio-region-report.json"))
     }
 
     /// Chapter captions are part of the shared compositor: the pill must show

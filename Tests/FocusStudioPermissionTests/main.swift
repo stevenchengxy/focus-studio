@@ -7,6 +7,7 @@ import ScreenCaptureKit
 private var failures: [String] = []
 failures.append(contentsOf: typingActivityCaptureFailures())
 failures.append(contentsOf: zoomMotionFailures())
+failures.append(contentsOf: regionEffectFailures())
 failures.append(contentsOf: cursorMotionFailures())
 failures.append(contentsOf: interactionTraceFailures())
 failures.append(contentsOf: zoomBoundaryFailures())

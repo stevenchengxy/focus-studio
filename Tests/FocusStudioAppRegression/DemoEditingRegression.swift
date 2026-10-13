@@ -19,10 +19,55 @@ enum DemoEditingRegression {
         try await modelOpensDerivedContextAndRefusesBusy(fixture)
         try await timelineWorkingCopyAndUndo(fixture)
         try await editorMediaLibraryAndRedo(fixture)
+        try await localHighlightsSurviveWorkingCopies()
         print("DemoEditingRegression: PASS (real 6-second movie cut to 3 seconds, source SHA256 unchanged, trace/zooms/chapters remapped, dependent assets copied and independently readable, invalid/cancelled/missing-asset edits leave no partial project, media import/insert and Undo/Redo survive reload)")
     }
 
     private static let ranges = [DemoKeepRange(start: 0, end: 1), DemoKeepRange(start: 3, end: 5)]
+
+    private static func localHighlightsSurviveWorkingCopies() async throws {
+        let fixture = try await DemoEditingFixture()
+        defer { fixture.cleanup() }
+        var source = fixture.project
+        source.regionEffects = [.init(clipID: source.id, sourceStart: 0.5, sourceEnd: 5.5,
+            rect: .init(x: 0.2, y: 0.2, width: 0.5, height: 0.5), preset: .lift)]
+        let model = StudioModel(store: fixture.store, interactionTrackingAccess: { true },
+            inputMonitoringAccess: { true }, screenCaptureAccess: { true })
+        await model.reloadProjects()
+        model.open(fixture.project)
+        try expect(model.updateActiveProject(source) && model.canUndoVideoEdit(projectID: source.id),
+                   "Adding only a local highlight must enter undo history")
+        let addUndone = try await model.undoVideoEdit(projectID: source.id)
+        try expect(addUndone.regionEffects == nil && model.canRedoVideoEdit(projectID: source.id),
+                   "Undo must remove a newly added highlight and offer Redo")
+        let addRedone = try await model.redoVideoEdit(projectID: source.id)
+        try expect(addRedone.regionEffects == source.regionEffects, "Redo must restore exact local highlight data")
+        var removed = addRedone; removed.regionEffects = []
+        try expect(model.updateActiveProject(removed), "Deleting an effect is accepted")
+        let deleteUndone = try await model.undoVideoEdit(projectID: source.id)
+        try expect(deleteUndone.regionEffects == source.regionEffects, "Deleting a highlight can be undone")
+        let working = try await model.applyVideoEdit(projectID: source.id,
+            operation: .split(clipID: source.id, at: 3))
+        try expect(try RegionEffectTimeline(project: working).placements.count == 2,
+                   "Working copy split must keep both source-bound highlights")
+        let restored = try await model.undoVideoEdit(projectID: working.id)
+        try expect(restored.id == working.id
+                   && (try RegionEffectTimeline(project: restored)).placements.count == 1,
+                   "First-edit Undo must retain the original implicit clip identity after the project forks")
+        let copy = try await fixture.store.createVideoEditingCopy(from: source, edited: source, title: "Highlight copy")
+        try expect(try RegionEffectTimeline(project: copy).placements.count == 1,
+                   "Copying a highlighted unedited recording must retain its effect")
+        let cut = try await fixture.store.createDemoCut(from: working,
+            keepRanges: [.init(start: 1, end: 2), .init(start: 4, end: 5)], title: "Highlighted cut")
+        let cutEffects = try RegionEffectTimeline(project: cut).placements
+        try expect(cutEffects.count == 2 && close(cutEffects.map(\.start), [0, 1])
+                   && close(cutEffects.map(\.end), [1, 2]),
+                   "Keep-range cuts must preserve exact clip lineage for highlights")
+        let reloaded = try await fixture.store.loadProjects().first { $0.id == cut.id }
+        try expect(reloaded?.regionEffects == cut.regionEffects, "Highlight edits survive a library reload")
+        model.closeEditor()
+        await model.flushProjectEdits()
+    }
 
     private static func pacingAndRetimingPreserveExecutionTyping() throws {
         var source = RecordingProject(title: "Typing between clicks", sourceVideoPath: "/fixture.mp4",

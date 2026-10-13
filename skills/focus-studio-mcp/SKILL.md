@@ -36,7 +36,7 @@ recording shows a countdown and a control bar. Focus Studio is the only writer o
 | Status and library | `get_status`, `list_projects`, `get_project`, `rename_project`, `delete_project` |
 | New projects from files | `import_video`, `create_screenshot_demo` |
 | Recording | `list_recording_sources`, `start_recording`, `capture_recording_frame`, `perform_recording_action`, `perform_recording_text`, `stop_recording`, `wait_for_recording` |
-| Editing (by `project_id`) | `analyze_demo_pacing`, `create_demo_cut`, `get_timeline`, `resolve_timeline_frame`, `split_clip`, `trim_clip`, `delete_clip`, `move_clip`, `set_transition`, `set_clip_audio`, `set_image_duration`, `undo_clip_edit`, `redo_clip_edit`, `update_zoom`, `add_zoom`, `remove_zoom`, `set_zoom_style`, `update_settings`, `set_chapters`, `set_background_image`, `set_background_music`, `set_sound_effects` |
+| Editing (by `project_id`) | `analyze_demo_pacing`, `create_demo_cut`, `get_timeline`, `resolve_timeline_frame`, `split_clip`, `trim_clip`, `delete_clip`, `move_clip`, `set_transition`, `set_clip_audio`, `set_image_duration`, `undo_clip_edit`, `redo_clip_edit`, `update_zoom`, `add_zoom`, `remove_zoom`, `add_region_effect`, `update_region_effect`, `delete_region_effect`, `set_zoom_style`, `update_settings`, `set_chapters`, `set_background_image`, `set_background_music`, `set_sound_effects` |
 | Shared media library | `list_global_media_assets`, `import_global_media_asset`, `add_global_media_to_project` |
 | Current project's media | `list_media_assets`, `import_media_asset`, `insert_media_asset` |
 | Output | `capture_frame`, `export_project`, `assemble_video`, `list_assets` |
@@ -59,6 +59,27 @@ Use `update_zoom` with an existing `zoom_id` for individual start/end/target/sca
 Use
 `set_zoom_style` for global motion, before those local edits; automatic regeneration can change segments.
 If these newer tools are absent from the connected catalog, update Focus Studio before claiming to use them.
+
+For a local highlight (a button, chart or card), inspect `get_timeline`, then
+`capture_frame` with `source_frame: true` at the intended **output** time. That image
+is the actual uncropped source before framing, zoom and effects; its `clip_id`,
+`source_time_seconds` and `coordinate_space` identify the reference. Measure
+`x`, `y`, `width`, `height` as 0–1 fractions of that image, from its top-left.
+Do not use coordinates from the styled preview. Call `add_region_effect` with the
+clip ID, output `start`/`end` inside that clip and the rectangle. Choose `spotlight`
+for local focus, `lift` for an enlarged floating card, or `tilt` for an angled entry
+that settles level; `background` is `dim`, `blur` or `none`. `scale` is 1–3,
+`intensity` 0–1, and `ease_in`/`ease_out` are 0–5 seconds. This is a **fixed rectangle**,
+not an object tracker or privacy redaction: bound it to a stable page state and
+inspect moving footage when the page scrolls. Enabled highlights cannot overlap.
+
+`get_project.region_effects` reports every effect's stable ID and source bounds,
+including trimmed-away effects whose visible `start`/`end` are null. Use
+`update_region_effect` with `effect_id` to adjust only specified properties;
+`delete_region_effect` removes only that highlight. Recent changes use the same
+`undo_clip_edit`/`redo_clip_edit` history as the editor. Preview styled frames at
+entry, hold and return, then inspect the exported moving shot; source-frame
+capture alone cannot verify the composed effect.
 
 For precise clip work, call `get_timeline` first. Use `resolve_timeline_frame` with
 either approximate `at_seconds` or a zero-based `frame_index` to obtain the

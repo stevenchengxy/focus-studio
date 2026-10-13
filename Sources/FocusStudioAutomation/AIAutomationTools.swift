@@ -10,7 +10,7 @@ import Foundation
 /// A library project in full, read without opening it in the editor.
 public struct GetProjectTool: AIAssistantTool {
     public let name = "get_project"
-    public let summary = "Describe one library project without opening it: title, duration, source size, look, zoom style, audio and export settings, available zoom motion presets and the zooms with their ids and individual preset (the first 70 in time order, with zoom_count), the chapters (the first 50, with chapter_count; long text is shortened with …), and the recorded clicks and typing moments (at most 200 of each, spread evenly over the recording, with their totals; times in seconds; positions 0–1 from the top-left corner)."
+    public let summary = "Describe one project without opening it: look, audio, source size, up to 70 zooms and 50 chapters, sampled clicks/typing, and region_effects with stable IDs, source-normalized rectangles and source/output ranges (null output range means trimmed away). Includes available presets and total counts. Times are seconds; coordinates start at top-left."
 
     public init() {}
 

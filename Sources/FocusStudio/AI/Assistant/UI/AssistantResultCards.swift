@@ -35,7 +35,8 @@ struct AssistantToolResultCard: View {
         case "export_project", "export_demo", "assemble_video": return L10n.tr("Video output updated.")
         case "analyze_demo_pacing": return L10n.tr("Candidate waits identified. Check page changes before cutting.")
         case "create_demo_cut": return L10n.tr("An editable copy is ready. The original recording is preserved.")
-        case "add_zoom", "update_zoom", "remove_zoom", "set_zoom_style", "update_settings", "set_chapters",
+        case "add_region_effect", "update_region_effect", "delete_region_effect",
+             "add_zoom", "update_zoom", "remove_zoom", "set_zoom_style", "update_settings", "set_chapters",
              "set_background_image", "set_background_music", "set_sound_effects":
             return L10n.tr("The edit has been applied.")
         default: return L10n.tr("Result received. Details are available below.")

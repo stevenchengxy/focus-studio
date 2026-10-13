@@ -2,6 +2,8 @@
 
 Focus Studio 是一个面向各类产品的原生 macOS Demo 录制与编辑器。它保存原始画面、鼠标轨迹和点击坐标，把点击转成可编辑的缩放区块，再用同一条 Core Image 与 AVFoundation 管线预览、导出。接入 Codex 后，AI 助手可以协助录制、分析节奏、剪辑和准备宣传镜头；产品网址和 Finlyze 示例都不是固定模板。
 
+局部强调可从录屏、导入视频或图片中框选一个区域，使用聚光、卡片浮起或倾斜揭示，并压暗或模糊背景。效果绑定源片段，在独立效果轨中调整时间，支持撤销；裁剪后拉长可恢复原来的效果区间。Codex 可通过 `capture_frame(source_frame: true)` 查看原素材，再用 `add_region_effect`、`update_region_effect`、`delete_region_effect` 编辑。第一版是固定选区，选区内视频继续播放；不包含自动对象跟踪、定格或三维透视。
+
 所有录屏、截图、音频和项目元数据默认只保存在本机。
 
 新用户可按 [Codex 连接指南](docs/CODEX-SETUP.md) 分别配置应用内助手与外部 MCP 控制；生成视频或图片前按 [AI 模型配置](docs/AI-MODEL-SETUP.md) 设置 Ark、Gemini/Veo 等提供商。录制到剪辑的步骤见 [Demo 工作流](docs/AI-DEMO-WORKFLOW.md)，产品宣传镜头的构思见 [AI Promo Skill](skills/focus-ai-promo/SKILL.md)。
@@ -196,7 +198,7 @@ open "dist/Focus Studio.app"
 ./scripts/package-release.sh
 ```
 
-该命令构建通用应用并生成 DMG、ZIP、SHA-256 校验文件。只打包应用及静态素材，不复制个人项目或登录凭据。`verify-release.sh` 同时检查 helper：架构与应用一致、只依赖系统库、签名标识、没有 entitlements，并对每个可运行的架构做一次 stdio 冒烟测试（握手、46 个工具与 `Tests/MCPTests/v1-tools.txt` 一致）。
+该命令构建通用应用并生成 DMG、ZIP、SHA-256 校验文件。只打包应用及静态素材，不复制个人项目或登录凭据。`verify-release.sh` 同时检查 helper：架构与应用一致、只依赖系统库、签名标识、没有 entitlements，并对每个可运行的架构做一次 stdio 冒烟测试（握手、工具目录与 `Tests/MCPTests/v1-tools.txt` 一致）。
 
 ## macOS 权限
 
@@ -230,7 +232,7 @@ open "dist/Focus Studio.app"
 - 检查输出尺寸、时长、缩放帧差异、裁剪区域与音视频可读性。
 - 用隔离的临时项目库反复测试打开、编辑、返回、旧绑定读取与过期回调，验证最新修改落盘。
 - 验证 MCP 控制通道（`FocusStudioAppRegression`）：按 `project_id` 编辑、首次连接批准与撤销、调用时间从到达应用算起（等批准或排队超过这段时间时返回 `waiting_for_approval` / `waiting_for_turn`，helper 报告的已用时间限制在 0–600 秒）、socket 权限、录制会话（倒计时、`duration`、`wait_for_recording`、取消、声音询问），以及一次真实链路的端到端调用（`focus-studio-mcp` → 控制服务 → 应用模型，使用临时项目库）；一键接入只针对假的 `claude` / `codex`，不会改动本机配置。
-- 运行 `scripts/test-mcp.sh`：工具目录（46 个工具，与 `Tests/MCPTests/v1-tools.txt` 一致）、SDK 适配层、协议版本协商、进度、取消、断线重连；用只依赖标准库的 Python MCP 客户端通过真实 stdio 驱动构建出的 helper，并连接一个假的应用。所有 helper 都设置 `FOCUS_STUDIO_MCP_NO_LAUNCH=1` 和临时 socket，不会打开或连接真实的 Focus Studio。
+- 运行 `scripts/test-mcp.sh`：工具目录（与 `Tests/MCPTests/v1-tools.txt` 一致）、SDK 适配层、协议版本协商、进度、取消、断线重连；用只依赖标准库的 Python MCP 客户端通过真实 stdio 驱动构建出的 helper，并连接一个假的应用。所有 helper 都设置 `FOCUS_STUDIO_MCP_NO_LAUNCH=1` 和临时 socket，不会打开或连接真实的 Focus Studio。
 
 端到端产物位于 `.artifacts/e2e/`。
 
