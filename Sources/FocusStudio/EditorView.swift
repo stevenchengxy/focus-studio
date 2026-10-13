@@ -15,6 +15,8 @@ struct EditorView: View {
     @State private var selectedZoomID: UUID?
     @State private var selectedChapterID: UUID?
     @State private var selectedClipID: UUID?
+    @State private var selectedRegionEffectID: UUID?
+    @State private var regionSelectionRequest: RegionSelectionRequest?
     // QA hook, mirroring FOCUS_STUDIO_START_DESTINATION: opens the editor on a
     // named inspector tab so a panel can be screenshotted without scripted clicks.
     @State private var selectedTool: EditorTool = ProcessInfo.processInfo
@@ -62,10 +64,12 @@ struct EditorView: View {
                         selectedZoomID: $selectedZoomID,
                         selectedChapterID: $selectedChapterID,
                         selectedClipID: $selectedClipID,
+                        selectedRegionEffectID: $selectedRegionEffectID,
                         selectedTool: $selectedTool,
                         onVideoEdit: applyVideoEdit,
                         onInsertMedia: insertMediaAsset,
-                        isVideoEditing: isApplyingVideoEdit
+                        isVideoEditing: isApplyingVideoEdit,
+                        onAddRegionEffect: { presentRegionSelection(nil) }
                     )
                 }
 
@@ -75,6 +79,7 @@ struct EditorView: View {
                     selectedZoomID: $selectedZoomID,
                     selectedChapterID: $selectedChapterID,
                     selectedClipID: $selectedClipID,
+                    selectedRegionEffectID: $selectedRegionEffectID,
                     currentTime: seekBinding,
                     tool: selectedTool,
                     isVideoEditing: isApplyingVideoEdit,
@@ -88,7 +93,8 @@ struct EditorView: View {
                     onInsertMedia: { insertMediaAsset($0, atIndex: insertionIndex(at: currentTime)) },
                     onImportSharedMedia: importSharedMedia,
                     onSaveMediaToShared: saveMediaToShared,
-                    isImportingMedia: isImportingMedia
+                    isImportingMedia: isImportingMedia,
+                    onSelectRegion: presentRegionSelection
                 )
                 .id(selectedTool)
                 .transition(StudioMotion.panel(reduceMotion: reduceMotion))
@@ -97,8 +103,13 @@ struct EditorView: View {
             }
         }
         .background(EditorKeyboardBridge(enabled: !model.isExportingFromEditor && !isApplyingVideoEdit
-            && !isImportingMedia && exportMessage == nil && videoEditMessage == nil && !showsShortcuts,
+            && !isImportingMedia && regionSelectionRequest == nil && exportMessage == nil && videoEditMessage == nil && !showsShortcuts,
             perform: handleTransport))
+        .sheet(item: $regionSelectionRequest) { request in
+            EditorRegionSelectionSheet(project: project, request: request) { rect in
+                commitRegionSelection(rect, request: request)
+            }
+        }
         .onAppear(perform: restoreVideoEditPosition)
         .onDisappear { isPlaying = false }
         .animation(reduceMotion ? nil : StudioMotion.panelAnimation, value: selectedTool)
@@ -135,16 +146,25 @@ struct EditorView: View {
             Text(videoEditMessage ?? "")
         }
         .onChange(of: selectedZoomID) { _, id in
-            if id != nil { selectedChapterID = nil; selectedTool = .zoom }
+            if id != nil { selectedChapterID = nil; selectedRegionEffectID = nil; selectedTool = .zoom }
         }
         .onChange(of: selectedChapterID) { _, id in
-            if id != nil { selectedZoomID = nil; selectedTool = .captions }
+            if id != nil { selectedZoomID = nil; selectedRegionEffectID = nil; selectedTool = .captions }
         }
         .onChange(of: selectedClipID) { _, id in
             if id != nil {
                 selectedZoomID = nil
                 selectedChapterID = nil
+                selectedRegionEffectID = nil
                 selectedTool = .video
+            }
+        }
+        .onChange(of: selectedRegionEffectID) { _, id in
+            if id != nil {
+                selectedZoomID = nil
+                selectedChapterID = nil
+                selectedClipID = nil
+                selectedTool = .focus
             }
         }
     }
@@ -256,6 +276,53 @@ struct EditorView: View {
         .padding(.vertical, 13)
         .frame(width: 64)
         .background(StudioTheme.panel)
+    }
+
+    private func presentRegionSelection(_ effectID: UUID?) {
+        guard !isApplyingVideoEdit, !isImportingMedia, !model.isExportingFromEditor else { return }
+        guard let timeline = try? DemoVideoTimeline(project: project) else { return }
+        let existing = project.regionEffects?.first { $0.id == effectID }
+        let placement = existing.flatMap { effect in timeline.placements.first { $0.clip.id == effect.clipID } }
+            ?? timeline.placements.first { currentTime >= $0.start && currentTime < $0.end }
+            ?? timeline.placements.last
+        guard let placement else { return }
+        isPlaying = false
+        let sourceTime = EditorRegionTiming.selectionSourceTime(effect: existing, clip: placement.clip,
+            timelineStart: placement.start, currentTime: currentTime)
+        regionSelectionRequest = RegionSelectionRequest(
+            effectID: existing?.id, clipID: placement.clip.id,
+            sourceTime: sourceTime, initialRect: existing?.rect)
+    }
+
+    private func commitRegionSelection(_ rect: NormalizedRegionRect, request: RegionSelectionRequest) {
+        guard let timeline = try? DemoVideoTimeline(project: project),
+              let placement = timeline.placements.first(where: { $0.clip.id == request.clipID }) else { return }
+        var effects = project.regionEffects ?? []
+        if let id = request.effectID, let index = effects.firstIndex(where: { $0.id == id }) {
+            effects[index].rect = rect
+            do { try RegionEffectValidator.validate(effects[index], in: project, excludingID: id) }
+            catch { videoEditMessage = L10n.tr(error.localizedDescription); return }
+            selectedRegionEffectID = id
+        } else {
+            guard let range = EditorRegionTiming.availableRange(in: placement.clip, project: project,
+                                                                near: request.sourceTime) else {
+                videoEditMessage = L10n.tr("No room for another emphasis in this clip. Shorten or remove an existing effect.")
+                return
+            }
+            let length = min(3, range.upperBound - range.lowerBound)
+            let sourceStart = request.sourceTime.clamped(to: range.lowerBound...(range.upperBound - length))
+            let effect = RegionEffect(clipID: placement.clip.id,
+                sourceStart: max(placement.clip.sourceStart, sourceStart),
+                sourceEnd: min(placement.clip.sourceEnd, sourceStart + length),
+                rect: rect)
+            do { try RegionEffectValidator.validate(effect, in: project) }
+            catch { videoEditMessage = L10n.tr(error.localizedDescription); return }
+            effects.append(effect)
+            selectedRegionEffectID = effect.id
+            seek(to: placement.start + sourceStart - placement.clip.sourceStart + length / 2)
+        }
+        project.regionEffects = effects
+        selectedTool = .focus
     }
 
     private var seekBinding: Binding<Double> {
@@ -450,6 +517,7 @@ struct EditorView: View {
         case .undo: undoVideoEdit()
         case .redo: redoVideoEdit()
         case .deselect:
+            selectedRegionEffectID = nil
             selectedZoomID = nil
             selectedChapterID = nil
             selectedClipID = nil

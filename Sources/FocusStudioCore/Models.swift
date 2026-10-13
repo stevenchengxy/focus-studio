@@ -857,6 +857,8 @@ public struct RecordingProject: Codable, Hashable, Sendable, Identifiable {
     /// Optional so existing projects remain readable without migration.
     public var typingActivity: [TypingActivity]?
     public var zoomSegments: [ZoomSegment]
+    /// Source-bound local highlights. Absent on projects saved before build 58.
+    public var regionEffects: [RegionEffect]?
     /// Narrated chapters with on-video captions. Optional so projects written
     /// by earlier builds decode unchanged; nil and empty are equivalent.
     public var chapters: [DemoChapter]?
@@ -880,6 +882,7 @@ public struct RecordingProject: Codable, Hashable, Sendable, Identifiable {
         videoSourceDuration: Double? = nil,
         typingActivity: [TypingActivity]? = nil,
         zoomSegments: [ZoomSegment] = [],
+        regionEffects: [RegionEffect]? = nil,
         chapters: [DemoChapter]? = nil,
         settings: ProjectSettings = .init()
     ) {
@@ -900,6 +903,7 @@ public struct RecordingProject: Codable, Hashable, Sendable, Identifiable {
         self.videoSourceDuration = videoSourceDuration
         self.typingActivity = typingActivity
         self.zoomSegments = zoomSegments
+        self.regionEffects = regionEffects
         self.chapters = chapters
         self.settings = settings
     }

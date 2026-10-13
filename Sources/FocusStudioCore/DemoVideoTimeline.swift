@@ -493,6 +493,36 @@ public struct DemoVideoTimeline: Sendable {
                             newStart: placement.start + lower - placement.clip.sourceStart)
         }
         var result = remapMetadata(project, through: spans, to: next)
+        result.regionEffects = project.regionEffects.map { effects in
+            effects.flatMap { effect -> [RegionEffect] in
+                switch operation {
+                case .split(let splitID, let at) where effect.clipID == splitID:
+                    guard let old = placements.first(where: { $0.clip.id == splitID }) else { return [] }
+                    let sourceCut = old.clip.sourceStart + at - old.start
+                    var pieces: [RegionEffect] = []
+                    for clip in next.clips where parentIDs[clip.id] == splitID {
+                        // Partition at the cut only. The outer source bounds
+                        // can be hidden by a trim and must remain restorable.
+                        let lower = clip.id == splitID ? effect.sourceStart : max(effect.sourceStart, sourceCut)
+                        let upper = clip.id == splitID ? min(effect.sourceEnd, sourceCut) : effect.sourceEnd
+                        guard upper - lower > 0.000_001 else { continue }
+                        var copy = effect
+                        if !pieces.isEmpty { copy.id = UUID() }
+                        copy.clipID = clip.id
+                        copy.sourceStart = lower; copy.sourceEnd = upper
+                        pieces.append(copy)
+                    }
+                    return pieces
+                default:
+                    // Trims retain hidden source ranges so dragging the edge
+                    // back out restores the original highlight as well.
+                    return next.clips.contains(where: { $0.id == effect.clipID }) ? [effect] : []
+                }
+            }
+        }
+        guard (result.regionEffects?.count ?? 0) <= 128 else {
+            throw DemoVideoTimelineError.invalidOperation("A project supports up to 128 local highlights. Remove a highlight before splitting this clip.")
+        }
         result.videoClips = next.clips
         result.videoTransitions = next.transitions
         result.videoSourceDuration = sourceDuration

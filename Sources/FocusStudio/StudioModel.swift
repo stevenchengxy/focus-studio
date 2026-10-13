@@ -1595,6 +1595,7 @@ final class StudioModel: ObservableObject {
         defer { isBusy = false }
         let working = try await store.createVideoEditingCopy(from: source, edited: edited, title: title)
         var baseline = source
+        baseline.materializeRegionEffectClipIdentity()
         baseline.id = working.id
         baseline.title = working.title
         baseline.createdAt = working.createdAt
@@ -1693,6 +1694,7 @@ final class StudioModel: ObservableObject {
         let working = try await store.createVideoEditingCopy(from: source, edited: source, title: title,
                                                              importedMedia: inspected)
         var baseline = source
+        baseline.materializeRegionEffectClipIdentity()
         baseline.id = working.id
         baseline.title = working.title
         baseline.createdAt = working.createdAt
@@ -2344,6 +2346,7 @@ final class StudioModel: ObservableObject {
            previous.title != project.title
             || previous.settings != project.settings
             || previous.zoomSegments != project.zoomSegments
+            || previous.regionEffects != project.regionEffects
             || previous.chapters != project.chapters
             || previous.videoClips != project.videoClips
             || previous.videoTransitions != project.videoTransitions

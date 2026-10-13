@@ -1,0 +1,28 @@
+# Build 59 · local emphasis
+
+The editor adds a Local emphasis inspector and a separate mint-colored timeline lane. On the current recording, imported video or image, choose a rectangle and apply Spotlight, Lift or Tilt. Background choices are dim, blur and unchanged. The inspector exposes size, strength and duration; entrance/return timing is in Advanced. Selection is performed against an unstyled source frame and converted back through the recording crop into full-source normalized coordinates. Re-selecting an effect shows a frame within that effect, even when the current playhead is elsewhere or the effect has been trimmed away.
+
+Effects are non-destructive and bound to a clip ID and original source times. Trimming hides out-of-range portions; extending the trim restores them. Splitting partitions source intervals, including previously hidden portions and sub-0.1-second tails. Moving, deleting, working copies and keep-range cuts retain the exact clip lineage. Region-only edits enter the same Undo/Redo history as clip edits. Authoring and structural edits enforce a maximum of 128 effects and reject overlapping enabled effects.
+
+Timeline and inspector drags use local drafts, committing one model write when released. The renderer shares the already-decoded frame, caches rounded selection masks and shadows at preparation, and uses a bounded 640-pixel background blur while keeping the selected region at native resolution. Preview and export use the same compositor. Synthetic pointer/click overlays stay separate until compositing and follow the selected card when their hotspot is inside it. Projects without local effects skip the mask-preparation context.
+
+Codex and the in-app assistant share `add_region_effect`, `update_region_effect` and `delete_region_effect`; `get_project.region_effects` includes stable IDs and trimmed-away effects. `capture_frame(source_frame: true)` returns original, uncropped pixels with clip/source-time metadata so an AI measures the right coordinate space. Tool arguments reject unknown fields, invalid JSON number types and non-finite values. The repository's recording/editing skills document the source-frame → selection → preview/export workflow.
+
+## Scope
+
+This first version uses fixed rectangular selections over live footage. It does not track scrolling objects, freeze the source, perform perspective/3D projection or offer arbitrary masks. Background dim/blur is visual emphasis, not privacy redaction. A pointer already baked into an imported movie cannot be erased; synchronized synthetic overlays are composed separately. No changes were made to manual recording's click-detection algorithm.
+
+## Validation
+
+- Debug and native release builds passed. The installed app is 1.12.0 (59); signature verification passed, and the installer retained a recoverable previous bundle.
+- Permission/core tests passed, including old-project JSON, validation, timing, hidden trim restoration, split tails, exact keep-range lineage, working copies and effect limits.
+- App regressions passed, including region-only add/delete Undo/Redo and first clip-edit Undo. Editor helper tests cover placement, duplicate limits and reselect frame choice; the 292-point inspector snapshot was reviewed.
+- The general E2E, cursor/pause, localization, language preferences, installation, Codex plan runner, Codex connection and AI gateway suites passed. The assistant and MCP suites were run independently after their test-helper/schema-description fixes. MCP verifies 50 tools over real stdio, conservative schemas, argument forwarding, cancellation and reconnect.
+- `swift run FocusStudioE2E --region-effects-only --output-dir .artifacts/region-effects-final` passed: six MP4 variants (spotlight, lift, tilt, cropped + zoomed, imported video and imported image), preview/export sampling, region/cursor mapping, unchanged frames outside the effect, and 18 zero-strength comparisons. Maximum mean preview/export pixel difference was 1.009 out of 255; all zero-strength comparisons were exactly zero.
+- Live UI: created a rectangle on a disposable imported clip, switched Spotlight to Tilt, undid/redid the preset, reopened the saved project, and inspected the final preview. A region-handle drag changed 0.80–1.80 s to 0.90–1.80 s; one Undo restored it. The corrected lane aligns with the ruler and video origin, including the timeline's trailing gutter. Screenshot: `.artifacts/region-effects-final/editor-build59.png`.
+- Live MCP: source-frame capture, region add/update/delete and styled MP4 export succeeded. The export was independently decoded and probed at 1280×720, 30 fps, with an audio stream. The requested 1.2-second source capture correctly reported a source-frame mismatch for this 24 fps fixture against the 30 fps output grid. Export: `.artifacts/region-effects-final/native-mcp-tilt.mp4`.
+- Only the disposable test project was moved to the recoverable Trash; the five user projects remain, and the previously open project was restored.
+
+Native timeline frame rate has not been instrumented, so no numerical smoothness improvement or 60 fps guarantee is claimed. The E2E report includes warm offline seek/decode/composition timings at 960×540 (6 warm-up and 32 measured frames, preparation excluded). The final sample ran alongside compilation and is not a controlled performance comparison. Large-screen/high-resolution blur and real-world long-timeline profiling remain follow-up work.
+
+Existing Codex chats may cache the earlier MCP catalog. A fresh connection/chat reads the 50-tool installed helper catalog, including the three region tools and the source-frame option.

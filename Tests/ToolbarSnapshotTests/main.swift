@@ -171,7 +171,11 @@ struct ToolbarSnapshotTests {
             clickEvents: [ClickEvent(time: 1, x: 0.5, y: 0.5, button: .left)]
         )
         inspectorProject.settings.cursorAppearance = .accent
-        for (name, width, height) in [("inspector-cursor.png", 330, 720)] {
+        inspectorProject.regionEffects = [RegionEffect(clipID: inspectorProject.id,
+            sourceStart: 1, sourceEnd: 4,
+            rect: NormalizedRegionRect(x: 0.2, y: 0.2, width: 0.4, height: 0.4), preset: .tilt)]
+        for (name, width, height, tool) in [("inspector-cursor.png", 330, 720, EditorTool.cursor),
+                                          ("inspector-region.png", 292, 760, EditorTool.focus)] {
             let binding = Binding<RecordingProject>(
                 get: { inspectorProject },
                 set: { inspectorProject = $0 }
@@ -181,8 +185,9 @@ struct ToolbarSnapshotTests {
                 selectedZoomID: .constant(nil),
                 selectedChapterID: .constant(nil),
                 selectedClipID: .constant(nil),
+                selectedRegionEffectID: .constant(inspectorProject.regionEffects?.first?.id),
                 currentTime: .constant(0),
-                tool: .cursor,
+                tool: tool,
                 isVideoEditing: false,
                 canUndoVideoEdit: false,
                 canRedoVideoEdit: false,
@@ -194,7 +199,8 @@ struct ToolbarSnapshotTests {
                 onInsertMedia: { _ in },
                 onImportSharedMedia: { _ in },
                 onSaveMediaToShared: { _ in },
-                isImportingMedia: false
+                isImportingMedia: false,
+                onSelectRegion: { _ in }
             )
             .environmentObject(model)
             .preferredColorScheme(.dark)
@@ -228,6 +234,7 @@ struct ToolbarSnapshotTests {
                 selectedZoomID: .constant(nil),
                 selectedChapterID: .constant(nil),
                 selectedClipID: .constant(nil),
+                selectedRegionEffectID: .constant(inspectorProject.regionEffects?.first?.id),
                 currentTime: .constant(0),
                 tool: .design,
                 isVideoEditing: false,
@@ -241,7 +248,8 @@ struct ToolbarSnapshotTests {
                 onInsertMedia: { _ in },
                 onImportSharedMedia: { _ in },
                 onSaveMediaToShared: { _ in },
-                isImportingMedia: false
+                isImportingMedia: false,
+                onSelectRegion: { _ in }
             )
             .environmentObject(model)
             .preferredColorScheme(.dark)

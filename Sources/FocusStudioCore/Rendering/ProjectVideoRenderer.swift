@@ -933,6 +933,7 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
     private let project: RecordingProject
     private let geometry: RenderGeometry
     private let cursorGraphics: CursorGraphicSet
+    private let regionCompositor: RegionEffectCompositor
     private let interactions: InteractionTraceResolution
     private let sortedCursorSamples: [CursorSample]
     private let cursorSampleTimes: [Double]
@@ -973,6 +974,7 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
         self.project = project
         self.geometry = geometry
         self.cursorGraphics = cursorGraphics
+        self.regionCompositor = RegionEffectCompositor(project: project)
         let interactions = project.resolvedInteractions
         self.interactions = interactions
         let sourceCropInsets = project.settings.sourceCropInsets?.sanitized ?? SourceCropInsets()
@@ -1250,15 +1252,22 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
             ]
         )
 
-        if project.settings.showClickRing,
-           let clickRing = clickRingLayer(at: seconds, camera: camera, canvasRect: canvasRect) {
-            screenLayer = clickRing.composited(over: screenLayer)
-        }
-        // Feedback sits beneath the pointer so a bright ring never obscures the
-        // cursor's hotspot or the I-beam while typing.
+        var overlays = project.settings.showClickRing
+            ? clickRingLayers(at: seconds, camera: camera, canvasRect: canvasRect) : []
+        // Feedback sits beneath the pointer. Region effects route each layer by
+        // its hotspot, retaining only one arrow and one click ring per event.
         if let pointer = cursorLayer(at: seconds, camera: camera, canvasRect: canvasRect) {
-            screenLayer = pointer.composited(over: screenLayer)
+            overlays.append(pointer)
         }
+        let sourceToCanvas = CGAffineTransform(translationX: -sourceCropRect.minX,
+                                               y: -sourceCropRect.minY)
+            .concatenating(camera.affineTransform)
+            .concatenating(CGAffineTransform(scaleX: placementScale, y: placementScale))
+            .concatenating(CGAffineTransform(translationX: geometry.screenFrame.minX,
+                                              y: geometry.screenFrame.minY))
+        screenLayer = regionCompositor.render(image: screenLayer, overlays: overlays,
+            at: seconds, sourceSize: sourceExtent.size, sourceToCanvas: sourceToCanvas,
+            screenFrame: geometry.screenFrame)
 
         screenLayer = screenLayer.applyingFilter(
             "CIBlendWithMask",
@@ -1309,10 +1318,18 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
             .clamped(to: 0...min(frame.width, frame.height) / 2)
         let mask = roundedRectangleMask(frame: frame, radius: radius)
         let transparent = staticTransparentCanvas
-        let layer = image.applyingFilter("CIBlendWithMask", parameters: [
+        var layer = image.applyingFilter("CIBlendWithMask", parameters: [
             kCIInputBackgroundImageKey: transparent,
             kCIInputMaskImageKey: mask
         ])
+        let sourceToCanvas = camera.affineTransform
+            .concatenating(CGAffineTransform(scaleX: scale, y: scale))
+            .concatenating(CGAffineTransform(translationX: frame.minX, y: frame.minY))
+        layer = regionCompositor.render(image: layer, overlays: [], at: seconds,
+            sourceSize: source.size, sourceToCanvas: sourceToCanvas, screenFrame: frame)
+            .applyingFilter("CIBlendWithMask", parameters: [
+                kCIInputBackgroundImageKey: transparent, kCIInputMaskImageKey: mask
+            ])
         canvas = layer.composited(over: canvas)
         if let caption = captionLayer(at: seconds, canvasRect: canvasRect) {
             canvas = caption.composited(over: canvas)
@@ -1490,7 +1507,7 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
         return (filter.outputImage ?? CIImage(color: .white)).cropped(to: frame)
     }
 
-    private func cursorLayer(at seconds: Double, camera: ZoomFrameTransform, canvasRect: CGRect) -> CIImage? {
+    private func cursorLayer(at seconds: Double, camera: ZoomFrameTransform, canvasRect: CGRect) -> RegionEffectOverlay? {
         guard project.resolvedCursorOverlayVisible,
               let sourcePosition = cursorPosition(at: seconds),
               let croppedPosition = sourceCropInsets.croppedPoint(
@@ -1548,7 +1565,7 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
               transition.from != transition.to,
               previous.image !== current.image
         else {
-            return placed(current, scaleMultiplier: 1, alpha: 1)
+            return RegionEffectOverlay(image: placed(current, scaleMultiplier: 1, alpha: 1), anchor: canvasPoint)
         }
         // "None" means the pointer never changes size, shape swaps included.
         let pop: CGFloat = project.settings.resolvedClickAnimation.resolvedPressStyle == .none
@@ -1556,15 +1573,15 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
             : CGFloat(0.9 + 0.1 * transition.progress)
         let incoming = placed(current, scaleMultiplier: pop, alpha: transition.progress)
         let outgoing = placed(previous, scaleMultiplier: 1, alpha: 1 - transition.progress)
-        return incoming.composited(over: outgoing)
+        return RegionEffectOverlay(image: incoming.composited(over: outgoing), anchor: canvasPoint)
     }
 
-    private func clickRingLayer(at seconds: Double, camera: ZoomFrameTransform, canvasRect: CGRect) -> CIImage? {
+    private func clickRingLayers(at seconds: Double, camera: ZoomFrameTransform, canvasRect: CGRect) -> [RegionEffectOverlay] {
         let settings = project.settings.resolvedClickAnimation
         let color = CIColor(hex: settings.colorHex) ?? CIColor(red: 0.545, green: 0.482, blue: 1)
         let outputScale = min(canvasRect.width, canvasRect.height) / 1080
         var clickIndex = insertionIndex(atOrBefore: seconds, times: clickTimes)
-        var result: CIImage?
+        var result: [RegionEffectOverlay] = []
         while clickIndex >= 0 {
             let click = sortedClicks[clickIndex]
             let age = seconds - click.time
@@ -1595,7 +1612,7 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
                         "inputAVector": CIVector(x: 0, y: 0, z: 0, w: layer.opacity),
                     ])
                     .cropped(to: canvasRect)
-                result = result.map { image.composited(over: $0) } ?? image
+                result.append(RegionEffectOverlay(image: image, anchor: canvasPoint))
             }
             clickIndex -= 1
         }

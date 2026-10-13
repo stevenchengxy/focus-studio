@@ -2,6 +2,7 @@ import AppKit
 @preconcurrency import AVFoundation
 import FocusStudioCore
 import Foundation
+import ImageIO
 import UniformTypeIdentifiers
 
 /// The tools the assistant may call, in the order they are described to the model.
@@ -42,6 +43,9 @@ public enum AIAssistantToolCatalog {
             UpdateZoomTool(),
             AddZoomTool(),
             RemoveZoomTool(),
+            AddRegionEffectTool(),
+            UpdateRegionEffectTool(),
+            DeleteRegionEffectTool(),
             SetZoomStyleTool(),
             UpdateSettingsTool(),
             SetChaptersTool(),
@@ -931,7 +935,7 @@ struct GenerateVideoTool: AIAssistantTool {
 
 struct CaptureFrameTool: AIAssistantTool {
     let name = "capture_frame"
-    let summary = "Render one styled frame as a PNG. For frame-accurate cut inspection, pass a time from resolve_timeline_frame with exact_frame=true; exact rendering may take longer."
+    let summary = "Render one frame as a PNG. Use source_frame=true for the uncropped source image and source-normalized region selection; otherwise returns styled output. For frame-accurate cuts, use resolve_timeline_frame and exact_frame=true."
 
     var parametersSchema: [String: Any] {
         [
@@ -942,6 +946,8 @@ struct CaptureFrameTool: AIAssistantTool {
                 "width": ["type": "integer", "minimum": 640, "maximum": 3840, "default": 1920, "description": "Width of the frame in pixels, from 640 to 3840 (default 1920)."],
                 "exact_frame": ["type": "boolean", "default": false,
                                 "description": "Snap time to the project's output frame grid and request that precise frame with zero AVFoundation time tolerance. Slower than the default fast preview; use with resolve_timeline_frame.time_seconds for a cut."],
+                "source_frame": ["type": "boolean", "default": false,
+                                 "description": "Return the uncropped source image at this output time, before zoom, framing and effects. Use it to choose x/y/width/height for a region effect. Includes clip_id and source_time_seconds; width limits the image size without changing normalized coordinates."],
             ],
         ]
     }
@@ -955,6 +961,9 @@ struct CaptureFrameTool: AIAssistantTool {
         guard let time = arguments.double("time") else { throw AIToolError.invalidArgument("Missing required argument \"time\" (seconds).") }
         if arguments.has("exact_frame"), arguments.bool("exact_frame") == nil {
             throw AIToolError.invalidArgument("exact_frame must be true or false.")
+        }
+        if arguments.has("source_frame"), arguments.bool("source_frame") == nil {
+            throw AIToolError.invalidArgument("source_frame must be true or false.")
         }
         var project = try await AIToolSupport.requireProject(context)
         guard project.duration.isFinite, project.duration > 0 else { throw AIToolError.failed("The recording has no duration.") }
@@ -973,6 +982,11 @@ struct CaptureFrameTool: AIAssistantTool {
             clampedTime = time.clamped(to: 0...max(0, project.duration - 0.05))
         }
         project.settings.exportWidth = (arguments.int("width") ?? 1_920).clamped(to: 640...3_840)
+
+        if arguments.bool("source_frame") == true {
+            return try await captureSourceFrame(project: project, time: clampedTime, exact: exact,
+                                                frameIndex: exactIndex, context: context, progress: progress)
+        }
 
         progress(context.tr("Rendering frame…"))
         let prepared = try await ProjectVideoRenderer.prepare(project: project)
@@ -1003,6 +1017,75 @@ struct CaptureFrameTool: AIAssistantTool {
                 actualTime.isValid && abs(actualTime.seconds - clampedTime) < 0.5 / Double(frameRate))
         }
         return AIToolResult(text: text + "\n" + output.path, attachments: [output], data: .object(fields))
+    }
+
+    private func captureSourceFrame(project: RecordingProject, time: Double, exact: Bool,
+                                    frameIndex: Int?, context: AIAssistantContext,
+                                    progress: @escaping @Sendable (String) -> Void) async throws -> AIToolResult {
+        let timeline = try DemoVideoTimeline(project: project)
+        guard let placement = timeline.placements.first(where: { time >= $0.start && time < $0.end }) else {
+            throw AIToolError.invalidArgument("No video clip contains this output time. Read get_timeline again.")
+        }
+        let media = placement.clip.mediaAssetID.flatMap { id in project.mediaAssets?.first { $0.id == id } }
+        let path: String
+        if let media { path = media.filePath }
+        else { path = project.sourceVideoPath }
+        let sourceURL = URL(fileURLWithPath: path)
+        let sourceTime = placement.clip.sourceStart + time - placement.start
+        progress(context.isChinese ? "正在读取源画面…" : "Reading source frame…")
+        let image: CGImage
+        let actualTime: Double
+        let originalWidth: Int
+        let originalHeight: Int
+        if media?.kind == .image {
+            guard let source = CGImageSourceCreateWithURL(sourceURL as CFURL, nil),
+                  let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                  let rawWidth = properties[kCGImagePropertyPixelWidth] as? Int,
+                  let rawHeight = properties[kCGImagePropertyPixelHeight] as? Int,
+                  let decoded = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceThumbnailMaxPixelSize: project.settings.exportWidth,
+                  ] as CFDictionary) else { throw AIToolError.failed("The source image could not be decoded.") }
+            let orientation = properties[kCGImagePropertyOrientation] as? Int ?? 1
+            originalWidth = (5...8).contains(orientation) ? rawHeight : rawWidth
+            originalHeight = (5...8).contains(orientation) ? rawWidth : rawHeight
+            image = decoded; actualTime = sourceTime
+        } else {
+            let asset = AVURLAsset(url: sourceURL)
+            guard let track = try await asset.loadTracks(withMediaType: .video).first else {
+                throw AIToolError.failed("The source media has no video track.")
+            }
+            let size = try await track.load(.naturalSize)
+            let transform = try await track.load(.preferredTransform)
+            let transformed = CGRect(origin: .zero, size: size).applying(transform)
+            originalWidth = Int(abs(transformed.width).rounded()); originalHeight = Int(abs(transformed.height).rounded())
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: project.settings.exportWidth, height: project.settings.exportWidth)
+            let tolerance = exact ? CMTime.zero : CMTime(seconds: 0.05, preferredTimescale: 600)
+            generator.requestedTimeToleranceBefore = tolerance; generator.requestedTimeToleranceAfter = tolerance
+            let result = try await generator.image(at: CMTime(seconds: sourceTime, preferredTimescale: 600))
+            image = result.image; actualTime = result.actualTime.seconds
+        }
+        let output = try context.newAssetURL(prefix: "source-frame", fileExtension: "png")
+        try AIToolSupport.writePNG(image, to: output)
+        var fields: [String: AIJSONValue] = [
+            "project_id": AIJSONValue(project.id.uuidString), "clip_id": AIJSONValue(placement.clip.id.uuidString),
+            "path": AIJSONValue(output), "time": AIJSONValue(time), "source_time_seconds": AIJSONValue(sourceTime),
+            "source_frame": true, "coordinate_space": AIJSONValue(RegionEffectToolSupport.coordinateSpace),
+            "width": AIJSONValue(image.width), "height": AIJSONValue(image.height),
+            "source_width": AIJSONValue(originalWidth), "source_height": AIJSONValue(originalHeight),
+            "actual_source_time_seconds": AIJSONValue(actualTime),
+            "size_bytes": AIJSONValue(Int(clamping: AIToolSupport.fileSize(output))),
+        ]
+        if let frameIndex {
+            fields["exact_frame_requested"] = true; fields["frame_index"] = AIJSONValue(frameIndex)
+            fields["frame_rate"] = AIJSONValue(project.settings.frameRate)
+            fields["frame_matches_request"] = AIJSONValue(actualTime.isFinite && abs(actualTime - sourceTime) < 0.5 / Double(project.settings.frameRate.clamped(to: 1...120)))
+        }
+        let message = context.isChinese ? "已读取无裁剪源画面；局部强调坐标以这张图片为准。" : "Captured the uncropped source frame. Use this image for region-effect normalized coordinates."
+        return AIToolResult(text: message + "\n" + output.path, attachments: [output], data: .object(fields))
     }
 }
 

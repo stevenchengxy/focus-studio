@@ -90,6 +90,24 @@ multi-layer compositing, complex typography, crossfades or a separate marketing 
 [product-demo-composer](../product-demo-composer/SKILL.md) after the native camera edit. Its export has cursor
 and zooms baked in; retain the native project for future edits.
 
+## Local focus and floating cards
+
+Use native region effects when one part of the real UI should be emphasized.
+Read `get_timeline`, then inspect `capture_frame` with `source_frame: true` at the
+chosen output time. Its image is the uncropped source, before zoom and framing;
+use its `clip_id` and normalize the chosen rectangle against the full image.
+`add_region_effect` takes output `start`/`end`, source-normalized `x`/`y`/`width`/`height`,
+`preset` (`spotlight`, `lift`, `tilt`) and `background` (`dim`, `blur`, `none`).
+Keep the effect within one clip and a stable page state. Selections are fixed,
+not automatically tracked; no claim of privacy redaction is appropriate.
+
+Inspect `get_project.region_effects` for IDs and actual source/output ranges.
+Use `update_region_effect` for strength, scale, rectangle or entrance/exit changes,
+and `delete_region_effect` to remove a cue. A trimmed-away cue remains listed and
+can return when the source range is restored. Enabled cues must not overlap.
+Verify the styled entrance, reading hold and return, and inspect a moving export.
+Record the effect ID, source rectangle, timing and verification in the workflow.
+
 ## Minimal workflow report
 
 `workflow.json` is a local record written by the agent, not a tool input schema. Include:

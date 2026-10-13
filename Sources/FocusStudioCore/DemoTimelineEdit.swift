@@ -185,6 +185,21 @@ public struct DemoTimelineEdit: Sendable {
                 return copy
             }
         }
+        if original.videoClips == nil {
+            // This path produces a newly cut source movie. Its implicit clip
+            // and effect source times must refer to that new movie.
+            result.regionEffects = original.regionEffects?.flatMap { effect -> [RegionEffect] in
+                guard effect.clipID == original.id else { return [] }
+                return pieces(start: effect.sourceStart, end: effect.sourceEnd).enumerated().compactMap { index, piece in
+                    guard piece.duration > 0.000_001 else { return nil }
+                    var copy = effect
+                    if index > 0 { copy.id = UUID() }
+                    copy.clipID = id
+                    copy.sourceStart = piece.start; copy.sourceEnd = piece.end
+                    return copy
+                }
+            }
+        }
         return result
     }
 

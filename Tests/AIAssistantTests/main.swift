@@ -40,6 +40,7 @@ struct AIAssistantTests {
         step("app control: permission, main display, joined stops"); try await recordingEdgeCases(root: root)
         step("app control: library"); try await libraryControl(root: root)
         step("zoom tools"); try await zoomTools(root: root)
+        step("region effect tools"); try await regionEffectTools(root: root)
         step("non-destructive demo editing"); try await demoEditing(root: root)
         step("video track editing tools"); try await timelineEditingTools(root: root)
         step("audio tools"); try await audioTools(root: root)

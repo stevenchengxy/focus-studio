@@ -11,10 +11,12 @@ struct EditorTimelineView: View {
     @Binding var selectedZoomID: UUID?
     @Binding var selectedChapterID: UUID?
     @Binding var selectedClipID: UUID?
+    @Binding var selectedRegionEffectID: UUID?
     @Binding var selectedTool: EditorTool
     let onVideoEdit: (DemoVideoEditOperation) -> Void
     let onInsertMedia: (UUID, Int) -> Void
     let isVideoEditing: Bool
+    let onAddRegionEffect: () -> Void
 
     private let labelWidth = 100.0
     private let rowHeight = 38.0
@@ -53,7 +55,9 @@ struct EditorTimelineView: View {
                         .frame(width: timelineLabelWidth)
 
                     ScrollView(.horizontal) {
-                        VStack(spacing: 0) {
+                        // The ruler and video include a trailing drag gutter;
+                        // narrower effect lanes must share their leading origin.
+                        VStack(alignment: .leading, spacing: 0) {
                             RulerRow(
                                 duration: duration,
                                 currentTime: Binding(get: { currentTime }, set: { isTimelineFocused = true; currentTime = $0 }),
@@ -133,6 +137,15 @@ struct EditorTimelineView: View {
                     .coordinateSpace(name: "zoom-timeline")
                     .clipped()
                 }
+
+                            timelineRow(label: "Local emphasis", icon: "viewfinder") {
+                                EditorRegionEffectLane(project: $project,
+                                    selectedID: $selectedRegionEffectID,
+                                    timelineWidth: timelineWidth,
+                                    onSelect: { selectedTool = .focus },
+                                    onAdd: onAddRegionEffect)
+                                    .disabled(isVideoEditing)
+                            }
 
                             timelineRow(label: "Chapters", icon: "captions.bubble") {
                     ZStack(alignment: .leading) {
@@ -270,7 +283,7 @@ struct EditorTimelineView: View {
                 }
             }
         }
-        .frame(height: 296)
+        .frame(height: 334)
         .padding(.vertical, 6)
         .background(StudioTheme.panel)
         .focusable()
@@ -281,6 +294,9 @@ struct EditorTimelineView: View {
             if id != nil { isTimelineFocused = true }
         }
         .onChange(of: selectedChapterID) { _, id in
+            if id != nil { isTimelineFocused = true }
+        }
+        .onChange(of: selectedRegionEffectID) { _, id in
             if id != nil { isTimelineFocused = true }
         }
         .onChange(of: selectedClipID) { _, id in
@@ -352,6 +368,13 @@ struct EditorTimelineView: View {
                 .help("Add zoom at playhead")
                 .accessibilityLabel("Add zoom at playhead")
                 .accessibilityIdentifier("timeline.addZoom")
+            }
+            fixedLaneLabel("Local emphasis", icon: "viewfinder", tool: .focus) {
+                Button(action: onAddRegionEffect) { Image(systemName: "plus.circle.fill") }
+                    .foregroundStyle(.mint)
+                    .help("Select a region")
+                    .accessibilityLabel("Select a region")
+                    .accessibilityIdentifier("timeline.addRegionEffect")
             }
             fixedLaneLabel("Chapters", icon: "captions.bubble", tool: .captions) {
                 Button {
@@ -460,7 +483,10 @@ struct EditorTimelineView: View {
 
     private func removeSelection() {
         withAnimation(reduceMotion ? nil : StudioMotion.fade) {
-            if selectedTool == .captions, let id = selectedChapterID {
+            if selectedTool == .focus, let id = selectedRegionEffectID {
+                project.regionEffects?.removeAll { $0.id == id }
+                selectedRegionEffectID = nil
+            } else if selectedTool == .captions, let id = selectedChapterID {
                 project.chapters?.removeAll { $0.id == id }
                 selectedChapterID = nil
             } else if selectedTool == .zoom {
@@ -526,6 +552,7 @@ struct EditorTimelineView: View {
         let tool: EditorTool? = switch label {
         case "Video": .video
         case "Zoom": .zoom
+        case "Local emphasis": .focus
         case "Chapters": .captions
         case "Cursor": .cursor
         case "Audio": .audio

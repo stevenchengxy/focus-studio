@@ -33,6 +33,12 @@ extension ProjectStore {
             project.videoTransitions = clipped.transitions
             project.videoSourceDuration = clipped.sourceDuration
             project.duration = clipped.duration
+            project.regionEffects = original.regionEffects.map {
+                RegionEffectRemapping.clipped($0, from: videoTimeline, keeping: edit, to: clipped)
+            }
+        }
+        guard (project.regionEffects?.count ?? 0) <= 128 else {
+            throw DemoVideoTimelineError.invalidOperation("A project supports up to 128 local highlights. Remove a highlight before creating this cut.")
         }
         let originalDirectory = projectsDirectory.appendingPathComponent(original.id.uuidString, isDirectory: true)
         func copyAsset(_ path: String?, stem: String) throws -> String? {
