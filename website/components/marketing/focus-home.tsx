@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ProductMotion, useMarketingMotion } from "./product-motion";
+import { FocusSculpture } from "./focus-sculpture";
+import design from "./design-refinement.module.css";
 import { ArrowDown, ArrowRight, ArrowUpRight, AudioLines, Check, CirclePlay, Code2, Command, Download, Focus, Menu, Monitor, MousePointer2, Play, Plus, Scissors, Sparkles, X } from "lucide-react";
 
 interface SiteConfig {
@@ -81,7 +83,7 @@ export function FocusHome() {
   const hasDesktopPreview = Boolean(config.windowsDownloadUrl || config.linuxDownloadUrl);
 
   return (
-    <div className={`focus-site${motion ? " has-motion" : " motion-paused"}`} ref={siteRef}>
+    <div className={`focus-site ${design.refinedSite}${motion ? " has-motion" : " motion-paused"}`} ref={siteRef}>
       <a className="skip-link" href="#main">Skip to content</a>
       <header className="site-header">
         <div className="nav-wrap"><Brand />
@@ -96,6 +98,12 @@ export function FocusHome() {
 
       <main id="main">
         <section className="hero section-wrap">
+          <div className={design.heroAtmosphere} aria-hidden="true" data-motion-section>
+            <div className={design.lightField}/>
+            <div className={design.compositionFrame}><i/><i/><i/><i/></div>
+            <div className={design.heroSculpture}><FocusSculpture variant="hero" size="var(--focus-sculpture-size)"/></div>
+            <div className={design.orbitDot}/>
+          </div>
           <div className="hero-copy" data-reveal>
 
             <h1>Your product.<br/>In its <span className="best-light">best light.<svg viewBox="0 0 590 25" preserveAspectRatio="none" aria-hidden="true"><path d="M6 17C169 3 374 4 581 14"/></svg></span></h1>
@@ -106,6 +114,7 @@ export function FocusHome() {
 
           <ProductMotion motion={motion} onMotionChange={setMotion}/>
           <div className="hero-footnote"><span><Command size={14}/> Crafted for Mac</span><span><Code2 size={15}/> Works with Codex</span><a href="/studio">Try Browser Studio <ArrowUpRight size={14}/></a></div>
+          <div className={design.focusThread} aria-hidden="true" data-motion-section><span/><div><i/></div><Focus size={16} strokeWidth={1}/><div><i/></div><span/></div>
         </section>
 
         <section className="possibilities section-wrap" id="possibilities">
@@ -114,7 +123,7 @@ export function FocusHome() {
           <div className="feature-editorial reverse" data-reveal><div className="feature-art timeline-art" data-motion-section><div className="timeline-mini"><div className="timeline-mini-toolbar"><Play size={13} fill="currentColor"/><span>00:08.240</span><Scissors size={13}/><span className="timeline-mini-spacer"/><span>00:24</span></div><div className="timeline-mini-ruler"><span>0:00</span><span>0:05</span><span>0:10</span><span>0:15</span></div><div className="mini-track mini-track-video"><div>Opening</div><div>The good part</div><div>One last look</div></div><div className="mini-track mini-track-zoom"><div>Zoom in</div><div>Spotlight</div></div><div className="mini-audio"><AudioLines size={17}/>{Array.from({length: 48}, (_,i) => <i key={i} style={{height: `${9 + ((i * 17) % 27)}px`}}/>)}</div><div className="mini-playhead"><span/></div></div><span className="art-chip"><Scissors size={14}/> Every second, considered.</span></div><div className="feature-copy"><span className="step-index">02 / THE EDIT</span><h3>Find your rhythm.<br/>Leave the waiting out.</h3><p>Trim, arrange and fine-tune. Undo whenever you need to.</p><div className="feature-tags"><span>Frame-level control</span><span>Transitions</span><span>Undo & redo</span></div></div></div>
         </section>
 
-        <section className="editor-proof section-wrap" aria-labelledby="editor-proof-title" data-reveal><h2 id="editor-proof-title">Make every frame <span className="serif-word">yours.</span></h2><figure className="editor-proof-stage"><img loading="lazy" decoding="async" src="/media/focus-studio-editor.jpg" alt="The actual Focus Studio Mac editor with a product preview, effect timeline and editing controls"/><figcaption>Focus Studio for macOS · Actual editor</figcaption></figure></section>
+        <section className="editor-proof section-wrap" aria-labelledby="editor-proof-title" data-reveal><h2 id="editor-proof-title">Make every frame <span className="serif-word">yours.</span></h2><div className={design.editorStage}><div className={design.editorContours} aria-hidden="true"/><figure className="editor-proof-stage"><img loading="lazy" decoding="async" src="/media/focus-studio-editor.jpg" alt="The actual Focus Studio Mac editor with a product preview, effect timeline and editing controls"/><figcaption>Focus Studio for macOS · Actual editor</figcaption></figure></div></section>
 
         <section className="ai-section" id="workflow"><div className="section-wrap ai-inner"><div className="ai-copy" data-reveal><h2>Meet your<br/><span className="serif-word">demo co-pilot.</span></h2><p>Record and edit with Codex. Keep the final say.</p><div className="ai-steps"><div><span>1</span><p><b>Give it a direction.</b></p></div><div><span>2</span><p><b>Connect through MCP.</b></p></div><div><span>3</span><p><b>Keep the final say.</b></p></div></div><a href="/help#codex" className="text-link">How the connection works <ArrowUpRight size={17}/></a></div><div className="ai-visual" data-reveal data-motion-section><div className="ai-orbit orbit-a"/><div className="ai-orbit orbit-b"/><div className="conversation"><div className="conversation-top"><span className="ai-spark"><Sparkles size={17}/></span><div>Focus assistant<small>Connected to your workflow</small></div><span className="conversation-status"/></div><div className="conversation-user">Make the onboarding feel effortless. Cut the pauses and bring the invite button into focus.</div><div className="conversation-reply"><span className="ai-spark"><Sparkles size={14}/></span><div>Let’s make every step feel intentional.</div></div><div className="conversation-tools"><div><Check size={13}/><span>Trim the pauses</span><small>Timeline</small></div><div><Check size={13}/><span>Spotlight the invitation</span><small>Effects</small></div><div><Check size={13}/><span>Keep the original take</span><small>Working copy</small></div></div><div className="conversation-preview"><div className="conversation-preview-icon"><Play fill="currentColor" size={19}/></div><div>Your story, with a little more polish.<small>Preview before exporting</small></div><ArrowUpRight size={17}/></div><div className="conversation-composer">What would you like to change?<span><ArrowUpRight size={14}/></span></div></div><span className="illustration-note">Illustrative workflow · Codex connection required</span></div></div></section>
 
@@ -124,7 +133,7 @@ export function FocusHome() {
 
         <section className="faq-section section-wrap"><div><h2>Good questions.</h2></div><div className="faq-list"><details><summary>Do I need AI to use Focus Studio?<Plus size={17}/></summary><p>No. Record and edit directly with the native Mac app. Connect Codex when you want an assistant to help record a workflow, adjust an edit or prepare an export.</p></details><details><summary>Can I use it on Windows or Linux?<Plus size={17}/></summary><p>{hasDesktopPreview ? "Windows and Linux desktop previews offer recording and essential edits. Check the download options for available builds. The full editor and Codex MCP currently require macOS 15+." : "Browser Studio offers recording and essential edits on Windows and Linux. Desktop preview builds are in preparation. The full editor and Codex MCP currently require macOS 15+."}</p><a href="/studio" className="text-link">Open Browser Studio <ArrowUpRight size={14}/></a></details><details><summary>How does the free export work?<Plus size={17}/></summary><p>Create an account to get one successful export. An unsuccessful export should not use your allowance. Export requires an internet connection to verify your account. Additional exports require an active subscription once billing is available.</p></details><details><summary>Where do my recordings go?<Plus size={17}/></summary><p>The native editor stores your projects on your Mac. AI generation and Codex are optional connections; content you send to them is processed by the provider you choose. Browser Studio processes media in your browser.</p><a href="/privacy" className="text-link">Read the privacy overview <ArrowUpRight size={14}/></a></details><details><summary>Is AI video generation included in Pro?<Plus size={17}/></summary><p>AI model usage is separate from your Focus Studio subscription. Connect your own supported provider and choose a model before generating. Review the generation request and estimated cost before continuing.</p></details></div></section>
 
-        <section className="closing-section section-wrap" data-reveal><div className="closing-symbol"><Focus size={42} strokeWidth={1.5}/><Play size={14} fill="currentColor"/></div><h2>Now give it<br/>a <span className="serif-word">proper introduction.</span></h2><button className="button button-dark" onClick={() => setDownloadOpen(true)}>Get Focus Studio <ArrowDown size={18}/></button><span className="closing-note">Start with one free export.</span></section>
+        <section className="closing-section section-wrap" data-reveal data-motion-section><div className={design.closingArt}><FocusSculpture variant="closing" size="var(--focus-sculpture-size)"/></div><h2>Now give it<br/>a <span className="serif-word">proper introduction.</span></h2><button className="button button-dark" onClick={() => setDownloadOpen(true)}>Get Focus Studio <ArrowDown size={18}/></button><span className="closing-note">Start with one free export.</span></section>
       </main>
 
       <footer className="site-footer section-wrap"><div className="footer-top"><div><Brand/></div><div className="footer-links"><a href="#possibilities">Explore</a><a href="#pricing">Pricing</a><a href="/studio">Browser Studio <span>Beta</span></a><a href="/help">Getting started</a><a href="/privacy">Privacy</a><a href="https://github.com/stevenchengxy/focus-studio" target="_blank" rel="noreferrer">GitHub <ArrowUpRight size={12}/></a></div></div><div className="footer-bottom"><span>© {new Date().getFullYear()} Focus Studio.</span><button onClick={() => window.scrollTo({top:0,behavior: motion ? "smooth" : "instant"})}>Back to top <ArrowUpRight size={13}/></button></div></footer>

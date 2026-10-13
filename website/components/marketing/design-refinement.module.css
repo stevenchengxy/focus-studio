@@ -1,0 +1,56 @@
+/* A quiet optical language: porcelain, a little refraction, and precise framing. */
+.refinedSite :global(.hero) { position: relative; isolation: isolate; }
+.heroAtmosphere { position: absolute; top: 0; left: 50%; width: min(1450px, 118vw); height: 490px; transform: translateX(-50%); pointer-events: none; z-index: -1; }
+.lightField { position: absolute; inset: -30px -2% -45px; background: radial-gradient(ellipse at 84% 28%, #dcd3f16b, transparent 36%), radial-gradient(ellipse at 10% 68%, #d2ded447, transparent 28%); }
+.heroSculpture { --focus-sculpture-size: 330px; position: absolute; right: -6px; top: 30px; width: 330px; height: 330px; opacity: .82; }
+.compositionFrame { position: absolute; left: 16px; top: 86px; width: 215px; height: 260px; border: 1px solid #a9a59c32; border-radius: 30px; transform: perspective(800px) rotateY(22deg) rotateZ(-17deg); background: linear-gradient(132deg, #ffffff50, #f5f3ec00 65%); box-shadow: inset 1px 1px 0 #fff8; animation: frameDrift 19s ease-in-out infinite; animation-play-state: var(--scene-play-state, paused); }
+.compositionFrame::before { content: ""; position: absolute; inset: 14px; border: 1px solid #afc1b03b; border-radius: 20px; }
+.compositionFrame::after { content: ""; position: absolute; inset: 29px; border: 1px solid #afc1b020; border-radius: 13px; }
+.compositionFrame i { position: absolute; width: 13px; height: 13px; border-color: #9aaf9c77; border-style: solid; border-width: 0; }
+.compositionFrame i:nth-child(1) { top: 48px; left: 47px; border-top-width: 1px; border-left-width: 1px; }
+.compositionFrame i:nth-child(2) { top: 48px; right: 47px; border-top-width: 1px; border-right-width: 1px; }
+.compositionFrame i:nth-child(3) { bottom: 48px; left: 47px; border-bottom-width: 1px; border-left-width: 1px; }
+.compositionFrame i:nth-child(4) { bottom: 48px; right: 47px; border-bottom-width: 1px; border-right-width: 1px; }
+.orbitDot { position: absolute; width: 7px; height: 7px; background: #a792d3; border: 1px solid #f9f7ff; box-shadow: 0 1px 5px #836f9b29; border-radius: 50%; top: 82%; right: 17%; }
+.refinedSite :global(.hero-copy) { position: relative; z-index: 1; }
+.refinedSite :global(.hero h1) { text-wrap: balance; }
+.refinedSite :global(.hero-actions .button-dark) { box-shadow: 0 5px 0 -3px #51495433, inset 0 1px 0 #ffffff25; }
+.refinedSite :global(.best-light svg) { stroke-width: 4; }
+.refinedSite :global(.fs-motion-showcase) { position: relative; z-index: 2; box-shadow: 0 2px 0 1px #fcfaff, 0 0 0 1px #d2cbd8, 0 26px 65px -35px #47315665; }
+.refinedSite :global(.main-nav a) { position: relative; }
+.refinedSite :global(.main-nav a)::after { content: ""; position: absolute; height: 1px; left: 0; right: 0; bottom: -7px; background: #9985c2; transform: scaleX(0); transform-origin: left; transition: transform .25s ease; }
+.refinedSite :global(.main-nav a:hover)::after, .refinedSite :global(.main-nav a:focus-visible)::after { transform: scaleX(1); }
+.refinedSite :global(.button > svg), .refinedSite :global(.text-link > svg) { transition: transform .25s cubic-bezier(.2,.7,.2,1); flex-shrink: 0; }
+.refinedSite :global(.button:hover > svg), .refinedSite :global(.text-link:hover > svg) { transform: translate(2px,-2px); }
+.refinedSite :global(.brand-mark) { transition: transform .4s cubic-bezier(.2,.7,.2,1); }
+.refinedSite :global(.brand:hover .brand-mark) { transform: rotate(-8deg); }
+.focusThread { margin: 62px auto 0; display: flex; align-items: center; gap: 15px; width: min(550px, 64%); height: 20px; color: #b8a9cc; }
+.focusThread > span { width: 4px; height: 4px; border: 1px solid #a8a39288; border-radius: 50%; }
+.focusThread > div { position: relative; flex: 1; height: 1px; background: linear-gradient(90deg, transparent, #c7c0ce90); overflow: hidden; }
+.focusThread > div:nth-of-type(2) { transform: rotate(180deg); }
+.focusThread > div > i { position: absolute; width: 44%; height: 1px; background: linear-gradient(90deg, transparent, #a28aca, transparent); transform: translateX(-120%); animation: lightTrace 7s ease-in-out infinite; animation-play-state: var(--scene-play-state, paused); }
+.refinedSite :global(.possibilities) { padding-top: 85px; }
+.refinedSite :global(.feature-art) { box-shadow: inset 0 1px 0 #ffffff7d, 0 8px 28px -22px #52406540; }
+.refinedSite :global(.feature-art)::after { content: ""; position: absolute; inset: 12px; border: 1px solid #ffffff50; border-radius: 7px; pointer-events: none; }
+.refinedSite :global(.step-index) { display: inline-flex; align-items: center; gap: 10px; }
+.refinedSite :global(.step-index)::before { content: ""; width: 17px; height: 1px; background: #a294b5; }
+.editorStage { position: relative; isolation: isolate; }
+.editorContours { position: absolute; inset: -15px 22px 15px; border: 1px solid #b3a7c752; border-radius: 22px; z-index: -1; }
+.editorContours::before { content: ""; position: absolute; inset: -15px 18px 15px; border: 1px solid #b3a7c72c; border-radius: 28px; }
+.editorContours::after { content: ""; position: absolute; inset: -55px -75px -50px; z-index: -1; background: radial-gradient(ellipse at 50% 45%, #d4c5ed70, transparent 67%); }
+.refinedSite :global(.editor-proof h2) { margin-bottom: 60px; }
+.refinedSite :global(.ai-section) { position: relative; background: radial-gradient(ellipse at 75% 35%, #393140, transparent 62%), #242229; }
+.refinedSite :global(.ai-section)::before { content: ""; position: absolute; top: 0; height: 1px; left: 12%; right: 12%; background: linear-gradient(90deg, transparent, #c9b7e575, transparent); }
+.refinedSite :global(.pro-plan)::after { content: ""; position: absolute; inset: 4px; border: 1px solid #ffffff4a; border-radius: 8px; pointer-events: none; }
+.refinedSite :global(.pricing-section) { background: radial-gradient(ellipse at 80% 15%, #f4f4df80, transparent 55%), #e8eade; }
+.refinedSite :global(.closing-section) { position: relative; isolation: isolate; padding-top: 5px; }
+.refinedSite :global(.closing-section)::before { content: ""; position: absolute; pointer-events: none; inset: 0 10%; z-index: -1; background: radial-gradient(ellipse at 50% 25%, #ded4ef65, transparent 55%); }
+.closingArt { --focus-sculpture-size: 180px; width: 180px; height: 170px; margin: 0 auto 27px; }
+.refinedSite :global(.closing-section h2) { position: relative; }
+@keyframes frameDrift { 0%,100% { transform: perspective(800px) translateY(0) rotateY(22deg) rotateZ(-17deg); } 50% { transform: perspective(800px) translateY(-11px) rotateY(16deg) rotateZ(-13deg); } }
+@keyframes lightTrace { 0%,20% { transform: translateX(-120%); opacity: 0; } 30% { opacity: .8; } 75%,100% { transform: translateX(330%); opacity: 0; } }
+@media (min-width: 1550px) { .heroAtmosphere { width: 1470px; } .heroSculpture { right: -10px; --focus-sculpture-size: 360px; width: 360px; height: 360px; } }
+@media (max-width: 1100px) { .heroSculpture { right: -32px; --focus-sculpture-size: 255px; width: 255px; height: 255px; top: 20px; opacity: .66; } .compositionFrame { left: -25px; width: 170px; height: 215px; top: 60px; opacity: .72; } }
+@media (max-width: 850px) { .heroAtmosphere { height: 400px; width: 110vw; } .heroSculpture { right: -42px; top: -10px; --focus-sculpture-size: 205px; width: 205px; height: 205px; opacity: .48; } .compositionFrame { left: -35px; top: 67px; width: 145px; height: 190px; opacity: .5; } .focusThread { margin-top: 42px; } .refinedSite :global(.possibilities) { padding-top: 60px; } .refinedSite :global(.editor-proof h2) { margin-bottom: 53px; } }
+@media (max-width: 600px) { .heroAtmosphere { height: 330px; width: 100vw; } .heroSculpture { right: -29px; top: -31px; --focus-sculpture-size: 128px; width: 128px; height: 128px; opacity: .42; } .compositionFrame { display: none; } .orbitDot { display: none; } .lightField { background: radial-gradient(ellipse at 100% 0%, #e1d8f355, transparent 65%); } .focusThread { width: 65%; gap: 11px; margin-top: 36px; } .refinedSite :global(.possibilities) { padding-top: 43px; } .refinedSite :global(.editor-proof h2) { margin-bottom: 44px; } .editorContours { inset: -10px 10px 10px; border-radius: 14px; } .editorContours::before { inset: -10px 10px 10px; border-radius: 18px; } .editorContours::after { inset: -35px -25px; } .closingArt { --focus-sculpture-size: 140px; width: 140px; height: 133px; margin-bottom: 20px; } }
+@media (prefers-reduced-motion: reduce) { .compositionFrame, .focusThread > div > i { animation: none; } .refinedSite :global(.button > svg), .refinedSite :global(.text-link > svg), .refinedSite :global(.brand-mark), .refinedSite :global(.main-nav a)::after { transition: none; } }
