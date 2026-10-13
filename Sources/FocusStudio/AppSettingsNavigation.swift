@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum AppSettingsSection: Hashable {
-    case aiModels, codex, aiTools, installation
+    case account, aiModels, codex, aiTools, installation
 }
 
 @MainActor
@@ -18,6 +18,10 @@ struct StudioSettingsView: View {
 
     var body: some View {
         TabView(selection: $navigation.selection) {
+            AccountSettingsView(store: model.subscription)
+                .disabled(installation.isWorking)
+                .tabItem { Label("Account", systemImage: "person.crop.circle") }
+                .tag(AppSettingsSection.account)
             AIGatewaySettingsView(store: model.aiGateway)
                 .disabled(installation.isWorking)
                 .tabItem { Label("AI models", systemImage: "sparkles") }

@@ -8,7 +8,7 @@ struct EditorView: View {
     @EnvironmentObject private var model: StudioModel
     @Binding var project: RecordingProject
 
-    @State private var currentTime = 0.0
+    @State private var playbackClock = EditorPlaybackClock()
     @State private var isPlaying = false
     @State private var seekRevision = 0
     @State private var showsShortcuts = false
@@ -24,14 +24,17 @@ struct EditorView: View {
         .flatMap(EditorTool.init(rawValue:)) ?? .video
     @State private var renderError: String?
     @State private var exportMessage: String?
+    @State private var exportNeedsAccount = false
     @State private var videoEditMessage: String?
     @State private var isApplyingVideoEdit = false
     @State private var isImportingMedia = false
     @Namespace private var toolHighlight
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
+        let _ = EditorPlaybackMetrics.record("editor.body")
         VStack(spacing: 0) {
             editorToolbar
             Divider().overlay(StudioTheme.line)
@@ -45,7 +48,7 @@ struct EditorView: View {
                         Color.black.opacity(0.12)
                         ProjectPreviewView(
                             project: project,
-                            currentTime: $currentTime,
+                            playbackClock: playbackClock,
                             isPlaying: $isPlaying,
                             seekRevision: seekRevision,
                             renderError: $renderError
@@ -61,6 +64,7 @@ struct EditorView: View {
                     EditorTimelineView(
                         project: $project,
                         currentTime: seekBinding,
+                        playbackClock: playbackClock,
                         selectedZoomID: $selectedZoomID,
                         selectedChapterID: $selectedChapterID,
                         selectedClipID: $selectedClipID,
@@ -81,6 +85,7 @@ struct EditorView: View {
                     selectedClipID: $selectedClipID,
                     selectedRegionEffectID: $selectedRegionEffectID,
                     currentTime: seekBinding,
+                    playbackClock: playbackClock,
                     tool: selectedTool,
                     isVideoEditing: isApplyingVideoEdit,
                     canUndoVideoEdit: model.canUndoVideoEdit(projectID: project.id),
@@ -133,6 +138,12 @@ struct EditorView: View {
             get: { exportMessage != nil },
             set: { if !$0 { exportMessage = nil } }
         )) {
+            if exportNeedsAccount {
+                Button("Account settings") {
+                    AppSettingsNavigation.shared.selection = .account
+                    openSettings()
+                }
+            }
             Button("OK", role: .cancel) {}
         } message: {
             Text(exportMessage ?? "")
@@ -323,6 +334,11 @@ struct EditorView: View {
         }
         project.regionEffects = effects
         selectedTool = .focus
+    }
+
+    private var currentTime: Double {
+        get { playbackClock.time }
+        nonmutating set { playbackClock.update(newValue) }
     }
 
     private var seekBinding: Binding<Double> {
@@ -563,15 +579,18 @@ struct EditorView: View {
                 .accessibilityLabel("Redo edit")
                 .accessibilityIdentifier("editor.redo")
 
-            Text(currentTime.editorTimecode)
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .foregroundStyle(StudioTheme.text)
-                .accessibilityIdentifier("editor.timecode")
-                .frame(width: 82)
-            Slider(value: seekBinding, in: 0...max(project.duration, 0.001))
-                .tint(StudioTheme.purple)
-                .controlSize(.small)
-                .accessibilityLabel("Playback position")
+            EditorPlaybackTimeReader(clock: playbackClock) { time in
+                Text(time.editorTimecode)
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(StudioTheme.text)
+                    .accessibilityIdentifier("editor.timecode")
+                    .frame(width: 82)
+                Slider(value: Binding(get: { time }, set: { seek(to: $0) }),
+                       in: 0...max(project.duration, 0.001))
+                    .tint(StudioTheme.purple)
+                    .controlSize(.small)
+                    .accessibilityLabel("Playback position")
+            }
             Text(project.duration.editorTimecode)
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundStyle(StudioTheme.secondaryText)
@@ -621,11 +640,15 @@ struct EditorView: View {
         // The model holds the export's state so automation leaves the editor
         // alone while it renders.
         let snapshot = project
+        exportNeedsAccount = false
         Task {
             do {
                 let result = try await model.exportFromEditor(snapshot, to: url)
                 exportMessage = L10n.format("Exported %lld × %lld at %lld fps to %@.", result.width, result.height, result.frameRate, result.outputURL.lastPathComponent)
             } catch {
+                exportNeedsAccount = error is ExportRecoveryRequired || ((error as? SubscriptionServiceError).map {
+                    ["sign_in_required", "subscription_required"].contains($0.code)
+                } ?? false)
                 exportMessage = L10n.format("Export failed: %@", error.localizedDescription)
             }
         }

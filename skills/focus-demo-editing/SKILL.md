@@ -97,7 +97,11 @@ Read `get_timeline`, then inspect `capture_frame` with `source_frame: true` at t
 chosen output time. Its image is the uncropped source, before zoom and framing;
 use its `clip_id` and normalize the chosen rectangle against the full image.
 `add_region_effect` takes output `start`/`end`, source-normalized `x`/`y`/`width`/`height`,
-`preset` (`spotlight`, `lift`, `tilt`) and `background` (`dim`, `blur`, `none`).
+`preset` (`spotlight`, `lift`, `tilt`, `perspective`, `magnify`, `outline`) and
+`background` (`dim`, `blur`, `none`). Use `perspective` for a true tilted plane with
+`perspective_degrees` (−35–35, default 18), `magnify` for a circular lens centered
+inside the selection, and `outline` for a perimeter that draws on during entry.
+`outline_width` (1–12, default 3) adjusts the lens/border at a 1080 source-height reference.
 Keep the effect within one clip and a stable page state. Selections are fixed,
 not automatically tracked; no claim of privacy redaction is appropriate.
 

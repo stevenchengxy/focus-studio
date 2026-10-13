@@ -117,7 +117,7 @@ private final class EndToEndFixture {
         let store = ProjectStore(projectsDirectory: projects, trashOperation: { url in
             try FileManager.default.moveItem(at: url, to: trash.appendingPathComponent(url.lastPathComponent))
         })
-        model = StudioModel(store: store, interactionTrackingAccess: { true }, inputMonitoringAccess: { true }, screenCaptureAccess: { true })
+        model = StudioModel(store: store, interactionTrackingAccess: { true }, inputMonitoringAccess: { true }, screenCaptureAccess: { true }, exportAuthorization: RegressionExportAuthorizer())
         bridge = AutomationBridge(model: model)
         let image = root.appendingPathComponent("frame.png")
         try Self.writeImage(to: image)

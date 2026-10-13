@@ -660,7 +660,7 @@ private final class BridgeFixture {
             try FileManager.default.moveItem(at: url, to: trashFolder.appendingPathComponent(url.lastPathComponent))
         })
         model = StudioModel(store: store, interactionTrackingAccess: { true }, inputMonitoringAccess: { true }, screenCaptureAccess: { true },
-                            assistantCompletion: assistantCompletion)
+                            assistantCompletion: assistantCompletion, exportAuthorization: RegressionExportAuthorizer())
 
         screenshot = cwd.appendingPathComponent("shot.png")
         try Self.writeImage(to: screenshot)
@@ -718,4 +718,15 @@ private final class BridgeFixture {
         CGImageDestinationAddImage(destination, image, nil)
         guard CGImageDestinationFinalize(destination) else { throw BridgeFailure("Could not write the fixture image") }
     }
+}
+
+/// Production contexts always gate exports; bridge regression uses an isolated
+/// entitlement provider rather than ever accessing the user's live account.
+struct RegressionExportAuthorizer: ExportAuthorizing {
+    func reserve(projectID: String, idempotencyKey: UUID) async throws -> ExportReservation {
+        ExportReservation(id: idempotencyKey.uuidString)
+    }
+    func renew(_ reservation: ExportReservation) async throws { }
+    func commit(_ reservation: ExportReservation) async throws { }
+    func release(_ reservation: ExportReservation) async { }
 }

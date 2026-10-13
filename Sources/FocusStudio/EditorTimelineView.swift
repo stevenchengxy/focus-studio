@@ -8,6 +8,7 @@ import UniformTypeIdentifiers
 struct EditorTimelineView: View {
     @Binding var project: RecordingProject
     @Binding var currentTime: Double
+    let playbackClock: EditorPlaybackClock
     @Binding var selectedZoomID: UUID?
     @Binding var selectedChapterID: UUID?
     @Binding var selectedClipID: UUID?
@@ -32,6 +33,7 @@ struct EditorTimelineView: View {
     private var timelineLabelWidth: Double { labelWidth + 22 }
 
     var body: some View {
+        let _ = EditorPlaybackMetrics.record("timeline.body")
         GeometryReader { proxy in
             let viewportWidth = max(1, proxy.size.width - timelineLabelWidth - 14)
             let duration = max(project.duration, 0.001)
@@ -61,6 +63,7 @@ struct EditorTimelineView: View {
                             RulerRow(
                                 duration: duration,
                                 currentTime: Binding(get: { currentTime }, set: { isTimelineFocused = true; currentTime = $0 }),
+                                playbackClock: playbackClock,
                                 timelineWidth: timelineWidth,
                                 trailingGutter: trailingGutter,
                                 visibleX: scrollOffset...(scrollOffset + viewportWidth),
@@ -214,7 +217,7 @@ struct EditorTimelineView: View {
                             timelineWidth: timelineWidth,
                             trailingGutter: trailingGutter,
                             visibleX: scrollOffset...(scrollOffset + viewportWidth),
-                            currentTime: currentTime,
+                            playbackClock: playbackClock,
                             selectedClipID: $selectedClipID,
                             onSelect: { id in
                                 isTimelineFocused = true
@@ -253,7 +256,7 @@ struct EditorTimelineView: View {
                         .overlay(alignment: .topLeading) {
                             TimelinePointerOverlay(
                                 pointerGuide: pointerGuide,
-                                currentTime: currentTime,
+                                playbackClock: playbackClock,
                                 duration: duration,
                                 frameRate: frameRate,
                                 timelineWidth: timelineWidth
@@ -353,7 +356,8 @@ struct EditorTimelineView: View {
     }
 
     private var fixedLaneLabels: some View {
-        VStack(spacing: 0) {
+        let placements = videoTimeline?.placements ?? []
+        return VStack(spacing: 0) {
             Text("TIMELINE")
                 .font(.system(size: 9, weight: .semibold))
                 .tracking(1.2)
@@ -387,12 +391,16 @@ struct EditorTimelineView: View {
             fixedLaneLabel("Cursor", icon: "cursorarrow", tool: .cursor)
             fixedLaneLabel("Audio", icon: "waveform", tool: .audio)
             fixedLaneLabel("Video", icon: "film", tool: .video, height: videoRowHeight) {
-                Button(action: splitAtPlayhead) { Image(systemName: "scissors") }
-                    .foregroundStyle(StudioTheme.yellow)
-                    .disabled(!canSplitAtPlayhead || isVideoEditing)
-                    .help("Split at playhead · S")
-                    .accessibilityLabel("Split clip at playhead")
-                    .accessibilityIdentifier("timeline.splitAtPlayhead")
+                EditorPlaybackTimeReader(clock: playbackClock) { time in
+                    Button(action: splitAtPlayhead) { Image(systemName: "scissors") }
+                        .foregroundStyle(StudioTheme.yellow)
+                        .disabled(isVideoEditing || !placements.contains {
+                            time > $0.start + 0.1 && time < $0.end - 0.1
+                        })
+                        .help("Split at playhead · S")
+                        .accessibilityLabel("Split clip at playhead")
+                        .accessibilityIdentifier("timeline.splitAtPlayhead")
+                }
             }
         }
         .background(StudioTheme.panel)
@@ -422,12 +430,6 @@ struct EditorTimelineView: View {
         .contentShape(Rectangle())
         .onTapGesture { selectedTool = tool }
         .background(selectedTool == tool ? StudioTheme.purple.opacity(0.035) : .clear)
-    }
-
-    private var canSplitAtPlayhead: Bool {
-        videoTimeline?.placements.contains {
-            currentTime > $0.start + 0.1 && currentTime < $0.end - 0.1
-        } == true
     }
 
     private func splitAtPlayhead() {
@@ -624,6 +626,7 @@ private struct AudioTrack: View {
 private struct RulerRow: View {
     let duration: Double
     @Binding var currentTime: Double
+    @ObservedObject var playbackClock: EditorPlaybackClock
     let timelineWidth: Double
     let trailingGutter: Double
     let visibleX: ClosedRange<Double>
@@ -681,7 +684,7 @@ private struct RulerRow: View {
             })
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Playback position")
-        .accessibilityValue(currentTime.editorTimecode)
+        .accessibilityValue(playbackClock.time.editorTimecode)
         .accessibilityHint("Hover to inspect time; click or drag to place the playhead")
         .accessibilityIdentifier("timeline.ruler")
         .accessibilityAdjustableAction { direction in
@@ -750,13 +753,14 @@ enum TimelineFramePosition {
 
 private struct TimelinePointerOverlay: View {
     @ObservedObject var pointerGuide: TimelinePointerGuide
-    let currentTime: Double
+    @ObservedObject var playbackClock: EditorPlaybackClock
     let duration: Double
     let frameRate: Int
     let timelineWidth: Double
 
     var body: some View {
-        let committedX = (currentTime / duration).clamped(to: 0...1) * timelineWidth
+        let _ = EditorPlaybackMetrics.record("playhead.body")
+        let committedX = (playbackClock.time / duration).clamped(to: 0...1) * timelineWidth
         ZStack(alignment: .topLeading) {
             if let frame = pointerGuide.previewFrame {
                 let previewTime = TimelineFramePosition.time(
@@ -1231,6 +1235,7 @@ private struct CursorTrack: View {
     let visibleX: ClosedRange<Double>
 
     var body: some View {
+        let _ = EditorPlaybackMetrics.record("cursor.body")
         let viewportWidth = max(1, visibleX.upperBound - visibleX.lowerBound)
         HStack(spacing: 0) {
         Color.clear.frame(width: visibleX.lowerBound)

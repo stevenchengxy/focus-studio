@@ -20,6 +20,34 @@ func regionEffectFailures() -> [String] {
         let encoded = try JSONEncoder().encode(project)
         let decoded = try JSONDecoder().decode(RecordingProject.self, from: encoded)
         expect(decoded.regionEffects == project.regionEffects, "selection and source timing must persist exactly")
+        expect(decoded.regionEffects?.first?.perspectiveDegrees == nil
+            && decoded.regionEffects?.first?.resolvedPerspectiveDegrees == 18
+            && decoded.regionEffects?.first?.resolvedOutlineWidth == 3,
+            "old effect payloads receive angle and border defaults without migration")
+        for preset in RegionEffectPreset.allCases {
+            var expanded = effect; expanded.preset = preset
+            expanded.perspectiveDegrees = -24; expanded.outlineWidth = 6
+            try RegionEffectValidator.validateParameters(expanded)
+            let roundTrip = try JSONDecoder().decode(RegionEffect.self, from: JSONEncoder().encode(expanded))
+            expect(roundTrip == expanded, "every classic preset and its parameters must persist")
+        }
+        let canvas = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        let region = CGRect(x: 400, y: 300, width: 600, height: 400)
+        let identity = RegionPerspectiveGeometry.corners(rect: region, within: canvas, scale: 2, degrees: 25, progress: 0)
+        expect(identity == [CGPoint(x: 400, y: 700), CGPoint(x: 1000, y: 700),
+                            CGPoint(x: 1000, y: 300), CGPoint(x: 400, y: 300)],
+            "perspective entrance starts from the exact untransformed source")
+        let projected = RegionPerspectiveGeometry.corners(rect: region, within: canvas, scale: 1.6, degrees: 25, progress: 1)
+        let leftHeight = projected[0].y - projected[3].y, rightHeight = projected[1].y - projected[2].y
+        expect(abs(leftHeight - rightHeight) > 10, "perspective must project depth, not imitate it with a 2D rotation")
+        for angle in [-35.0, 0, 35] {
+            for position in [CGRect(x: 0, y: 0, width: 800, height: 700),
+                             CGRect(x: 1400, y: 600, width: 520, height: 480)] {
+                let corners = RegionPerspectiveGeometry.corners(rect: position, within: canvas, scale: 3, degrees: angle, progress: 1)
+                expect(corners.allSatisfy { $0.x >= -0.001 && $0.y >= -0.001 && $0.x <= 1920.001 && $0.y <= 1080.001 },
+                       "large perspective cards near every edge must fit the output")
+            }
+        }
         var legacyJSON = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
         legacyJSON.removeValue(forKey: "regionEffects")
         let legacy = try JSONDecoder().decode(RecordingProject.self,
@@ -43,6 +71,12 @@ func regionEffectFailures() -> [String] {
         expect(rejects(invalid, project: project), "selection outside source must be rejected")
         invalid = effect; invalid.scale = .infinity
         expect(rejects(invalid, project: project), "infinite transform must be rejected")
+        invalid = effect; invalid.perspectiveDegrees = .nan
+        expect(rejects(invalid, project: project), "non-finite perspective angle must be rejected")
+        invalid = effect; invalid.perspectiveDegrees = 36
+        expect(rejects(invalid, project: project), "extreme perspective distortion must be rejected")
+        invalid = effect; invalid.outlineWidth = 0
+        expect(rejects(invalid, project: project), "invisible border width must be rejected")
         invalid = effect; invalid.sourceEnd = 11
         expect(rejects(invalid, project: project), "range beyond source must be rejected")
         invalid = effect; invalid.clipID = UUID()

@@ -14,6 +14,10 @@ public struct RenderGeometry: Hashable, Sendable {
     }
 }
 
+/// A gate uses this marker when a complete temporary export must survive an
+/// uncertain remote commit, for recovery with the same reservation.
+public protocol PreservesCompletedExport: Error { }
+
 /// Metadata describing a completed export.
 public struct VideoExportResult: Hashable, Sendable {
     public let outputURL: URL
@@ -453,7 +457,8 @@ public enum ProjectVideoRenderer {
     public static func export(
         project: RecordingProject,
         to outputURL: URL,
-        progress: (@Sendable (Double) -> Void)? = nil
+        progress: (@Sendable (Double) -> Void)? = nil,
+        beforePublish: (@Sendable (URL) async throws -> Void)? = nil
     ) async throws -> VideoExportResult {
         guard outputURL.pathExtension.lowercased() == "mp4" else {
             throw ProjectRenderError.outputMustBeMP4(outputURL)
@@ -474,14 +479,22 @@ public enum ProjectVideoRenderer {
         session.audioMix = prepared.audioMix
         session.shouldOptimizeForNetworkUse = true
 
+        var authorizedCompletedFile = false
         do {
             try await runExportSession(session, to: temporaryURL, as: .mp4, progress: progress)
+            try Task.checkCancellation()
+            try await beforePublish?(temporaryURL)
+            authorizedCompletedFile = beforePublish != nil
             if FileManager.default.fileExists(atPath: outputURL.path) {
                 _ = try FileManager.default.replaceItemAt(outputURL, withItemAt: temporaryURL)
             } else {
                 try FileManager.default.moveItem(at: temporaryURL, to: outputURL)
             }
         } catch {
+            if error is any PreservesCompletedExport { throw error }
+            if authorizedCompletedFile {
+                throw ProjectRenderError.exportFailed("The completed video could not be moved to its destination. Recover it at \(temporaryURL.path). \(error.localizedDescription)")
+            }
             try? FileManager.default.removeItem(at: temporaryURL)
             // AVFoundation throws CancellationError for a cancelled task; any
             // other error it reports after a cancel is the cancel as well.

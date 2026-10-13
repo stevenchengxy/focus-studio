@@ -162,6 +162,12 @@ cp "$PROJECT_DIR/Resources/FocusStudio.icns" "$CONTENTS_DIR/Resources/FocusStudi
 cp "$PROJECT_DIR/Resources/Brand/FocusStudioIcon.png" "$CONTENTS_DIR/Resources/FocusStudioIcon.png"
 for app_language in en zh-Hans; do
     ditto "$PROJECT_DIR/Resources/$app_language.lproj" "$CONTENTS_DIR/Resources/$app_language.lproj"
+    # Match Xcode's compiled string resources. Explicit-locale SwiftUI menu
+    # accessibility can repeatedly load the table during updates; parsing the
+    # source-format dictionary on the main thread is especially costly.
+    for string_table in "$CONTENTS_DIR/Resources/$app_language.lproj/"*.strings; do
+        plutil -convert binary1 "$string_table"
+    done
 done
 ditto "$AUDIO_DIR" "$CONTENTS_DIR/Resources/Audio"
 ditto "$BACKGROUND_DIR" "$CONTENTS_DIR/Resources/Backgrounds"

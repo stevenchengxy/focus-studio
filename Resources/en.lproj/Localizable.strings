@@ -1389,3 +1389,45 @@
 "Partly outside this trim. Duration edits apply to the visible range." = "Partly outside this trim. Duration edits apply to the visible range.";
 "Outside this clip’s trim" = "Outside this clip’s trim";
 "Restore the clip to reveal this effect." = "Restore the clip to reveal this effect.";
+
+// Classic local emphasis effects
+"Perspective card" = "Perspective card";
+"Magnifier" = "Magnifier";
+"Draw outline" = "Draw outline";
+"Perspective angle" = "Perspective angle";
+"Border width" = "Border width";
+"Use perspective angle −35–35 degrees and outline width 1–12 pixels." = "Use perspective angle −35–35 degrees and outline width 1–12 pixels.";
+
+// Account and export allowance
+"Your Focus Studio account" = "Your Focus Studio account";
+"Sign in to export your first demo" = "Sign in to export your first demo";
+"Free export" = "Free export";
+"Focus Studio Pro" = "Focus Studio Pro";
+"Ready to export" = "Ready to export";
+"One successful export included" = "One successful export included";
+"Your free export has been used" = "Your free export has been used";
+"View plans" = "View plans";
+"Manage subscription" = "Manage subscription";
+"Record and edit freely. Only completed exports use your allowance." = "Record and edit freely. Only completed exports use your allowance.";
+"One free export" = "One free export";
+"Then $29 monthly, or $108 yearly ($9 / month)." = "Then $29 monthly, or $108 yearly ($9 / month).";
+"Finish signing in in your browser" = "Finish signing in in your browser";
+"Continue in browser" = "Continue in browser";
+"$108 / year · $9 / month" = "$108 / year · $9 / month";
+"$29 / month" = "$29 / month";
+"The sign-in link could not be verified. Try again." = "The sign-in link could not be verified. Try again.";
+"The sign-in response was invalid. Try again." = "The sign-in response was invalid. Try again.";
+"This export reservation is no longer available. Start a new export." = "This export reservation is no longer available. Start a new export.";
+"Account service is unavailable. Your recording is safe; try again later." = "Account service is unavailable. Your recording is safe; try again later.";
+"Sign in in Settings → Account to use your free export or subscription." = "Sign in in Settings → Account to use your free export or subscription.";
+"Your session expired. Sign in again in Settings → Account." = "Your session expired. Sign in again in Settings → Account.";
+"Your free export has been used. Choose a plan in Settings → Account to continue." = "Your free export has been used. Choose a plan in Settings → Account to continue.";
+"Another export is already in progress. Try again after it finishes." = "Another export is already in progress. Try again after it finishes.";
+"The export reservation expired. Please export again." = "The export reservation expired. Please export again.";
+"This sign-in code expired. Please try again." = "This sign-in code expired. Please try again.";
+"Too many requests. Please wait a moment and try again." = "Too many requests. Please wait a moment and try again.";
+"Account settings" = "Account settings";
+"Recover export" = "Recover export";
+"Finish a saved render without using another export." = "Finish a saved render without using another export.";
+"Your rendered video is safe. Open Settings → Account → Recover export to finish without using another export." = "Your rendered video is safe. Open Settings → Account → Recover export to finish without using another export.";
+"The saved export file is missing. Your source recording has not changed." = "The saved export file is missing. Your source recording has not changed.";

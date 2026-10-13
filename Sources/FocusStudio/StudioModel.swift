@@ -102,6 +102,9 @@ final class StudioModel: ObservableObject {
     let codexAssistant = CodexDirectorService()
     /// LLM provider keys and the default text model for every AI feature.
     let aiGateway = AIGatewayStore()
+    /// Recording and editing remain local; successful exports use this account gate.
+    let subscription = NativeSubscriptionStore()
+    private let exportAuthorizationProvider: any ExportAuthorizing
     /// The one assistant conversation for the whole app, created on first use.
     /// Its context follows whatever project is open; see ``AIAssistantContext``.
     private(set) lazy var assistantSession: AIAssistantSession = makeAssistantSession()
@@ -185,7 +188,8 @@ final class StudioModel: ObservableObject {
         recordingClock: RecordingClock = .system,
         assistantCompletion: (any TextCompletionProviding)? = nil,
         assistantHistoryURL: URL? = nil,
-        microphoneAccess: MicrophoneAccessController? = nil
+        microphoneAccess: MicrophoneAccessController? = nil,
+        exportAuthorization: (any ExportAuthorizing)? = nil
     ) {
         self.store = store
         globalMediaStore = GlobalMediaLibraryStore(
@@ -206,6 +210,7 @@ final class StudioModel: ObservableObject {
         self.inputMonitoringAccess = inputMonitoringAccess
         self.screenCaptureAccess = screenCaptureAccess
         self.finishCapture = finishCapture
+        self.exportAuthorizationProvider = exportAuthorization ?? subscription.client
         refreshInteractionTrackingPermission()
         // A capture can fail by itself (the stream stops, the window closes):
         // its attempt then ends as failed, without waiting for Finish or Cancel,
@@ -404,6 +409,7 @@ final class StudioModel: ObservableObject {
             projectsDirectory: store.projectsDirectory,
             app: self
         )
+        context.exportAuthorization = exportAuthorizationProvider
         context.preferredVideoModelID = { [weak self] in self?.aiGateway.preferredVideoModelID }
         context.geminiVideoAPIKey = { [weak self] in
             guard let self, self.aiGateway.configuration(for: .googleGemini).isEnabled else { return nil }
@@ -2401,7 +2407,9 @@ final class StudioModel: ObservableObject {
     func exportFromEditor(_ project: RecordingProject, to url: URL) async throws -> VideoExportResult {
         isExportingFromEditor = true
         defer { isExportingFromEditor = false }
-        return try await ProjectVideoRenderer.export(project: project, to: url)
+        return try await EntitledExport.run(authorizer: exportAuthorizationProvider, projectID: project.id.uuidString, outputURL: url) { commit in
+            try await ProjectVideoRenderer.export(project: project, to: url, beforePublish: commit)
+        }
     }
 
     func closeEditor() {

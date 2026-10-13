@@ -1388,3 +1388,45 @@
 "Partly outside this trim. Duration edits apply to the visible range." = "效果部分位于裁剪范围外。修改时长将以可见范围为准。";
 "Outside this clip’s trim" = "效果位于片段裁剪范围之外";
 "Restore the clip to reveal this effect." = "拉长还原片段后，此效果会重新出现。";
+
+// Classic local emphasis effects
+"Perspective card" = "透视卡片";
+"Magnifier" = "放大镜";
+"Draw outline" = "描边强调";
+"Perspective angle" = "透视角度";
+"Border width" = "描边宽度";
+"Use perspective angle −35–35 degrees and outline width 1–12 pixels." = "透视角度为 −35–35 度，描边宽度为 1–12 像素。";
+
+// Account and export allowance
+"Your Focus Studio account" = "你的 Focus Studio 账户";
+"Sign in to export your first demo" = "登录后导出你的第一支演示";
+"Free export" = "免费导出";
+"Focus Studio Pro" = "Focus Studio Pro";
+"Ready to export" = "可以导出";
+"One successful export included" = "包含一次成功导出";
+"Your free export has been used" = "免费导出已使用";
+"View plans" = "查看套餐";
+"Manage subscription" = "管理订阅";
+"Record and edit freely. Only completed exports use your allowance." = "自由录制和编辑，仅成功导出占用次数。";
+"One free export" = "一次免费导出";
+"Then $29 monthly, or $108 yearly ($9 / month)." = "之后月付 $29，或年付 $108（每月 $9）。";
+"Finish signing in in your browser" = "在浏览器中完成登录";
+"Continue in browser" = "前往浏览器登录";
+"$108 / year · $9 / month" = "$108 / 年 · 每月 $9";
+"$29 / month" = "$29 / 月";
+"The sign-in link could not be verified. Try again." = "无法验证登录链接，请重试。";
+"The sign-in response was invalid. Try again." = "登录响应无效，请重试。";
+"This export reservation is no longer available. Start a new export." = "本次导出授权已失效，请重新导出。";
+"Account service is unavailable. Your recording is safe; try again later." = "账户服务暂不可用，录屏已保留，请稍后重试。";
+"Sign in in Settings → Account to use your free export or subscription." = "请在“设置 → 账户”中登录，以使用免费导出或订阅。";
+"Your session expired. Sign in again in Settings → Account." = "登录已过期，请在“设置 → 账户”中重新登录。";
+"Your free export has been used. Choose a plan in Settings → Account to continue." = "免费导出已使用，请在“设置 → 账户”选择套餐后继续。";
+"Another export is already in progress. Try again after it finishes." = "已有导出任务进行中，请等待完成后重试。";
+"The export reservation expired. Please export again." = "导出授权已过期，请重新导出。";
+"This sign-in code expired. Please try again." = "登录码已过期，请重新登录。";
+"Too many requests. Please wait a moment and try again." = "请求过于频繁，请稍候重试。";
+"Account settings" = "账户设置";
+"Recover export" = "恢复导出";
+"Finish a saved render without using another export." = "继续保存已渲染的视频，不重复占用导出次数。";
+"Your rendered video is safe. Open Settings → Account → Recover export to finish without using another export." = "已渲染的视频已保留。请前往“设置 → 账户 → 恢复导出”继续保存，不重复占用导出次数。";
+"The saved export file is missing. Your source recording has not changed." = "未找到待恢复的视频，原始录屏未改动。";

@@ -20,7 +20,7 @@ public struct NormalizedRegionRect: Codable, Hashable, Sendable {
 }
 
 public enum RegionEffectPreset: String, Codable, CaseIterable, Hashable, Sendable {
-    case spotlight, lift, tilt
+    case spotlight, lift, tilt, perspective, magnify, outline
 }
 
 public enum RegionEffectBackground: String, Codable, CaseIterable, Hashable, Sendable {
@@ -42,17 +42,25 @@ public struct RegionEffect: Codable, Hashable, Sendable, Identifiable {
     public var easeIn: Double
     public var easeOut: Double
     public var isEnabled: Bool
+    /// Optional for backwards-compatible decoding of existing recordings.
+    public var perspectiveDegrees: Double?
+    public var outlineWidth: Double?
+    public var resolvedPerspectiveDegrees: Double { perspectiveDegrees ?? 18 }
+    /// Width at a 1080-pixel-tall output, independent of export resolution.
+    public var resolvedOutlineWidth: Double { outlineWidth ?? 3 }
 
     public init(id: UUID = UUID(), clipID: UUID, sourceStart: Double, sourceEnd: Double,
                 rect: NormalizedRegionRect, preset: RegionEffectPreset = .spotlight,
                 background: RegionEffectBackground = .dim, scale: Double = 1.35,
                 intensity: Double = 0.55, easeIn: Double = 0.35, easeOut: Double = 0.35,
-                isEnabled: Bool = true) {
+                isEnabled: Bool = true, perspectiveDegrees: Double? = nil,
+                outlineWidth: Double? = nil) {
         self.id = id; self.clipID = clipID
         self.sourceStart = sourceStart; self.sourceEnd = sourceEnd; self.rect = rect
         self.preset = preset; self.background = background; self.scale = scale
         self.intensity = intensity; self.easeIn = easeIn; self.easeOut = easeOut
         self.isEnabled = isEnabled
+        self.perspectiveDegrees = perspectiveDegrees; self.outlineWidth = outlineWidth
     }
 }
 
@@ -97,6 +105,10 @@ public enum RegionEffectValidator {
             // Authored tools require 0.1 seconds, but splitting a valid effect
             // may leave a shorter tail that still owns real source frames.
             throw RegionEffectError.invalid("A local highlight needs a positive source duration.")
+        }
+        guard effect.resolvedPerspectiveDegrees.isFinite, (-35...35).contains(effect.resolvedPerspectiveDegrees),
+              effect.resolvedOutlineWidth.isFinite, (1...12).contains(effect.resolvedOutlineWidth) else {
+            throw RegionEffectError.invalid("Use perspective angle −35–35 degrees and outline width 1–12 pixels.")
         }
         guard effect.scale.isFinite, (1...3).contains(effect.scale),
               effect.intensity.isFinite, (0...1).contains(effect.intensity),
@@ -195,5 +207,45 @@ extension RecordingProject {
         let sourceDuration = videoSourceDuration ?? duration
         videoClips = [DemoVideoClip(id: id, sourceStart: 0, sourceEnd: sourceDuration)]
         videoSourceDuration = sourceDuration
+    }
+}
+
+/// A true perspective projection of a planar card. Keeping this geometry pure
+/// makes edge fitting and the identity frame testable without a GPU or player.
+public enum RegionPerspectiveGeometry {
+    /// Corners are top-left, top-right, bottom-right, bottom-left in CI coordinates.
+    public static func corners(rect: CGRect, within frame: CGRect, scale: Double,
+                               degrees: Double, progress: Double) -> [CGPoint] {
+        let p = progress.clamped(to: 0...1)
+        let yaw = degrees.clamped(to: -35...35) * .pi / 180 * p
+        let pitch = -yaw * 0.28
+        let focal = max(rect.width, rect.height) * 4
+        let magnification = 1 + (scale.clamped(to: 1...3) - 1) * p
+        let source = [CGPoint(x: rect.minX, y: rect.maxY), CGPoint(x: rect.maxX, y: rect.maxY),
+                      CGPoint(x: rect.maxX, y: rect.minY), CGPoint(x: rect.minX, y: rect.minY)]
+        guard focal > 0 else { return source }
+        var points = source.map { point -> CGPoint in
+            let x = point.x - rect.midX, y = point.y - rect.midY
+            let rotatedX = x * cos(yaw), rotatedZ = -x * sin(yaw)
+            let rotatedY = y * cos(pitch) - rotatedZ * sin(pitch)
+            let depth = y * sin(pitch) + rotatedZ * cos(pitch)
+            let projection = focal / (focal - depth)
+            return CGPoint(x: rect.midX + rotatedX * projection * magnification,
+                           y: rect.midY + rotatedY * projection * magnification)
+        }
+        func bounds(_ points: [CGPoint]) -> CGRect {
+            let xs = points.map(\.x), ys = points.map(\.y)
+            return CGRect(x: xs.min()!, y: ys.min()!, width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!)
+        }
+        let projected = bounds(points)
+        let fit = min(1, frame.width / max(1, projected.width), frame.height / max(1, projected.height))
+        if fit < 1 {
+            points = points.map { CGPoint(x: rect.midX + ($0.x - rect.midX) * fit,
+                                          y: rect.midY + ($0.y - rect.midY) * fit) }
+        }
+        let fitted = bounds(points)
+        let dx = max(0, frame.minX - fitted.minX) - max(0, fitted.maxX - frame.maxX)
+        let dy = max(0, frame.minY - fitted.minY) - max(0, fitted.maxY - frame.maxY)
+        return points.map { CGPoint(x: $0.x + dx, y: $0.y + dy) }
     }
 }

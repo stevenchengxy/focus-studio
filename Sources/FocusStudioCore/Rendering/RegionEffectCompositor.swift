@@ -1,4 +1,5 @@
 import CoreImage
+import CoreGraphics
 import Foundation
 
 /// Pointer artwork stays separate until the cut-out is placed, so it is drawn
@@ -14,6 +15,8 @@ final class RegionEffectCompositor: @unchecked Sendable {
     private struct Artwork {
         let mask: CIImage
         let shadow: CIImage
+        let rim: CIImage
+        let selection: CGRect
         let referenceSize: CGSize
     }
 
@@ -30,15 +33,13 @@ final class RegionEffectCompositor: @unchecked Sendable {
         var artwork: [UUID: Artwork] = [:]
         for placement in placements {
             let effect = placement.effect
-            let r = effect.rect
             let media = project.mediaAssets?.first { $0.id == placement.clip.mediaAssetID }
             let sourceWidth = CGFloat(max(1, media?.width ?? project.sourceWidth))
             let sourceHeight = CGFloat(max(1, media?.height ?? project.sourceHeight))
             let referenceScale = 1_024 / max(sourceWidth, sourceHeight)
             let size = CGSize(width: sourceWidth * referenceScale, height: sourceHeight * referenceScale)
-            let rect = CGRect(x: r.x * size.width, y: (1 - r.y - r.height) * size.height,
-                              width: r.width * size.width, height: r.height * size.height)
-            let radius = min(12, min(rect.width, rect.height) * 0.08)
+            let rect = Self.selectionRect(effect: effect, sourceSize: size)
+            let radius = effect.preset == .magnify ? rect.width / 2 : min(12, min(rect.width, rect.height) * 0.08)
             guard let maskGraph = CIFilter(name: "CIRoundedRectangleGenerator", parameters: [
                 kCIInputExtentKey: CIVector(cgRect: rect),
                 kCIInputRadiusKey: radius,
@@ -57,7 +58,10 @@ final class RegionEffectCompositor: @unchecked Sendable {
             } else {
                 shadow = mask
             }
-            artwork[effect.id] = Artwork(mask: mask, shadow: shadow, referenceSize: size)
+            let width = max(0.75, effect.resolvedOutlineWidth * size.height / 1080)
+            let rim = Self.makeRim(rect: rect, radius: radius, width: width) ?? mask
+            artwork[effect.id] = Artwork(mask: mask, shadow: shadow, rim: rim,
+                                          selection: rect, referenceSize: size)
         }
         self.artwork = artwork
     }
@@ -79,11 +83,7 @@ final class RegionEffectCompositor: @unchecked Sendable {
             return overlays.reduce(image) { $1.image.composited(over: $0) }
         }
         let effect = placement.effect
-        let r = effect.rect
-        let selectedSource = CGRect(x: r.x * sourceSize.width,
-                                    y: (1 - r.y - r.height) * sourceSize.height,
-                                    width: r.width * sourceSize.width,
-                                    height: r.height * sourceSize.height)
+        let selectedSource = Self.selectionRect(effect: effect, sourceSize: sourceSize)
         let selectedFrame = selectedSource.applying(sourceToCanvas).intersection(screenFrame)
         guard !selectedFrame.isNull, selectedFrame.width > 1, selectedFrame.height > 1 else {
             return overlays.reduce(image) { $1.image.composited(over: $0) }
@@ -97,7 +97,10 @@ final class RegionEffectCompositor: @unchecked Sendable {
         var background = image
         var selectedOverlays: [CIImage] = []
         for overlay in overlays {
-            if selectedSource.contains(overlay.anchor.applying(inverse)) {
+            let point = overlay.anchor.applying(inverse)
+            let withinSelection = selectedSource.contains(point)
+                && (effect.preset != .magnify || hypot(point.x - selectedSource.midX, point.y - selectedSource.midY) <= selectedSource.width / 2)
+            if withinSelection {
                 selectedOverlays.append(overlay.image)
             } else {
                 background = overlay.image.composited(over: background)
@@ -138,6 +141,30 @@ final class RegionEffectCompositor: @unchecked Sendable {
         guard effect.preset != .spotlight else {
             return card.composited(over: background).cropped(to: screenFrame)
         }
+        if effect.preset == .outline {
+            // Draw the perimeter once during entry; fade it on return. No
+            // per-frame bitmap allocation or path rasterization is needed.
+            let ramp = min(effect.easeIn, placement.duration / 2)
+            let reveal = ramp > 0 ? ((seconds - placement.start) / ramp).clamped(to: 0...1) : 1
+            let rim = Self.revealedRim(artwork.rim, rect: artwork.selection, fraction: reveal)
+                .transformed(by: referenceToCanvas)
+            return Self.coloredMask(rim, color: CIColor(red: 0.42, green: 0.94, blue: 0.78, alpha: progress), within: screenFrame)
+                .composited(over: card.composited(over: background)).cropped(to: screenFrame)
+        }
+        if effect.preset == .perspective {
+            let corners = RegionPerspectiveGeometry.corners(rect: selectedFrame, within: screenFrame,
+                scale: effect.scale, degrees: effect.resolvedPerspectiveDegrees, progress: progress)
+            let placed = Self.perspective(card.cropped(to: selectedFrame), corners: corners)
+            // Project the cached shadow with the same homography, then soften
+            // its boundary after projection to avoid a rectangular edge.
+            let shadowMask = artwork.shadow.transformed(by: referenceToCanvas)
+            let projectedShadow = Self.perspective(shadowMask.cropped(to: selectedFrame), corners: corners)
+                .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 7 * progress])
+                .transformed(by: CGAffineTransform(translationX: 0, y: -8 * progress))
+            let shadow = Self.coloredMask(projectedShadow,
+                color: CIColor(red: 0, green: 0, blue: 0, alpha: 0.34 * progress), within: screenFrame)
+            return placed.composited(over: shadow.composited(over: background)).cropped(to: screenFrame)
+        }
 
         let angle: Double
         if effect.preset == .tilt, effect.easeIn > 0 {
@@ -160,9 +187,73 @@ final class RegionEffectCompositor: @unchecked Sendable {
                 kCIInputBackgroundImageKey: transparent,
                 kCIInputMaskImageKey: shadowMask
             ])
-        return card.transformed(by: transform)
-            .composited(over: shadow.composited(over: background))
-            .cropped(to: screenFrame)
+        var foreground = card.transformed(by: transform)
+        if effect.preset == .magnify {
+            let rim = artwork.rim.transformed(by: referenceToCanvas).transformed(by: transform)
+            foreground = Self.coloredMask(rim, color: CIColor(red: 1, green: 1, blue: 1, alpha: 0.9 * progress), within: screenFrame)
+                .composited(over: foreground)
+        }
+        return foreground.composited(over: shadow.composited(over: background)).cropped(to: screenFrame)
+    }
+
+
+    private static func selectionRect(effect: RegionEffect, sourceSize: CGSize) -> CGRect {
+        let r = effect.rect
+        let rectangle = CGRect(x: r.x * sourceSize.width, y: (1 - r.y - r.height) * sourceSize.height,
+                               width: r.width * sourceSize.width, height: r.height * sourceSize.height)
+        guard effect.preset == .magnify else { return rectangle }
+        let diameter = min(rectangle.width, rectangle.height)
+        return CGRect(x: rectangle.midX - diameter / 2, y: rectangle.midY - diameter / 2,
+                      width: diameter, height: diameter)
+    }
+
+    private static func makeRim(rect: CGRect, radius: CGFloat, width: CGFloat) -> CIImage? {
+        let bounds = rect.insetBy(dx: -width - 2, dy: -width - 2).integral
+        guard let context = CGContext(data: nil, width: Int(bounds.width), height: Int(bounds.height),
+            bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.translateBy(x: -bounds.minX, y: -bounds.minY)
+        context.setStrokeColor(CGColor(gray: 1, alpha: 1)); context.setLineWidth(width)
+        context.addPath(CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil))
+        context.strokePath()
+        guard let pixels = context.makeImage() else { return nil }
+        return CIImage(cgImage: pixels).transformed(by: CGAffineTransform(translationX: bounds.minX, y: bounds.minY))
+    }
+
+    private static func coloredMask(_ mask: CIImage, color: CIColor, within frame: CGRect) -> CIImage {
+        CIImage(color: color).cropped(to: frame).applyingFilter("CIBlendWithAlphaMask", parameters: [
+            kCIInputBackgroundImageKey: CIImage(color: .clear).cropped(to: frame),
+            kCIInputMaskImageKey: mask
+        ])
+    }
+
+    private static func revealedRim(_ image: CIImage, rect: CGRect, fraction: Double) -> CIImage {
+        guard fraction < 1 else { return image }
+        let extent = image.extent
+        let pad = max(rect.minX - extent.minX, rect.minY - extent.minY) + 1
+        let lengths = [rect.width, rect.height, rect.width, rect.height]
+        var remaining = (rect.width + rect.height) * 2 * fraction
+        var result = CIImage(color: .clear).cropped(to: extent)
+        for (index, length) in lengths.enumerated() {
+            let part = min(length, max(0, remaining)); remaining -= length
+            guard part > 0 else { continue }
+            let area: CGRect
+            switch index {
+            case 0: area = CGRect(x: rect.minX - pad, y: rect.maxY - pad, width: part + pad, height: pad * 2)
+            case 1: area = CGRect(x: rect.maxX - pad, y: rect.maxY - part, width: pad * 2, height: part + pad)
+            case 2: area = CGRect(x: rect.maxX - part, y: rect.minY - pad, width: part + pad, height: pad * 2)
+            default: area = CGRect(x: rect.minX - pad, y: rect.minY - pad, width: pad * 2, height: part + pad)
+            }
+            result = image.cropped(to: area).composited(over: result)
+        }
+        return result
+    }
+
+    private static func perspective(_ image: CIImage, corners: [CGPoint]) -> CIImage {
+        image.applyingFilter("CIPerspectiveTransform", parameters: [
+            "inputTopLeft": CIVector(cgPoint: corners[0]), "inputTopRight": CIVector(cgPoint: corners[1]),
+            "inputBottomRight": CIVector(cgPoint: corners[2]), "inputBottomLeft": CIVector(cgPoint: corners[3])
+        ])
     }
 
     /// Limit the whole rotated card to the visible screen, including selections

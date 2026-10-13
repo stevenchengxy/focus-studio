@@ -138,7 +138,7 @@ struct EditorVideoTimelineView: View {
     let timelineWidth: Double
     let trailingGutter: Double
     let visibleX: ClosedRange<Double>
-    let currentTime: Double
+    let playbackClock: EditorPlaybackClock
     @Binding var selectedClipID: UUID?
     let onSelect: (UUID) -> Void
     let onEdit: (DemoVideoEditOperation) -> Void
@@ -190,7 +190,7 @@ struct EditorVideoTimelineView: View {
                     timelineWidth: timelineWidth,
                     visibleX: visibleX,
                     duration: duration,
-                    currentTime: currentTime,
+                    playbackClock: playbackClock,
                     selected: selectedClipID == placement.clip.id,
                     isEditing: isEditing,
                     onSelect: { onSelect(placement.clip.id) },
@@ -339,7 +339,7 @@ private struct VideoClipBlock: View {
     let timelineWidth: Double
     let visibleX: ClosedRange<Double>
     let duration: Double
-    let currentTime: Double
+    let playbackClock: EditorPlaybackClock
     let selected: Bool
     let isEditing: Bool
     let onSelect: () -> Void
@@ -464,10 +464,12 @@ private struct VideoClipBlock: View {
               : L10n.format("Select or drag to reorder. Drag the edges to trim. Source %@–%@.",
                             clip.sourceStart.editorTimecode, clip.sourceEnd.editorTimecode))
         .contextMenu {
-            Button("Split at playhead") {
-                onEdit(.split(clipID: clip.id, at: currentTime))
+            EditorPlaybackTimeReader(clock: playbackClock) { time in
+                Button("Split at playhead") {
+                    onEdit(.split(clipID: clip.id, at: playbackClock.time))
+                }
+                .disabled(time <= placement.start + 0.1 || time >= placement.end - 0.1)
             }
-            .disabled(currentTime <= placement.start + 0.1 || currentTime >= placement.end - 0.1)
             if mediaAsset?.kind != .image,
                clip.sourceStart > 0.001 || clip.sourceEnd < sourceEndLimit - 0.001 {
                 Button("Expand to source bounds") {

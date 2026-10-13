@@ -30,6 +30,7 @@ swiftc -parse-as-library -g \
   Sources/FocusStudioAutomation/Localization.swift \
   Sources/FocusStudioAutomation/AIJSONValue.swift \
   Sources/FocusStudioAutomation/AIAssistantModels.swift \
+  Sources/FocusStudioAutomation/ExportEntitlements.swift \
   Sources/FocusStudioAutomation/CodexRecordingPlan.swift \
   Sources/FocusStudioAutomation/ArkMediaClient.swift \
   Sources/FocusStudioAutomation/VeoMediaClient.swift \
@@ -61,6 +62,7 @@ swiftc -parse-as-library -g \
   Tests/AIAssistantTests/DemoEditingTests.swift \
   Tests/AIAssistantTests/TimelineEditingTests.swift \
   Tests/AIAssistantTests/RegionEffectToolsTests.swift \
+  Tests/AIAssistantTests/ExportEntitlementTests.swift \
   Tests/AIAssistantTests/MediaLibraryToolsTests.swift \
   Tests/AIAssistantTests/VideoTimelineTests.swift \
   Tests/AIAssistantTests/VeoProviderTests.swift \

@@ -5,7 +5,7 @@ import SwiftUI
 
 struct ProjectPreviewView: View {
     let project: RecordingProject
-    @Binding var currentTime: Double
+    let playbackClock: EditorPlaybackClock
     @Binding var isPlaying: Bool
     var seekRevision: Int
     @Binding var renderError: String?
@@ -19,8 +19,10 @@ struct ProjectPreviewView: View {
     @State private var observerToken: Any?
     @State private var isVisible = false
     @State private var renderGeneration = UUID()
+    @State private var playbackDuration = 0.0
 
     var body: some View {
+        let _ = EditorPlaybackMetrics.record("preview.body")
         ZStack {
             Color.black.opacity(0.35)
             PlayerView(player: player)
@@ -81,23 +83,31 @@ struct ProjectPreviewView: View {
                 // frame and silently move the editor playhead by ~0.2 s.
                 // Keep the requested output-frame position across rebuilds.
                 await player.seek(
-                    to: CMTime(seconds: currentTime, preferredTimescale: 60_000),
+                    to: CMTime(seconds: playbackClock.time, preferredTimescale: 60_000),
                     toleranceBefore: .zero,
                     toleranceAfter: .zero
                 )
                 guard !Task.isCancelled, isVisible, renderGeneration == generation else { return }
-                if isPlaying { player.play() }
             } catch is CancellationError {
                 return
             } catch {
                 guard isVisible, renderGeneration == generation else { return }
                 renderError = error.localizedDescription
             }
-            if isVisible, renderGeneration == generation { isLoading = false }
+            if isVisible, renderGeneration == generation {
+                isLoading = false
+                reconcilePlayback()
+            }
         }
         .onAppear {
             isVisible = true
+            playbackDuration = project.duration
             installTimeObserver()
+        }
+        .onChange(of: project.duration) { _, duration in
+            // The long-lived observer must use the edited output duration,
+            // rather than the project value captured when the editor opened.
+            playbackDuration = duration
         }
         .onDisappear {
             isVisible = false
@@ -111,21 +121,17 @@ struct ProjectPreviewView: View {
             removeTimeObserver()
             player.replaceCurrentItem(with: nil)
         }
-        .onChange(of: isPlaying) { _, playing in
-            guard isVisible else { return }
-            if playing {
-                player.play()
-            } else {
-                player.pause()
-            }
+        .onChange(of: isPlaying) { _, _ in
+            reconcilePlayback()
         }
         .onChange(of: seekRevision) { _, _ in
             guard isVisible else { return }
             isSeeking = true
+            player.pause()
             // Dragging the ruler can submit many positions before AVPlayer
             // decodes one exact frame. Keep the newest position and allow only
             // one seek at a time, so obsolete decode requests cannot pile up.
-            pendingSeekTime = currentTime
+            pendingSeekTime = playbackClock.time
             if seekTask != nil { player.currentItem?.cancelPendingSeeks() }
             drainSeeksIfNeeded()
         }
@@ -153,8 +159,18 @@ struct ProjectPreviewView: View {
             if seekTaskGeneration == generation {
                 seekTask = nil
                 isSeeking = false
+                reconcilePlayback()
             }
         }
+    }
+
+    private func reconcilePlayback() {
+        guard isVisible else { return }
+        // Seeking after reaching the end can reset AVPlayer's rate to zero.
+        // Apply the latest intent only after the last exact seek completes;
+        // an earlier Play must never override a newer Pause while decoding.
+        if isPlaying, !isLoading, !isSeeking { player.play() }
+        else { player.pause() }
     }
 
     private var previewRatio: CGFloat {
@@ -195,12 +211,14 @@ struct ProjectPreviewView: View {
             forInterval: CMTime(value: 1, timescale: 30),
             queue: .main
         ) { time in
-            guard isVisible, !isSeeking, !isLoading else { return }
-            let seconds = time.seconds
-            guard seconds.isFinite else { return }
-            currentTime = seconds.clamped(to: 0...max(project.duration, 0.001))
-            if seconds >= project.duration - 0.02 {
-                isPlaying = false
+            MainActor.assumeIsolated {
+                guard isVisible, !isSeeking, !isLoading else { return }
+                let seconds = time.seconds
+                guard seconds.isFinite else { return }
+                playbackClock.update(seconds.clamped(to: 0...max(playbackDuration, 0.001)))
+                if seconds >= playbackDuration - 0.02 {
+                    isPlaying = false
+                }
             }
         }
     }
