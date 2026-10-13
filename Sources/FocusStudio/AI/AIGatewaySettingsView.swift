@@ -173,7 +173,7 @@ struct AIGatewaySettingsView: View {
             .padding(.horizontal, 10)
             .frame(height: 30)
             .frame(maxWidth: .infinity)
-            .background(isSelected ? Color.white.opacity(0.08) : Color.clear)
+            .background(isSelected ? StudioTheme.controlPressed : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
             .contentShape(Rectangle())
         }
@@ -185,8 +185,8 @@ struct AIGatewaySettingsView: View {
     static func color(for status: AIProviderStatus) -> Color {
         switch status {
         case .ready: return .aiReady
-        case .needsTest: return StudioTheme.yellow
-        case .unconfigured: return Color.white.opacity(0.22)
+        case .needsTest: return StudioTheme.warning
+        case .unconfigured: return StudioTheme.secondaryText.opacity(0.5)
         }
     }
 
@@ -420,7 +420,7 @@ private struct AIProviderDetailView: View {
 
     @ViewBuilder private var statusText: some View {
         if let keychainMessage {
-            Text(verbatim: keychainMessage).foregroundStyle(StudioTheme.yellow)
+            Text(verbatim: keychainMessage).foregroundStyle(StudioTheme.warning)
         } else if isTesting {
             Text("Testing…").foregroundStyle(StudioTheme.secondaryText)
         } else if configuration.lastTestSucceeded == true {
@@ -430,7 +430,7 @@ private struct AIProviderDetailView: View {
                 Text("Connected").foregroundStyle(Color.aiReady)
             }
         } else if configuration.lastTestSucceeded == false, let summary = configuration.lastTestSummary {
-            Text(verbatim: L10n.tr(summary)).foregroundStyle(StudioTheme.yellow)
+            Text(verbatim: L10n.tr(summary)).foregroundStyle(StudioTheme.warning)
         } else if !store.isConfigured(kind) {
             if kind.requiresAPIKey {
                 Text("No API key").foregroundStyle(StudioTheme.secondaryText)

@@ -63,7 +63,7 @@ struct EditorMediaLibraryView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 15)
                 .padding(.horizontal, 8)
-                .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 9))
+                .background(StudioTheme.inset, in: RoundedRectangle(cornerRadius: 9))
             } else {
                 Text("Click to add at the playhead, or drag onto the video track.")
                     .font(.system(size: 9))

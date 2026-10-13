@@ -1458,3 +1458,8 @@
 "Allow microphone access in System Settings to record voiceover." = "请在系统设置中允许麦克风访问，再录制旁白。";
 "The microphone could not start. Check the input device and try again." = "麦克风无法启动，请检查输入设备后重试。";
 "Record a little longer before saving." = "录制时间太短，请再录制一会儿。";
+
+/* App appearance */
+"Light appearance" = "浅色";
+"Dark appearance" = "深色";
+"Change appearance" = "切换外观";

@@ -174,7 +174,7 @@ struct AutomationSettingsView: View {
             actions()
         }
         .padding(10)
-        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(StudioTheme.inset, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     // MARK: - Connect
@@ -253,7 +253,7 @@ struct AutomationSettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(8)
-                        .background(Color.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .background(StudioTheme.inset, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                     Button("Copy command") {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(connector.commandLine(for: kind), forType: .string)
@@ -263,7 +263,7 @@ struct AutomationSettingsView: View {
             }
         }
         .padding(10)
-        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(StudioTheme.inset, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .accessibilityIdentifier("automation.connect.\(kind.rawValue)")
     }
 

@@ -1,5 +1,6 @@
 import { BrowserStudio } from "./studio";
 import "./studio.css";
+import "./studio-appearance.css";
 
 export const metadata = {
   title: "Browser Studio beta — Focus Studio",

@@ -47,7 +47,7 @@ struct AudioLevelMeterView: View {
             ForEach(0..<Self.weights.count, id: \.self) { index in
                 let drive = min(1, max(0, level * Self.weights[index] * 1.4))
                 RoundedRectangle(cornerRadius: 1, style: .continuous)
-                    .fill(drive > 0.08 ? tint : Color.white.opacity(0.2))
+                    .fill(drive > 0.08 ? tint : StudioTheme.secondaryText.opacity(0.35))
                     .frame(width: 3, height: 3 + 10 * drive)
             }
         }
@@ -82,7 +82,7 @@ struct MicrophoneButton: View {
                 }
             }
             .frame(width: 32, height: 30)
-            .background(isRecording ? StudioTheme.red : Color.white.opacity(0.055))
+            .background(isRecording ? StudioTheme.red : StudioTheme.controlFill)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -186,7 +186,7 @@ struct IconToggleStyle: ToggleStyle {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(configuration.isOn ? Color.white : StudioTheme.text)
                 .frame(width: 32, height: 30)
-                .background(configuration.isOn ? StudioTheme.purple : Color.white.opacity(0.055))
+                .background(configuration.isOn ? StudioTheme.purple : StudioTheme.controlFill)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -210,7 +210,7 @@ struct SpeechPermissionNotice: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "mic.slash.fill")
-                .foregroundStyle(StudioTheme.yellow)
+                .foregroundStyle(StudioTheme.warning)
             Text(issue.message)
                 .font(.system(size: 12))
                 .fixedSize(horizontal: false, vertical: true)

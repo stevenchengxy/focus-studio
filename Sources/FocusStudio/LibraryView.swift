@@ -31,6 +31,7 @@ struct LibraryView: View {
                 Text("Focus Studio")
                     .font(.system(size: 17, weight: .semibold))
                 Spacer()
+                StudioAppearanceMenu()
                 AppLanguageMenu()
                     .foregroundStyle(StudioTheme.secondaryText)
                 Button {
@@ -90,7 +91,7 @@ struct LibraryView: View {
                                 .font(.system(size: 13, weight: .semibold))
                                 .frame(height: 34)
                                 .padding(.horizontal, 14)
-                                .background(Color.white.opacity(0.065))
+                                .background(StudioTheme.controlFill)
                                 .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 9, style: .continuous)
@@ -106,7 +107,7 @@ struct LibraryView: View {
                                         .padding(.horizontal, 14)
                                 }
                                 .buttonStyle(.plain)
-                                .background(Color.white.opacity(0.065))
+                                .background(StudioTheme.controlFill)
                                 .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 9, style: .continuous)
@@ -143,12 +144,13 @@ struct LibraryView: View {
                         .padding(.trailing, 24)
                     }
                     .padding(32)
-                    .background(StudioTheme.panelRaised)
+                    .background(StudioTheme.panelRaised.opacity(0.76))
                     .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 22, style: .continuous)
-                            .stroke(StudioTheme.line, lineWidth: 1)
+                            .stroke(LinearGradient(colors: [StudioTheme.rim, StudioTheme.line], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
                     )
+                    .shadow(color: StudioTheme.panelShadow, radius: 18, y: 10)
 
                     GlobalMediaLibrarySection(
                         assets: model.globalMediaAssets,
@@ -398,6 +400,7 @@ private struct ProjectCard: View {
                 } label: {
                     Image(systemName: "ellipsis")
                         .font(.system(size: 17, weight: .bold))
+                        .foregroundStyle(.white)
                         .frame(width: 30, height: 30)
                         .background(Color.black.opacity(0.35))
                         .clipShape(Circle())
@@ -433,7 +436,7 @@ private struct ProjectCard: View {
             VStack(alignment: .leading, spacing: 0) {
                 ZStack {
                     LinearGradient(
-                        colors: [StudioTheme.purpleSoft.opacity(0.72), Color.blue.opacity(0.40)],
+                        colors: [StudioTheme.purpleTrackEnd.opacity(0.72), Color.blue.opacity(0.40)],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )

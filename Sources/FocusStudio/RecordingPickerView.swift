@@ -101,7 +101,7 @@ struct RecordingPickerView: View {
                             VStack(spacing: 13) {
                                 Image(systemName: "rectangle.inset.filled.badge.record")
                                     .font(.system(size: 34, weight: .light))
-                                    .foregroundStyle(StudioTheme.yellow)
+                                    .foregroundStyle(StudioTheme.warning)
                                 Text("Screen Recording needs attention")
                                     .font(.system(size: 15, weight: .semibold))
                                 Text("Enable Focus Studio in System Settings → Privacy & Security → Screen & System Audio Recording. If it is already enabled, toggle it off and on once, then relaunch Focus Studio.")
@@ -265,13 +265,13 @@ struct RecordingPickerView: View {
                             }
                         }
                         .padding(10)
-                        .background(Color.white.opacity(0.025))
+                        .background(StudioTheme.inset)
                         .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                     }
 
                     HStack(spacing: 8) {
                         Image(systemName: model.automaticZooms && !model.interactionTrackingAuthorized ? "exclamationmark.triangle" : "checkmark.shield")
-                            .foregroundStyle(model.automaticZooms && !model.interactionTrackingAuthorized ? StudioTheme.yellow : StudioTheme.secondaryText)
+                            .foregroundStyle(model.automaticZooms && !model.interactionTrackingAuthorized ? StudioTheme.warning : StudioTheme.secondaryText)
                         Text("Permissions")
                             .font(.system(size: 11, weight: .semibold))
                         Spacer()
@@ -742,7 +742,7 @@ struct ActiveRecordingView: View {
                         .frame(height: 36)
                 }
                 .buttonStyle(.plain)
-                .background(Color.white.opacity(0.07))
+                .background(StudioTheme.controlFill)
                 .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                 .accessibilityIdentifier("recording.page.cancel")
                 // This window is key, unlike the floating bar, so a real dialog
@@ -766,7 +766,7 @@ struct ActiveRecordingView: View {
                         .frame(height: 36)
                 }
                 .buttonStyle(.plain)
-                .background(Color.white.opacity(0.07))
+                .background(StudioTheme.controlFill)
                 .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                 .disabled(model.isTakingScreenshot)
 
@@ -784,7 +784,7 @@ struct ActiveRecordingView: View {
                 VStack(spacing: 8) {
                     Label(LocalizedStringKey(warning), systemImage: "exclamationmark.triangle.fill")
                         .font(.system(size: 10))
-                        .foregroundStyle(StudioTheme.yellow)
+                        .foregroundStyle(StudioTheme.warning)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 390)
                     HStack {
@@ -808,7 +808,7 @@ struct ActiveRecordingView: View {
                         .font(.system(size: 11, weight: .medium))
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(model.lastScreenshotURL == nil ? StudioTheme.yellow : Color.green)
+                .foregroundStyle(model.lastScreenshotURL == nil ? StudioTheme.warning : Color.green)
             }
         }
         .padding(44)
@@ -834,7 +834,7 @@ private struct RecordingInteractionStatusLabel: View {
             }
         }
             .font(.system(size: 11))
-            .foregroundStyle(!hasInteractions && captureEngine.duration > 5 ? StudioTheme.yellow : StudioTheme.secondaryText)
+            .foregroundStyle(!hasInteractions && captureEngine.duration > 5 ? StudioTheme.warning : StudioTheme.secondaryText)
             .multilineTextAlignment(.center)
             .accessibilityIdentifier("recording.interactionStatus")
     }
@@ -876,7 +876,7 @@ private struct RecordingPauseControl: View {
         VStack(spacing: 8) {
             if captureEngine.isPaused {
                 Text("Paused — video, audio and interaction timing are paused.")
-                    .font(.system(size: 11)).foregroundStyle(StudioTheme.yellow)
+                    .font(.system(size: 11)).foregroundStyle(StudioTheme.warning)
             }
             Button {
                 Task { await model.toggleRecordingPause() }

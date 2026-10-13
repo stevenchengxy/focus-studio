@@ -120,7 +120,7 @@ struct AIAssistantPanel: View {
             }
             transcript
             if let warning = session.historyWarning {
-                Text(verbatim: warning).font(.caption).foregroundStyle(StudioTheme.yellow).padding(10)
+                Text(verbatim: warning).font(.caption).foregroundStyle(StudioTheme.warning).padding(10)
             }
             if showsPlan, session.recordingPlan != nil {
                 AssistantRecordingPlanView(session: session, compact: true)
@@ -271,7 +271,7 @@ struct AIAssistantPanel: View {
             }
             .frame(minWidth: compact ? 32 : 0, minHeight: 30)
             .padding(.horizontal, compact ? 0 : 8)
-            .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 8))
+            .background(StudioTheme.controlFill, in: RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
         .font(.system(size: 12, weight: .medium))
@@ -289,7 +289,7 @@ struct AIAssistantPanel: View {
             }
             .frame(minWidth: compact ? 32 : 0, minHeight: 30)
             .padding(.horizontal, compact ? 0 : 8)
-            .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 8))
+            .background(StudioTheme.controlFill, in: RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
         .font(.system(size: 12, weight: .medium))
@@ -377,7 +377,7 @@ struct AIAssistantPanel: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
-        .background(summary.id == session.conversationID ? StudioTheme.purple.opacity(0.12) : Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 7))
+        .background(summary.id == session.conversationID ? StudioTheme.purple.opacity(0.12) : StudioTheme.inset, in: RoundedRectangle(cornerRadius: 7))
     }
 
     private func saveConversationRename() {
@@ -434,7 +434,7 @@ struct AIAssistantPanel: View {
     private var modelNotice: some View {
         HStack(spacing: 10) {
             Image(systemName: "exclamationmark.circle.fill")
-                .foregroundStyle(StudioTheme.yellow)
+                .foregroundStyle(StudioTheme.warning)
             Text("Set up an AI model in Settings")
                 .font(.system(size: 12))
             Spacer(minLength: 4)
@@ -480,7 +480,7 @@ struct AIAssistantPanel: View {
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(StudioTheme.purple)
                     .frame(width: 32, height: 32)
-                    .background(StudioTheme.purpleSoft, in: RoundedRectangle(cornerRadius: 9))
+                    .background(StudioTheme.purple.opacity(0.14), in: RoundedRectangle(cornerRadius: 9))
                 VStack(alignment: .leading, spacing: 2) {
                     Text("What would you like to make?")
                         .font(.system(size: 13, weight: .semibold))
@@ -560,13 +560,13 @@ struct AIAssistantPanel: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(StudioTheme.purple)
                     .frame(width: 25, height: 25)
-                    .background(StudioTheme.purpleSoft, in: RoundedRectangle(cornerRadius: 8))
+                    .background(StudioTheme.purple.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
                     .accessibilityHidden(true)
             }
             VStack(alignment: isUser ? .trailing : .leading, spacing: 5) {
                 Text(LocalizedStringKey(isUser ? "You" : "AI Assistant"))
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(StudioTheme.secondaryText)
+                    .foregroundStyle(isUser ? StudioTheme.text.opacity(0.72) : StudioTheme.secondaryText)
                 if !message.text.isEmpty {
                     Text(verbatim: message.text)
                         .font(.system(size: 13))
@@ -595,7 +595,7 @@ struct AIAssistantPanel: View {
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(StudioTheme.purple)
                 .frame(width: 25, height: 25)
-                .background(StudioTheme.purpleSoft, in: RoundedRectangle(cornerRadius: 8))
+                .background(StudioTheme.purple.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
                 .accessibilityHidden(true)
             Text(verbatim: text.flatMap { $0.isEmpty ? nil : $0 } ?? L10n.tr("Thinking…"))
                 .font(.system(size: 11, weight: .medium))
@@ -691,7 +691,7 @@ struct AIAssistantPanel: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Image(systemName: pending.isPaid ? Self.costIcon(pending.estimate) : "record.circle")
-                    .foregroundStyle(StudioTheme.yellow)
+                    .foregroundStyle(StudioTheme.warning)
                 Text(LocalizedStringKey(pending.isPaid ? "Confirm generation" : "Confirm recording action"))
                     .font(.system(size: 12, weight: .semibold))
                 Spacer(minLength: 0)
@@ -770,7 +770,7 @@ struct AIAssistantPanel: View {
             if let videoModelSelectionError {
                 Text(verbatim: videoModelSelectionError)
                     .font(.system(size: 10))
-                    .foregroundStyle(StudioTheme.yellow)
+                    .foregroundStyle(StudioTheme.warning)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Text("Review the model and updated estimate before paying. Your selection is used for this generation.")
@@ -781,7 +781,7 @@ struct AIAssistantPanel: View {
                !gateway.isVideoModelListed(selectedID) {
                 Label("This model is not listed for your configured video provider. Test the connection in Settings before generating.", systemImage: "exclamationmark.triangle")
                     .font(.system(size: 10))
-                    .foregroundStyle(StudioTheme.yellow)
+                    .foregroundStyle(StudioTheme.warning)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -843,7 +843,7 @@ struct AIAssistantPanel: View {
             HStack(spacing: 8) {
                 if task.stage.isTerminal {
                     Image(systemName: task.stage == .completed ? "checkmark.circle.fill" : "exclamationmark.circle")
-                        .foregroundStyle(task.stage == .completed ? Color.green : StudioTheme.yellow)
+                        .foregroundStyle(task.stage == .completed ? Color.green : StudioTheme.warning)
                 } else {
                     ProgressView().controlSize(.small)
                 }
@@ -885,7 +885,7 @@ struct AIAssistantPanel: View {
                                 Text(verbatim: L10n.format(task.completedActions == 0
                                     ? "Waiting for first interaction: %@" : "Since last interaction: %@",
                                     Self.clockText(context.date.timeIntervalSince(lastActivityAt))))
-                                    .foregroundStyle(StudioTheme.yellow)
+                                    .foregroundStyle(StudioTheme.warning)
                             }
                         }
                     }
@@ -935,7 +935,7 @@ struct AIAssistantPanel: View {
                             .lineLimit(1)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
-                            .background(Color.white.opacity(0.06))
+                            .background(StudioTheme.controlFill)
                             .overlay(
                                 Capsule().stroke(StudioTheme.line, lineWidth: 1)
                             )
@@ -981,7 +981,7 @@ struct AIAssistantPanel: View {
                     .accessibilityLabel("Dismiss selected clip request")
                 }
                 .padding(7)
-                .background(StudioTheme.purpleSoft, in: RoundedRectangle(cornerRadius: 8))
+                .background(StudioTheme.purple.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
                 .accessibilityIdentifier("assistant.queuedClipDraft")
             }
             if !session.isRunning, session.pendingConfirmation == nil, draft.isEmpty {
@@ -1035,7 +1035,7 @@ struct AIAssistantPanel: View {
                             }
                             .padding(.horizontal, 8)
                             .padding(.vertical, 5)
-                            .background(Color.white.opacity(0.06))
+                            .background(StudioTheme.controlFill)
                             .clipShape(Capsule())
                         }
                     }

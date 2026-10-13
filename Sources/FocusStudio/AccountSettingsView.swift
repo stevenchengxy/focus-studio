@@ -93,7 +93,7 @@ struct AccountSettingsView: View {
             }
             if let error = store.error {
                 Label(error, systemImage: "exclamationmark.circle")
-                    .font(.callout).foregroundStyle(StudioTheme.yellow).textSelection(.enabled)
+                    .font(.callout).foregroundStyle(StudioTheme.warning).textSelection(.enabled)
             }
             Spacer(minLength: 0)
         }

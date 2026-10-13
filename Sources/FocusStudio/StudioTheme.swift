@@ -1,16 +1,51 @@
+import AppKit
 import SwiftUI
 
 enum StudioTheme {
-    static let window = Color(red: 0.055, green: 0.059, blue: 0.067)
-    static let panel = Color(red: 0.082, green: 0.086, blue: 0.098)
-    static let panelRaised = Color(red: 0.105, green: 0.110, blue: 0.125)
-    static let line = Color.white.opacity(0.085)
-    static let text = Color.white.opacity(0.94)
-    static let secondaryText = Color.white.opacity(0.52)
-    static let purple = Color(red: 0.50, green: 0.38, blue: 1.0)
-    static let purpleSoft = Color(red: 0.38, green: 0.27, blue: 0.86)
+    // Dynamic system colors resolve in each window's effective appearance.
+    // Editing surfaces use flat fills: no per-frame material/blur work.
+    static let window = adaptive("window", light: 0xEFF1F9, dark: 0x0E0F11)
+    static let panel = adaptive("panel", light: 0xF8F9FD, dark: 0x151619)
+    static let panelRaised = adaptive("panelRaised", light: 0xFFFFFF, dark: 0x1B1C20)
+    static let line = adaptive("line", light: 0x637091, lightAlpha: 0.18, dark: 0xFFFFFF, darkAlpha: 0.085)
+    static let text = adaptive("text", light: 0x242634, dark: 0xF0F0F2)
+    static let secondaryText = adaptive("secondaryText", light: 0x666D80, dark: 0x9B9CA3)
+    static let purple = adaptive("purple", light: 0x6750D3, dark: 0x8061FF)
+    static let purpleSoft = adaptive("purpleSoft", light: 0xE4DFFC, dark: 0x6145DB)
+    // Track labels stay white in both appearances. Keep their fills separate
+    // from the pale surfaces used by chat bubbles and cards.
+    static let purpleTrackEnd = adaptive("purpleTrackEnd", light: 0x5940BA, dark: 0x6145DB)
+    static let cyanTrack = adaptive("cyanTrack", light: 0x25798E, dark: 0x218CA6)
+    static let tealTrack = adaptive("tealTrack", light: 0x287E79, dark: 0x398E87)
+    static let mutedTrack = adaptive("mutedTrack", light: 0x737687, dark: 0x54555D)
+    static let controlFill = adaptive("controlFill", light: 0xFFFFFF, lightAlpha: 0.78, dark: 0xFFFFFF, darkAlpha: 0.065)
+    static let controlPressed = adaptive("controlPressed", light: 0xDFE1F0, dark: 0xFFFFFF, darkAlpha: 0.12)
+    static let inset = adaptive("inset", light: 0x616D91, lightAlpha: 0.055, dark: 0xFFFFFF, darkAlpha: 0.035)
+    static let playhead = adaptive("playhead", light: 0x34304D, dark: 0xFFFFFF)
+    static let guide = adaptive("guide", light: 0x7162B9, dark: 0x55D3ED)
+    static let rim = adaptive("rim", light: 0xFFFFFF, lightAlpha: 0.95, dark: 0xFFFFFF, darkAlpha: 0.06)
+    static let panelShadow = adaptive("panelShadow", light: 0x4D567C, lightAlpha: 0.055, dark: 0x000000, darkAlpha: 0)
+    static let canvasTop = adaptive("canvasTop", light: 0xECEAF8, dark: 0x101014)
+    static let canvasBottom = adaptive("canvasBottom", light: 0xEAF2F7, dark: 0x0E0F11)
+    static let warning = adaptive("warning", light: 0x896017, dark: 0xFAC233)
     static let yellow = Color(red: 0.98, green: 0.76, blue: 0.20)
     static let red = Color(red: 0.96, green: 0.27, blue: 0.32)
+
+    static var canvas: LinearGradient {
+        LinearGradient(colors: [canvasTop, window, canvasBottom], startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+
+    private static func adaptive(_ name: String, light: UInt32, lightAlpha: Double = 1,
+                                 dark: UInt32, darkAlpha: Double = 1) -> Color {
+        Color(nsColor: NSColor(name: NSColor.Name("FocusStudio.\(name)")) { appearance in
+            let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            let rgb = isDark ? dark : light
+            return NSColor(srgbRed: Double((rgb >> 16) & 255) / 255,
+                           green: Double((rgb >> 8) & 255) / 255,
+                           blue: Double(rgb & 255) / 255,
+                           alpha: isDark ? darkAlpha : lightAlpha)
+        })
+    }
 }
 
 struct StudioPanelModifier: ViewModifier {
@@ -22,6 +57,7 @@ struct StudioPanelModifier: ViewModifier {
                     .stroke(StudioTheme.line, lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .shadow(color: StudioTheme.panelShadow, radius: 9, y: 4)
     }
 }
 
@@ -75,7 +111,7 @@ struct IconButtonStyle: ButtonStyle {
             .font(.system(size: 13, weight: .semibold))
             .foregroundStyle(StudioTheme.text)
             .frame(width: 32, height: 30)
-            .background(configuration.isPressed ? Color.white.opacity(0.12) : Color.white.opacity(0.055))
+            .background(configuration.isPressed ? StudioTheme.controlPressed : StudioTheme.controlFill)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)

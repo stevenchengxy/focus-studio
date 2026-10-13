@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { ProductMotion, useMarketingMotion } from "./product-motion";
 import { FocusSculpture } from "./focus-sculpture";
 import design from "./design-refinement.module.css";
@@ -92,7 +93,7 @@ export function FocusHome() {
             <a href="#workflow" onClick={() => setMobileMenu(false)}>The workflow</a>
             <a href="#pricing" onClick={() => setMobileMenu(false)}>Pricing</a>
           </nav>
-          <div className="nav-actions"><a className="sign-in" href="/account">Sign in</a><button className="button button-dark button-small" onClick={() => setDownloadOpen(true)}>Get Focus Studio <ArrowDown size={15}/></button><button className="mobile-menu" aria-label={mobileMenu ? "Close navigation" : "Open navigation"} aria-expanded={mobileMenu} onClick={() => setMobileMenu(!mobileMenu)}>{mobileMenu ? <X/> : <Menu/>}</button></div>
+          <div className="nav-actions"><a className="sign-in" href="/account">Sign in</a><ThemeToggle/><button className="button button-dark button-small" onClick={() => setDownloadOpen(true)}>Get Focus Studio <ArrowDown size={15}/></button><button className="mobile-menu" aria-label={mobileMenu ? "Close navigation" : "Open navigation"} aria-expanded={mobileMenu} onClick={() => setMobileMenu(!mobileMenu)}>{mobileMenu ? <X/> : <Menu/>}</button></div>
         </div>
       </header>
 

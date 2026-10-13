@@ -1,0 +1,172 @@
+/* App chrome follows the shared website / desktop appearance preference.
+   Canvas pixels and exported video are deliberately independent of this palette. */
+.browser-studio {
+  --studio-bg: #eef1f8;
+  --studio-surface: rgba(255, 255, 255, .8);
+  --studio-surface-raised: #fff;
+  --studio-surface-soft: #eff0f8;
+  --studio-text: #242434;
+  --studio-secondary: #555a70;
+  --studio-muted: #62697d;
+  --studio-line: rgba(89, 95, 137, .16);
+  --studio-edge: rgba(255, 255, 255, .95);
+  --studio-control: #e8eaf6;
+  --studio-control-hover: #dfe2f4;
+  --studio-accent: #6550c6;
+  --studio-accent-text: #fff;
+  --studio-selected: #e3def9;
+  --studio-selected-line: #a799e0;
+  --studio-well: #e9ebf5;
+  --studio-preview-empty: #f7f8fd;
+  --studio-success: #376950;
+  --studio-success-bg: #e4f1e9;
+  --studio-success-control: #cee7d8;
+  --studio-danger: #aa3f5b;
+  --studio-danger-bg: #f7e3eb;
+  --studio-panel-shadow: 0 15px 36px -26px rgba(59, 61, 113, .38), inset 0 1px 0 var(--studio-edge);
+  color: var(--studio-text);
+  background:
+    radial-gradient(ellipse 740px 460px at 4% 0%, #dce9fb 0%, transparent 75%),
+    radial-gradient(ellipse 600px 500px at 96% 8%, #e6e0f8 0%, transparent 74%),
+    var(--studio-bg);
+}
+
+html[data-theme="dark"] .browser-studio {
+  --studio-bg: #13151d;
+  --studio-surface: #1d202b;
+  --studio-surface-raised: #242837;
+  --studio-surface-soft: #191c26;
+  --studio-text: #eeedf7;
+  --studio-secondary: #c0bfd2;
+  --studio-muted: #989fb8;
+  --studio-line: rgba(188, 192, 230, .14);
+  --studio-edge: rgba(224, 221, 255, .07);
+  --studio-control: #303348;
+  --studio-control-hover: #3a3e56;
+  --studio-accent: #b2a1ff;
+  --studio-accent-text: #1a1430;
+  --studio-selected: #40365f;
+  --studio-selected-line: #8474b8;
+  --studio-well: #171a25;
+  --studio-preview-empty: #191b29;
+  --studio-success: #add2bd;
+  --studio-success-bg: #20362d;
+  --studio-success-control: #304d40;
+  --studio-danger: #f0a8b9;
+  --studio-danger-bg: #4d2b3d;
+  --studio-panel-shadow: 0 15px 36px -26px rgba(0, 0, 0, .55), inset 0 1px 0 var(--studio-edge);
+  background:
+    radial-gradient(ellipse 740px 460px at 4% 0%, #20283c 0%, transparent 75%),
+    radial-gradient(ellipse 600px 500px at 96% 8%, #28213d 0%, transparent 74%),
+    var(--studio-bg);
+}
+
+.browser-studio .studio-header {
+  background: var(--studio-surface);
+  border-color: var(--studio-line);
+  box-shadow: inset 0 -1px 0 var(--studio-edge);
+}
+.studio-header-actions { display: flex; align-items: center; gap: 17px; margin-left: auto; }
+.studio-header-actions .studio-account { margin-left: 0; white-space: nowrap; }
+.browser-studio .studio-beta { color: var(--studio-muted); border-color: var(--studio-line); }
+.browser-studio .studio-beta > b { color: var(--studio-accent); border-color: var(--studio-selected-line); }
+.browser-studio .studio-title h1 { color: var(--studio-text); }
+.browser-studio .studio-title h1 > span { color: var(--studio-muted); }
+.browser-studio :is(.studio-back, .studio-account, .studio-title > p) { color: var(--studio-secondary); }
+
+.browser-studio :is(.studio-canvas-panel, .studio-inspector, .studio-sound-panel) {
+  background: var(--studio-surface);
+  border-color: var(--studio-line);
+  border-radius: 17px;
+  box-shadow: var(--studio-panel-shadow);
+}
+.browser-studio .studio-panel-bar { color: var(--studio-secondary); }
+.browser-studio .studio-panel-bar > span + span { color: var(--studio-muted); }
+.browser-studio .studio-idle-dot { background: var(--studio-accent); }
+.browser-studio .studio-preview { background: #10131b; }
+.browser-studio .studio-preview:not(.has-source) { background: var(--studio-preview-empty); }
+.browser-studio .studio-empty {
+  background: radial-gradient(ellipse at 50% 16%, color-mix(in srgb, var(--studio-selected) 75%, transparent), transparent 78%);
+}
+.browser-studio .studio-empty-icon {
+  color: var(--studio-accent);
+  background: linear-gradient(145deg, var(--studio-surface-raised), var(--studio-control));
+  border-color: var(--studio-edge);
+  border-radius: 20px;
+  box-shadow: 0 10px 20px -12px color-mix(in srgb, var(--studio-accent) 40%, transparent), inset 0 1px 0 var(--studio-edge);
+}
+.browser-studio .studio-empty-icon.recording { color: var(--studio-danger); background: var(--studio-danger-bg); border-color: var(--studio-line); }
+.browser-studio .studio-empty h2 { color: var(--studio-text); }
+.browser-studio .studio-empty > p { color: var(--studio-secondary); }
+.browser-studio .studio-empty > small { color: var(--studio-muted); }
+.browser-studio .studio-start-actions > .button-dark { color: var(--studio-accent-text); background: var(--studio-accent); }
+.browser-studio .studio-start-actions > .button-outline { color: var(--studio-secondary); background: var(--studio-surface-raised); border-color: var(--studio-line); }
+.browser-studio .studio-sample-button { color: var(--studio-accent); }
+.browser-studio .studio-sample-button:hover { color: var(--studio-text); }
+.browser-studio .studio-recording-actions > button { background: var(--studio-control); color: var(--studio-secondary); border-color: var(--studio-line); }
+.browser-studio .studio-recording-actions > button.stop { background: var(--studio-danger-bg); color: var(--studio-danger); border-color: var(--studio-line); }
+.browser-studio .studio-player { color: var(--studio-secondary); border-color: var(--studio-line); }
+.browser-studio .studio-player > button { background: var(--studio-accent); color: var(--studio-accent-text); border-radius: 8px; }
+.browser-studio .studio-player > input { accent-color: var(--studio-accent); }
+.browser-studio .studio-key { color: var(--studio-muted); border-color: var(--studio-line); }
+.browser-studio .studio-local-note { color: var(--studio-muted); background: var(--studio-surface-soft); }
+.browser-studio .studio-local-note > span:first-child > svg { color: var(--studio-success); }
+
+.browser-studio :is(.studio-inspector-title, .studio-control-section, .studio-sound-heading, .studio-voice-track) { border-color: var(--studio-line); }
+.browser-studio .studio-inspector-title { color: var(--studio-text); }
+.browser-studio .studio-inspector-title button { background: var(--studio-control); color: var(--studio-accent); border-radius: 7px; }
+.browser-studio .studio-control-section > h3 { color: var(--studio-text); }
+.browser-studio .studio-control-section > h3 svg { color: var(--studio-accent); }
+.browser-studio :is(.studio-time-fields > label, .studio-range-label, .studio-selection-duration, .studio-audio-toggle) { color: var(--studio-secondary); }
+.browser-studio .studio-selection-duration b { color: var(--studio-text); }
+.browser-studio :is(.studio-time-fields input, .studio-sound-fields input, .studio-capture-settings select) {
+  background: var(--studio-well);
+  border-color: var(--studio-line);
+  border-radius: 7px;
+  color: var(--studio-text);
+}
+.browser-studio :is(.studio-range-label input, .studio-audio-toggle input, .studio-sound-level > input) { accent-color: var(--studio-accent); }
+.browser-studio .studio-effect-options > button { background: var(--studio-control); color: var(--studio-secondary); border-radius: 9px; }
+.browser-studio .studio-effect-options > button.selected { color: var(--studio-accent); background: var(--studio-selected); border-color: var(--studio-selected-line); }
+.browser-studio :is(.studio-control-hint, .studio-focus-coordinates, .studio-export-section > small, .studio-replace > span, .studio-clear-saved) { color: var(--studio-muted); }
+.browser-studio .studio-export-section > .button { background: var(--studio-accent); color: var(--studio-accent-text); border-radius: 9px; }
+.browser-studio .studio-download-again { color: var(--studio-success); }
+.browser-studio .studio-capture-settings details { color: var(--studio-secondary); }
+.browser-studio .studio-replace button { color: var(--studio-secondary); background: var(--studio-control); border-radius: 8px; }
+.browser-studio .studio-message { color: var(--studio-secondary); background: var(--studio-selected); border-color: var(--studio-selected-line); border-radius: 11px; }
+.browser-studio .studio-message > button { color: var(--studio-accent); }
+.browser-studio .studio-recovery { color: var(--studio-success); background: var(--studio-success-bg); border-color: color-mix(in srgb, var(--studio-success) 25%, transparent); border-radius: 11px; }
+.browser-studio :is(.studio-recovery > button, .studio-recovery-actions > button) { color: var(--studio-success); background: var(--studio-success-control); }
+.browser-studio .studio-recovery-actions > button.discard { color: var(--studio-success); background: none; }
+.browser-studio .studio-footer { border-color: var(--studio-line); }
+.browser-studio .studio-footer > p { color: var(--studio-muted); }
+.browser-studio .studio-footer > a { color: var(--studio-accent); }
+
+.browser-studio :is(.studio-sound-heading h2, .studio-sound-panel legend, .studio-voice-header h3) { color: var(--studio-text); }
+.browser-studio .studio-sound-heading > span { color: var(--studio-muted); }
+.browser-studio :is(.studio-sound-level, .studio-sound-fields > label) { color: var(--studio-secondary); }
+.browser-studio .studio-voice-header > button { color: var(--studio-accent); background: var(--studio-control); }
+.browser-studio .studio-voice-actions > button { color: var(--studio-accent); background: var(--studio-control); border-color: var(--studio-line); border-radius: 8px; }
+.browser-studio .studio-waveform { background: var(--studio-well); }
+.browser-studio .studio-waveform i { background: var(--studio-accent); }
+.browser-studio .studio-voice-recording { color: var(--studio-danger); }
+.browser-studio .studio-voice-recording > button { background: var(--studio-danger-bg); color: var(--studio-danger); border-color: var(--studio-line); }
+
+/* Keep transitions off the canvas, waveform and timeline during interaction. */
+.browser-studio button:not(:disabled), .browser-studio a { transition: background-color .16s ease, color .16s ease, border-color .16s ease; }
+.browser-studio :is(.studio-inspector-title button, .studio-effect-options > button, .studio-replace button, .studio-voice-actions > button):not(:disabled):hover { background: var(--studio-control-hover); }
+.browser-studio .studio-effect-options > button.selected:hover { background: var(--studio-selected); }
+.browser-studio :is(button, a, input, select, summary):focus-visible { outline: 2px solid var(--studio-accent); outline-offset: 3px; }
+.browser-studio .studio-export-overlay { backdrop-filter: none; background: #171420f5; }
+
+@media (max-width: 780px) {
+  .browser-studio :is(.studio-fields > .studio-control-section:first-of-type, .studio-inspector > .studio-capture-settings, .studio-export-section) { border-color: var(--studio-line); }
+}
+@media (max-width: 550px) {
+  .browser-studio .studio-beta { display: none; }
+  .studio-header-actions { gap: 13px; }
+  .browser-studio .studio-voice-track { border-color: var(--studio-line); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .browser-studio button:not(:disabled), .browser-studio a { transition: none; }
+}

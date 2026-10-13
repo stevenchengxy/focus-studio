@@ -120,7 +120,7 @@ struct AssistantErrorCard: View {
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "exclamationmark.circle.fill")
-                .foregroundStyle(StudioTheme.yellow)
+                .foregroundStyle(StudioTheme.warning)
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 7) {
                 Text(presentation.title)

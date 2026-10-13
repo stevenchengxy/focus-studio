@@ -49,7 +49,7 @@ struct AssistantWindowView: View {
         )
         .frame(minWidth: AssistantWindow.minimumSize.width, minHeight: AssistantWindow.minimumSize.height)
         .background(StudioTheme.window)
-        .preferredColorScheme(.dark)
+        .studioAppearance()
         .disabled(installation.isWorking)
         .background(HostingWindowReader { AssistantWindow.presenter.register($0) })
         .onAppear {

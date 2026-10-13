@@ -1,5 +1,6 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
+import { ThemeToggle } from '@/components/theme/theme-toggle';
 import styles from './style.module.css';
 type AccountState = { authenticated: boolean; account?:{email:string}; entitlement?:{plan:string;subscriptionStatus:string;freeExportsRemaining:number;activeExportId:string|null}; billingConfigured:boolean; googleConfigured:boolean; devices?:Array<{id:string;name:string;created_at:number;expires_at:number}> };
 export default function AccountPanel({code,signInUrl,signOutUrl}:{code:string;signInUrl:string;signOutUrl:string}) {
@@ -18,7 +19,7 @@ export default function AccountPanel({code,signInUrl,signOutUrl}:{code:string;si
   }
   const paid=account?.entitlement?.plan==='monthly'||account?.entitlement?.plan==='yearly';
   return <main className={styles.shell}>
-    <nav className={styles.nav}><a href="/" className={styles.brand}><span>▣</span> Focus Studio</a><a href="/studio">Browser studio ↗</a></nav>
+    <nav className={styles.nav}><a href="/" className={styles.brand}><span>▣</span> Focus Studio</a><div className={styles.navActions}><a href="/studio">Browser studio ↗</a><ThemeToggle/></div></nav>
     <header><p className={styles.eyebrow}>YOUR CREATIVE SPACE</p><h1>Ready when you are.</h1><p>One account. Your exports, subscription and connected devices.</p></header>
     {error&&<div role="alert" className={styles.error}>{error}<button onClick={()=>{setError('');void load();}}>Retry</button></div>}
     {!account&&!error&&<p role="status">Loading your account…</p>}

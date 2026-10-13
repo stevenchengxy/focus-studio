@@ -1459,3 +1459,8 @@
 "Allow microphone access in System Settings to record voiceover." = "Allow microphone access in System Settings to record voiceover.";
 "The microphone could not start. Check the input device and try again." = "The microphone could not start. Check the input device and try again.";
 "Record a little longer before saving." = "Record a little longer before saving.";
+
+/* App appearance */
+"Light appearance" = "Light";
+"Dark appearance" = "Dark";
+"Change appearance" = "Change appearance";

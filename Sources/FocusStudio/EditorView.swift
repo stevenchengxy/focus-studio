@@ -45,7 +45,7 @@ struct EditorView: View {
 
                 VStack(spacing: 0) {
                     ZStack {
-                        Color.black.opacity(0.12)
+                        StudioTheme.inset
                         ProjectPreviewView(
                             project: project,
                             playbackClock: playbackClock,
@@ -230,6 +230,7 @@ struct EditorView: View {
 
             Spacer()
 
+            StudioAppearanceMenu()
             AppLanguageMenu()
 
             Button {
@@ -269,7 +270,7 @@ struct EditorView: View {
                         Text(LocalizedStringKey(tool.title))
                             .font(.system(size: 8, weight: .medium))
                     }
-                    .foregroundStyle(selectedTool == tool ? .white : StudioTheme.secondaryText)
+                    .foregroundStyle(selectedTool == tool ? StudioTheme.purple : StudioTheme.secondaryText)
                     .frame(width: 51, height: 49)
                     .background {
                         if selectedTool == tool {
@@ -627,7 +628,7 @@ struct EditorView: View {
             Spacer()
             Text(LocalizedStringKey(key)).font(.system(size: 10, weight: .medium, design: .monospaced))
                 .padding(.horizontal, 7).padding(.vertical, 3)
-                .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 4))
+                .background(StudioTheme.controlFill, in: RoundedRectangle(cornerRadius: 4))
         }.font(.system(size: 11))
     }
 

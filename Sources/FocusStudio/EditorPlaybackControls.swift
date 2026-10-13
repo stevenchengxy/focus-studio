@@ -128,7 +128,7 @@ struct EditorTransportButtonStyle: ButtonStyle {
             .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(prominent ? .white : StudioTheme.text)
             .frame(width: prominent ? 38 : 28, height: prominent ? 32 : 28)
-            .background(prominent ? StudioTheme.purple : Color.white.opacity(configuration.isPressed ? 0.12 : 0.04))
+            .background(prominent ? StudioTheme.purple : (configuration.isPressed ? StudioTheme.controlPressed : StudioTheme.controlFill))
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.92 : 1)
             .animation(reduceMotion ? nil : StudioMotion.press, value: configuration.isPressed)

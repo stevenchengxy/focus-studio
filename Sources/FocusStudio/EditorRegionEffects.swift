@@ -316,7 +316,7 @@ struct EditorRegionEffectInspector: View {
                 .padding(.vertical, 8)
             }
             if let error {
-                Text(error).font(.system(size: 10)).foregroundStyle(StudioTheme.yellow)
+                Text(error).font(.system(size: 10)).foregroundStyle(StudioTheme.warning)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -386,7 +386,7 @@ struct EditorRegionEffectInspector: View {
             }
         } else if clip != nil {
             Label("Outside this clip’s trim", systemImage: "scissors")
-                .font(.system(size: 11)).foregroundStyle(StudioTheme.yellow)
+                .font(.system(size: 11)).foregroundStyle(StudioTheme.warning)
             Text("Restore the clip to reveal this effect.")
                 .font(.system(size: 10)).foregroundStyle(StudioTheme.secondaryText)
         }
@@ -486,7 +486,7 @@ struct EditorRegionEffectLane: View {
     }
     var body: some View {
         ZStack(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(0.025))
+            RoundedRectangle(cornerRadius: 5).fill(StudioTheme.inset)
                 .contentShape(Rectangle())
                 .onTapGesture(count: 2, perform: onAdd)
                 .contextMenu { Button("Select a region", action: onAdd) }
@@ -553,7 +553,7 @@ private struct RegionEffectBlock: View {
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 5)
-                .fill(LinearGradient(colors: [.mint.opacity(0.68), .teal.opacity(0.72)], startPoint: .top, endPoint: .bottom))
+                .fill(LinearGradient(colors: [StudioTheme.tealTrack, StudioTheme.cyanTrack], startPoint: .top, endPoint: .bottom))
             HStack(spacing: 5) {
                 Image(systemName: effect.preset.symbol)
                 if width > 95 { Text(LocalizedStringKey(effect.preset.displayTitle)).lineLimit(1) }

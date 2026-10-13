@@ -43,7 +43,7 @@ struct AssistantWorkspaceView: View {
             }.padding(.horizontal, 22).padding(.vertical, 12)
             if let error = coordinator.error {
                 HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: "exclamationmark.circle").foregroundStyle(StudioTheme.yellow)
+                    Image(systemName: "exclamationmark.circle").foregroundStyle(StudioTheme.warning)
                     VStack(alignment: .leading, spacing: 5) {
                         Text("The assistant could not complete this operation.")
                             .font(.system(size: 12, weight: .medium))
@@ -93,6 +93,7 @@ struct AssistantWorkspaceView: View {
                     .buttonStyle(.bordered).disabled(session.isRunning)
                     .accessibilityIdentifier("assistant.connectCodex")
             }
+            StudioAppearanceMenu()
             Button { showsConnectionSettings = true } label: { Label("Connection settings", systemImage: "gearshape").labelStyle(.iconOnly) }
                 .buttonStyle(IconButtonStyle()).help("Connection settings")
                 .disabled(session.isRunning || coordinator.isConnecting).accessibilityIdentifier("assistant.connection")

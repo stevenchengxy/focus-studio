@@ -19,7 +19,7 @@ struct FocusStudioApp: App {
                 TextCompletionInjector(store: model.aiGateway) {
                     StudioRootView()
                         .environmentObject(model)
-                        .preferredColorScheme(.dark)
+                        .studioAppearance()
                         .frame(minWidth: 1_080, minHeight: 700)
                 }
             }
@@ -27,7 +27,10 @@ struct FocusStudioApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unifiedCompact(showsTitle: false))
         .defaultSize(width: 1_440, height: 900)
-        .commands { AppLanguageCommands() }
+        .commands {
+            AppLanguageCommands()
+            StudioAppearanceCommands()
+        }
 
         // The assistant lives in its own window so it can drive the app
         // (record, open projects, edit, export) while the main window changes pages.
@@ -55,7 +58,7 @@ struct StudioRootView: View {
 
     var body: some View {
         ZStack {
-            StudioTheme.window.ignoresSafeArea()
+            StudioTheme.canvas.ignoresSafeArea()
 
             // Each destination is its own identity so SwiftUI cross-fades the
             // pages instead of morphing unrelated controls into each other.
