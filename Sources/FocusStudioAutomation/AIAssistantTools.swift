@@ -1598,7 +1598,9 @@ struct AssembleVideoTool: AIAssistantTool {
         let destination = try AIToolPaths.outputFile(path: arguments.string("path"), context: context, prefix: "assembled", fileExtension: "mp4",
                                                      outputGuard: outputGuard, overwrite: overwrite)
         let rendering = AIToolSupport.renderProgress(context.format("Assembling %lld clips…", clips.count), context: context, progress: progress)
-        let result = try await VideoAssembler.assemble(clips: clips, transition: transition, renderSize: renderSize, to: destination, progress: rendering)
+        let result = try await EntitledExport.run(authorizer: context.exportAuthorization, projectID: project?.id.uuidString ?? "assembly", outputURL: destination) { commit in
+            try await VideoAssembler.assemble(clips: clips, transition: transition, renderSize: renderSize, to: destination, progress: rendering, beforePublish: commit)
+        }
         let text = context.format("Assembled %@ from %lld clips (%@ s, %lld × %lld)", destination.lastPathComponent, clips.count,
                                   AIToolSupport.seconds(result.duration), Int(result.renderSize.width), Int(result.renderSize.height))
         let data = AIToolSupport.merged(
@@ -1654,7 +1656,8 @@ enum VideoAssembler {
         renderSize: CGSize,
         frameRate: Int = 30,
         to outputURL: URL,
-        progress: (@Sendable (Double) -> Void)? = nil
+        progress: (@Sendable (Double) -> Void)? = nil,
+        beforePublish: (@Sendable (URL) async throws -> Void)? = nil
     ) async throws -> Result {
         guard !clips.isEmpty else { throw AIToolError.invalidArgument("clips must contain at least one file.") }
         guard outputURL.pathExtension.lowercased() == "mp4" else { throw AIToolError.invalidArgument("The output must be an .mp4 file.") }
@@ -1772,14 +1775,22 @@ enum VideoAssembler {
         let parent = outputURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
         let temporaryURL = parent.appendingPathComponent(".\(outputURL.deletingPathExtension().lastPathComponent)-\(UUID().uuidString).partial.mp4")
+        var authorizedCompletedFile = false
         do {
             try await ProjectVideoRenderer.runExportSession(session, to: temporaryURL, as: .mp4, progress: progress)
+            try Task.checkCancellation()
+            try await beforePublish?(temporaryURL)
+            authorizedCompletedFile = beforePublish != nil
             if FileManager.default.fileExists(atPath: outputURL.path) {
                 _ = try FileManager.default.replaceItemAt(outputURL, withItemAt: temporaryURL)
             } else {
                 try FileManager.default.moveItem(at: temporaryURL, to: outputURL)
             }
         } catch {
+            if error is any PreservesCompletedExport { throw error }
+            if authorizedCompletedFile {
+                throw AIToolError.failed("The completed video could not be moved. Recover it at \(temporaryURL.path). \(error.localizedDescription)")
+            }
             try? FileManager.default.removeItem(at: temporaryURL)
             if error is CancellationError || Task.isCancelled { throw CancellationError() }
             throw AIToolError.failed("Video assembly failed: \(error.localizedDescription)")

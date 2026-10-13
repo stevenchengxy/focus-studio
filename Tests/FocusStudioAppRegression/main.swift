@@ -6,6 +6,8 @@ import SwiftUI
 struct AppRegression {
     @MainActor
     static func main() async throws {
+        try NativeSubscriptionRegression.run()
+        if CommandLine.arguments.contains("--native-subscription-only") { return }
         // Never touch the real ark.env, secrets.json or the network from a
         // test: the ControlServer and MCP end-to-end fixtures run
         // StudioModel.bootstrap(), which would import an Ark key otherwise.

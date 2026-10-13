@@ -205,6 +205,8 @@ public struct AIAssistantContext: Sendable {
     /// Measured progress for long calls (exports), next to the text progress
     /// every tool gets. Nil when nobody listens.
     public var numericProgress: AIToolProgressHandler?
+    /// Server-backed quota/subscription gate; every production context supplies it.
+    public var exportAuthorization: (any ExportAuthorizing)?
     /// Asks the person using the app whether an external start_recording may
     /// record sound their own recorder settings leave off (the app's prompt;
     /// tests pass their own). Only external calls ask; with none set, such a

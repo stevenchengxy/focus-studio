@@ -2,6 +2,50 @@ import AppKit
 import FocusStudioCore
 import SwiftUI
 
+/// AVPlayer's frequent position reports belong to the transport display, not
+/// to the editor document. The editor holds this reference in State without
+/// observing it; only small time-dependent controls subscribe to its changes.
+@MainActor
+final class EditorPlaybackClock: ObservableObject {
+    @Published private(set) var time = 0.0
+
+    func update(_ time: Double) {
+        guard time.isFinite else { return }
+        let bounded = max(0, time)
+        guard bounded != self.time else { return }
+        self.time = bounded
+        EditorPlaybackMetrics.record("clock")
+    }
+}
+
+struct EditorPlaybackTimeReader<Content: View>: View {
+    @ObservedObject var clock: EditorPlaybackClock
+    @ViewBuilder var content: (Double) -> Content
+
+    var body: some View { content(clock.time) }
+}
+
+/// Opt-in diagnostics for real playback runs. No per-frame logging is enabled
+/// in normal use. Counts distinguish broad editor invalidations from the
+/// deliberately small transport/playhead updates; they are not an FPS claim.
+@MainActor
+enum EditorPlaybackMetrics {
+    private static let enabled = ProcessInfo.processInfo.environment["FOCUS_STUDIO_PROFILE_EDITOR"] == "1"
+    private static var counts: [String: Int] = [:]
+    private static var started = ProcessInfo.processInfo.systemUptime
+
+    static func record(_ name: String) {
+        guard enabled else { return }
+        counts[name, default: 0] += 1
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - started >= 2 else { return }
+        let summary = counts.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
+        NSLog("EditorPlaybackMetrics %.2fs %@", now - started, summary)
+        counts.removeAll(keepingCapacity: true)
+        started = now
+    }
+}
+
 /// Only handles transport keys in this editor's window. Field editors keep all
 /// input (including Space, arrows and IME composition) and sheets keep focus.
 enum EditorTransportCommand: Equatable {

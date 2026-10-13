@@ -118,7 +118,7 @@ extension AIAssistantTests {
         check(updateMotionValues == motionValues && catalog.tool(named: "update_zoom")!.description.contains("zoom_id"), "update_zoom can apply a preset to one stable zoom ID")
         let region = catalog.tool(named: "add_region_effect")!
         check(region.inputSchema["required"] == ["project_id", "clip_id", "start", "end", "x", "y", "width", "height"], "region authoring requires explicit clip and rectangle")
-        check(region.inputSchema["properties"]?["preset"]?["enum"] == ["spotlight", "lift", "tilt"], "region presets agree with the renderer")
+        check(region.inputSchema["properties"]?["preset"]?["enum"] == ["spotlight", "lift", "tilt", "perspective", "magnify", "outline"], "region presets agree with the renderer")
         check(catalog.tool(named: "update_region_effect")?.inputSchema["properties"]?["clip_id"] == nil, "updates preserve clip binding")
         check(catalog.tool(named: "capture_frame")?.inputSchema["properties"]?["source_frame"]?["type"] == "boolean", "models can inspect the source coordinate space")
         let start = catalog.tool(named: "start_recording")!

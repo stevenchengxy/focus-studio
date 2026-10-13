@@ -1,0 +1,20 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1791908853827,
+      "tag": "0000_supreme_rocket_racer",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1791909188922,
+      "tag": "0001_certain_thundra",
+      "breakpoints": true
+    }
+  ]
+}

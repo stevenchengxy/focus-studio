@@ -2,11 +2,13 @@
 
 Focus Studio 是一个面向各类产品的原生 macOS Demo 录制与编辑器。它保存原始画面、鼠标轨迹和点击坐标，把点击转成可编辑的缩放区块，再用同一条 Core Image 与 AVFoundation 管线预览、导出。接入 Codex 后，AI 助手可以协助录制、分析节奏、剪辑和准备宣传镜头；产品网址和 Finlyze 示例都不是固定模板。
 
-局部强调可从录屏、导入视频或图片中框选一个区域，使用聚光、卡片浮起或倾斜揭示，并压暗或模糊背景。效果绑定源片段，在独立效果轨中调整时间，支持撤销；裁剪后拉长可恢复原来的效果区间。Codex 可通过 `capture_frame(source_frame: true)` 查看原素材，再用 `add_region_effect`、`update_region_effect`、`delete_region_effect` 编辑。第一版是固定选区，选区内视频继续播放；不包含自动对象跟踪、定格或三维透视。
+局部强调可从录屏、导入视频或图片中框选一个区域，使用聚光、卡片浮起、倾斜揭示、三维透视卡片、圆形放大镜或动态描边，并压暗或模糊背景。效果绑定源片段，在独立效果轨中调整时间，支持撤销；裁剪后拉长可恢复原来的效果区间。Codex 可通过 `capture_frame(source_frame: true)` 查看原素材，再用 `add_region_effect`、`update_region_effect`、`delete_region_effect` 编辑。选区固定，选区内视频继续播放；透视角度、镜片和描边宽度均可调整。暂不包含自动对象跟踪或定格。
 
-所有录屏、截图、音频和项目元数据默认只保存在本机。
+录屏、截图、音频和编辑项目保存在本机。账户与导出额度接口使用账户、项目和任务标识，不上传录屏内容。
 
 新用户可按 [Codex 连接指南](docs/CODEX-SETUP.md) 分别配置应用内助手与外部 MCP 控制；生成视频或图片前按 [AI 模型配置](docs/AI-MODEL-SETUP.md) 设置 Ark、Gemini/Veo 等提供商。录制到剪辑的步骤见 [Demo 工作流](docs/AI-DEMO-WORKFLOW.md)，产品宣传镜头的构思见 [AI Promo Skill](skills/focus-ai-promo/SKILL.md)。
+
+产品网站：[Focus Studio](https://focus-studio.stevenchengxy19.chatgpt.site/) · [账户与套餐](https://focus-studio.stevenchengxy19.chatgpt.site/account)。六种局部特效、账户配对、免费导出与中断恢复的使用说明见 [经典特效与账户导出](docs/CLASSIC-EFFECTS-AND-ACCOUNTS.md)。
 
 ## 已实现
 

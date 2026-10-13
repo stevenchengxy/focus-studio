@@ -11,6 +11,9 @@ extension RegionEffectPreset {
         case .spotlight: return "Spotlight"
         case .lift: return "Lift card"
         case .tilt: return "Tilt card"
+        case .perspective: return "Perspective card"
+        case .magnify: return "Magnifier"
+        case .outline: return "Draw outline"
         }
     }
     var symbol: String {
@@ -18,6 +21,9 @@ extension RegionEffectPreset {
         case .spotlight: return "viewfinder"
         case .lift: return "rectangle.on.rectangle"
         case .tilt: return "rotate.right"
+        case .perspective: return "rectangle.portrait.rotate"
+        case .magnify: return "magnifyingglass"
+        case .outline: return "rectangle.dashed"
         }
     }
 }
@@ -350,7 +356,7 @@ struct EditorRegionEffectInspector: View {
         if effect.background != .none {
             parameter("Strength", keyPath: \.intensity, range: 0...1, format: { "\(Int($0 * 100))%" })
         }
-        if effect.preset != .spotlight {
+        if effect.preset != .spotlight && effect.preset != .outline {
             parameter("Scale", keyPath: \.scale, range: 1...3, format: { $0.formatted(.number.precision(.fractionLength(2))) + "×" })
         }
         if let clip, let placement {
@@ -386,6 +392,14 @@ struct EditorRegionEffectInspector: View {
         }
         DisclosureGroup("Advanced", isExpanded: $showsAdvanced) {
             VStack(spacing: 14) {
+                if effect.preset == .perspective {
+                    optionalParameter("Perspective angle", keyPath: \.perspectiveDegrees, defaultValue: 18,
+                        range: -35...35, format: { "\(Int($0))°" })
+                }
+                if effect.preset == .outline || effect.preset == .magnify {
+                    optionalParameter("Border width", keyPath: \.outlineWidth, defaultValue: 3,
+                        range: 1...12, format: { $0.formatted(.number.precision(.fractionLength(1))) + " px" })
+                }
                 parameter("Entrance", keyPath: \.easeIn, range: 0...5, format: { $0.formatted(.number.precision(.fractionLength(2))) + " s" })
                 parameter("Exit", keyPath: \.easeOut, range: 0...5, format: { $0.formatted(.number.precision(.fractionLength(2))) + " s" })
             }.padding(.top, 12)
@@ -412,6 +426,13 @@ struct EditorRegionEffectInspector: View {
                            range: ClosedRange<Double>, format: @escaping (Double) -> String) -> some View {
         RegionParameterSlider(title: title, value: Binding(
             get: { draft?[keyPath: keyPath] ?? range.lowerBound },
+            set: { draft?[keyPath: keyPath] = $0 }), range: range, format: format, onCommit: commit)
+    }
+    private func optionalParameter(_ title: String, keyPath: WritableKeyPath<RegionEffect, Double?>,
+                                   defaultValue: Double, range: ClosedRange<Double>,
+                                   format: @escaping (Double) -> String) -> some View {
+        RegionParameterSlider(title: title, value: Binding(
+            get: { (draft?[keyPath: keyPath] ?? nil) ?? defaultValue },
             set: { draft?[keyPath: keyPath] = $0 }), range: range, format: format, onCommit: commit)
     }
     private func commit() {

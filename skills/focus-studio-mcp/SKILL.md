@@ -67,8 +67,11 @@ is the actual uncropped source before framing, zoom and effects; its `clip_id`,
 `x`, `y`, `width`, `height` as 0–1 fractions of that image, from its top-left.
 Do not use coordinates from the styled preview. Call `add_region_effect` with the
 clip ID, output `start`/`end` inside that clip and the rectangle. Choose `spotlight`
-for local focus, `lift` for an enlarged floating card, or `tilt` for an angled entry
-that settles level; `background` is `dim`, `blur` or `none`. `scale` is 1–3,
+for local focus, `lift` for an enlarged floating card, `tilt` for a 2D angled entry
+that settles level, `perspective` for a projected card, `magnify` for a circular
+lens centered inside the rectangle, or `outline` for a drawn border. Perspective
+uses `perspective_degrees` (−35–35, default 18); magnify/outline use `outline_width`
+(1–12 pixels at 1080 source height, default 3). `background` is `dim`, `blur` or `none`. `scale` is 1–3,
 `intensity` 0–1, and `ease_in`/`ease_out` are 0–5 seconds. This is a **fixed rectangle**,
 not an object tracker or privacy redaction: bound it to a stable page state and
 inspect moving footage when the page scrolls. Enabled highlights cannot overlap.

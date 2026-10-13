@@ -73,6 +73,7 @@ struct EditorInspectorView: View {
     @Binding var selectedClipID: UUID?
     @Binding var selectedRegionEffectID: UUID?
     @Binding var currentTime: Double
+    let playbackClock: EditorPlaybackClock
     let tool: EditorTool
     let isVideoEditing: Bool
     let canUndoVideoEdit: Bool
@@ -617,12 +618,6 @@ struct EditorInspectorView: View {
         videoTimeline?.placements.first { $0.clip.id == selectedClipID }
     }
 
-    private var canSplitVideoAtPlayhead: Bool {
-        videoTimeline?.placements.contains {
-            currentTime > $0.start + 0.1 && currentTime < $0.end - 0.1
-        } == true
-    }
-
     private func syncVideoDrafts() {
         guard tool == .video, let timeline = videoTimeline, !timeline.placements.isEmpty else { return }
         let placement = timeline.placements.first { $0.clip.id == selectedClipID }
@@ -712,15 +707,19 @@ struct EditorInspectorView: View {
                 .accessibilityIdentifier("video.selectedClip")
 
                 HStack(spacing: 8) {
-                    Button {
-                        guard let placement = timeline.placements.first(where: {
-                            currentTime > $0.start + 0.1 && currentTime < $0.end - 0.1
-                        }) else { return }
-                        selectedClipID = placement.clip.id
-                        onVideoEdit(.split(clipID: placement.clip.id, at: currentTime))
-                    } label: { Label("Split at playhead", systemImage: "scissors") }
-                        .disabled(!canSplitVideoAtPlayhead)
-                        .accessibilityIdentifier("video.split")
+                    EditorPlaybackTimeReader(clock: playbackClock) { time in
+                        Button {
+                            guard let placement = timeline.placements.first(where: {
+                                currentTime > $0.start + 0.1 && currentTime < $0.end - 0.1
+                            }) else { return }
+                            selectedClipID = placement.clip.id
+                            onVideoEdit(.split(clipID: placement.clip.id, at: currentTime))
+                        } label: { Label("Split at playhead", systemImage: "scissors") }
+                            .disabled(!timeline.placements.contains {
+                                time > $0.start + 0.1 && time < $0.end - 0.1
+                            })
+                            .accessibilityIdentifier("video.split")
+                    }
                     Button(action: onUndoVideoEdit) {
                         Label("Undo", systemImage: "arrow.uturn.backward")
                     }

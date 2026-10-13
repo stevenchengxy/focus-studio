@@ -44,6 +44,7 @@ struct AIAssistantTests {
         step("non-destructive demo editing"); try await demoEditing(root: root)
         step("video track editing tools"); try await timelineEditingTools(root: root)
         step("audio tools"); try await audioTools(root: root)
+        step("export entitlements"); try await exportEntitlements(root: root)
         step("export paths"); try exportPaths(root: root)
         step("export guard"); try await exportGuard(root: root)
         step("assemble_video"); try await assembleVideo(root: root)

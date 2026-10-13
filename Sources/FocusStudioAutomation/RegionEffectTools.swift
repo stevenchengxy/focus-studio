@@ -16,16 +16,18 @@ enum RegionEffectToolSupport {
         "y": ["type": "number", "minimum": 0, "maximum": 0.99, "description": "Rectangle top, from 0 to 0.99 in the uncropped source frame."],
         "width": ["type": "number", "minimum": 0.01, "maximum": 1, "description": "Source-normalized width, from 0.01 to 1; x + width must be at most 1."],
         "height": ["type": "number", "minimum": 0.01, "maximum": 1, "description": "Source-normalized height, from 0.01 to 1; y + height must be at most 1."],
-        "preset": ["type": "string", "enum": RegionEffectPreset.allCases.map(\.rawValue), "description": "spotlight (clear region, subdued surroundings), lift (floating enlarged card), tilt (card tilts on entry, then settles level). Default spotlight."],
+        "preset": ["type": "string", "enum": RegionEffectPreset.allCases.map(\.rawValue), "description": "spotlight (clear detail), lift (floating card), tilt (2D entry, settles level), perspective (3D tilted plane), magnify (circular lens centered inside selection), outline (draw-on border). Default spotlight."],
         "background": ["type": "string", "enum": RegionEffectBackground.allCases.map(\.rawValue), "description": "dim, blur or none; default dim. This is emphasis, not privacy redaction."],
         "scale": ["type": "number", "minimum": 1, "maximum": 3, "default": 1.35, "description": "Card magnification, from 1 to 3; default 1.35 for a new effect. Omission preserves an existing effect's value."],
         "intensity": ["type": "number", "minimum": 0, "maximum": 1, "default": 0.55, "description": "Background emphasis strength, from 0 to 1; default 0.55 for a new effect. Omission preserves an existing effect's value."],
         "ease_in": ["type": "number", "minimum": 0, "maximum": 5, "default": 0.35, "description": "Entrance duration from 0 to 5 seconds; default 0.35 for a new effect. Omission preserves an existing value. Short spans proportionally shorten entrance and exit."],
         "ease_out": ["type": "number", "minimum": 0, "maximum": 5, "default": 0.35, "description": "Return duration from 0 to 5 seconds; default 0.35 for a new effect. Omission preserves an existing value."],
+        "perspective_degrees": ["type": "number", "minimum": -35, "maximum": 35, "default": 18, "description": "Perspective card yaw, from -35 to 35 degrees; default 18. The card smoothly tilts in, holds and restores. Omission preserves existing angle."],
+        "outline_width": ["type": "number", "minimum": 1, "maximum": 12, "default": 3, "description": "Magnifier/outline rim width, 1 to 12 pixels at 1080 source height; default 3. Scales with output framing. Omission preserves existing width."],
         "enabled": ["type": "boolean", "default": true, "description": "Whether the effect is enabled; default true for a new effect. Omission preserves an existing effect's state."],
     ] }
 
-    static let numericKeys = ["start", "end", "x", "y", "width", "height", "scale", "intensity", "ease_in", "ease_out"]
+    static let numericKeys = ["start", "end", "x", "y", "width", "height", "scale", "intensity", "ease_in", "ease_out", "perspective_degrees", "outline_width"]
 
     static func validateKeys(_ raw: [String: Any], schema: [String: Any]) throws {
         let known = Set((schema["properties"] as? [String: Any] ?? [:]).keys)
@@ -95,6 +97,8 @@ enum RegionEffectToolSupport {
         effect.intensity = values["intensity"] ?? effect.intensity
         effect.easeIn = values["ease_in"] ?? effect.easeIn
         effect.easeOut = values["ease_out"] ?? effect.easeOut
+        effect.perspectiveDegrees = values["perspective_degrees"] ?? effect.perspectiveDegrees
+        effect.outlineWidth = values["outline_width"] ?? effect.outlineWidth
     }
 
     static func validate(_ effect: RegionEffect, in project: RecordingProject) throws {
@@ -114,6 +118,8 @@ enum RegionEffectToolSupport {
          "preset": AIJSONValue(effect.preset.rawValue), "background": AIJSONValue(effect.background.rawValue),
          "scale": .rounded(effect.scale), "intensity": .rounded(effect.intensity),
          "ease_in": .rounded(effect.easeIn), "ease_out": .rounded(effect.easeOut),
+         "perspective_degrees": .rounded(effect.resolvedPerspectiveDegrees),
+         "outline_width": .rounded(effect.resolvedOutlineWidth),
          "enabled": AIJSONValue(effect.isEnabled), "tracking": "fixed_rectangle"]
     }
 
@@ -130,7 +136,7 @@ enum RegionEffectToolSupport {
 
 public struct AddRegionEffectTool: AIAssistantTool {
     public let name = "add_region_effect"
-    public let summary = "Emphasize a fixed source rectangle with spotlight, lift or tilt, preserving real UI pixels. Inspect a source_frame first, then give clip_id, output start/end and source-normalized x/y/width/height. No object tracking; enabled effects cannot overlap."
+    public let summary = "Emphasize a fixed source region with spotlight, lift, tilt, perspective, magnify or outline, preserving real UI pixels. Inspect a source_frame first, then give clip_id, output start/end and source-normalized x/y/width/height. No object tracking; enabled effects cannot overlap."
     public init() {}
     public var parametersSchema: [String: Any] {
         ["type": "object", "required": ["clip_id", "start", "end", "x", "y", "width", "height"],

@@ -2048,7 +2048,9 @@ public struct ExportProjectTool: AIAssistantTool {
         if let width { project.settings.exportWidth = width }
         if let frameRate { project.settings.frameRate = frameRate }
         let rendering = AIToolSupport.renderProgress(context.tr("Exporting…"), context: context, progress: progress)
-        let result = try await ProjectVideoRenderer.export(project: project, to: output, progress: rendering)
+        let result = try await EntitledExport.run(authorizer: context.exportAuthorization, projectID: project.id.uuidString, outputURL: output) { commit in
+            try await ProjectVideoRenderer.export(project: project, to: output, progress: rendering, beforePublish: commit)
+        }
         let text = context.format("Exported %@ (%@ s, %lld × %lld)", output.lastPathComponent, AIToolSupport.seconds(result.duration), result.width, result.height)
         let data = AIToolSupport.merged(
             AIToolSupport.videoData(output, duration: result.duration, width: result.width, height: result.height),

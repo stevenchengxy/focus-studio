@@ -18,6 +18,15 @@ enum FocusStudioE2E {
                 at: outputDirectory,
                 withIntermediateDirectories: true
             )
+            if let path = argumentValue(after: "--preview-benchmark", in: CommandLine.arguments) {
+                let scale = Double(argumentValue(after: "--preview-scale", in: CommandLine.arguments) ?? "1") ?? 1
+                try await PreviewPlaybackBenchmark.run(projectPath: path, scale: scale, outputDirectory: outputDirectory)
+                return
+            }
+            if let imagePath = argumentValue(after: "--marketing-demo", in: CommandLine.arguments) {
+                try await MarketingDemo.render(imagePath: imagePath, outputDirectory: outputDirectory)
+                return
+            }
             if CommandLine.arguments.contains("--validate-recorded-project") {
                 guard let path = argumentValue(after: "--validate-recorded-project", in: CommandLine.arguments),
                       (path as NSString).isAbsolutePath else {
@@ -1701,7 +1710,7 @@ enum FocusStudioE2E {
         try writeReviewFrame(sourceFrame, to: stillURL)
         let probes = [0.125, 0.375, 0.75, 1.25, 1.875, 2.25]
         var results: [[String: Any]] = []
-        for variant in ["spotlight", "lift", "tilt", "cropped-zoom", "imported-video", "imported-image"] {
+        for variant in ["spotlight", "lift", "tilt", "perspective", "magnify", "outline", "cropped-zoom", "imported-video", "imported-image"] {
             var fixture = base
             if variant == "cropped-zoom" {
                 fixture.settings.sourceCropInsets = SourceCropInsets(top: 0.12, leading: 0.08, bottom: 0.06, trailing: 0.04)
@@ -1720,8 +1729,8 @@ enum FocusStudioE2E {
                 // Imported pixels must not inherit the capture crop.
                 fixture.settings.sourceCropInsets = SourceCropInsets(top: 0.2, leading: 0.1)
             }
-            let preset: RegionEffectPreset = variant == "spotlight" || variant == "cropped-zoom"
-                ? .spotlight : (variant == "lift" || variant == "imported-image" ? .lift : .tilt)
+            let preset: RegionEffectPreset = RegionEffectPreset(rawValue: variant)
+                ?? (variant == "cropped-zoom" ? .spotlight : (variant == "imported-image" ? .magnify : .perspective))
             let cue = RegionEffect(clipID: clip.id, sourceStart: 0.25, sourceEnd: 2.125,
                 rect: NormalizedRegionRect(x: 0.2, y: 0.2, width: 0.4, height: 0.4),
                 preset: preset, background: variant == "imported-image" ? .blur : .dim,
@@ -1812,8 +1821,8 @@ enum FocusStudioE2E {
                     "\(preset) blur intensity zero must preserve the unprocessed background at \(seconds)s")
                 if preset != .spotlight, seconds == 1.25 {
                     let (originalFrame, _) = try await original.image(at: time)
-                    try require(imageDifference(zeroFrame, originalFrame).meanAbsolute > 1,
-                        "\(preset) intensity zero must not disable the foreground card animation")
+                    try require(imageDifference(zeroFrame, originalFrame).meanAbsolute > (preset == .outline ? 0.05 : 1),
+                        "\(preset) intensity zero must not disable the foreground emphasis")
                 }
             }
             zeroIntensityChecks.append(["preset": preset.rawValue, "probes": probes.count,

@@ -27,8 +27,22 @@ extension AIAssistantTests {
               && box.project!.regionEffects![0].rect == effect.rect && box.project!.regionEffects![0].preset == .tilt,
               "updating an effect retains its stable ID, source binding and omitted rectangle")
 
+        for preset in ["perspective", "magnify", "outline"] {
+            let classic = try await UpdateRegionEffectTool().run(arguments: ["effect_id": id, "preset": preset,
+                "perspective_degrees": -22, "outline_width": 5], context: context, progress: { _ in })
+            check(classic.data?["region_effect"]?["preset"]?.stringValue == preset
+                && classic.data?["region_effect"]?["perspective_degrees"] == -22
+                && classic.data?["region_effect"]?["outline_width"] == 5,
+                "classic preset receipt exposes the exact controllable parameters")
+        }
+        _ = try await UpdateRegionEffectTool().run(arguments: ["effect_id": id, "intensity": 0.4], context: context, progress: { _ in })
+        check(box.project!.regionEffects![0].perspectiveDegrees == -22 && box.project!.regionEffects![0].outlineWidth == 5,
+              "omitting classic parameters preserves their values")
+
         let before = box.project, writes = box.writeCount
         for invalid: [String: Any] in [["width": 0], ["x": 0.8], ["scale": 3.1], ["intensity": -0.1],
+                                       ["perspective_degrees": -36], ["perspective_degrees": Double.nan],
+                                       ["outline_width": 0], ["outline_width": 13], ["outline_width": true],
                                        ["ease_out": 6], ["start": -0.1], ["end": 4.1], ["preset": "trackObject"],
                                        ["scale": true], ["x": "0.1"], ["enabled": 1], ["scale": Double.infinity],
                                        ["clip_id": UUID().uuidString, "scale": 2]] {
