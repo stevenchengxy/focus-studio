@@ -3,7 +3,7 @@ import { getChatGPTUser } from '@/app/chatgpt-auth';
 import { APIError, checkOrigin, nowSeconds, sha256 } from './primitives';
 import { webSessionAccount } from './google-auth';
 
-export interface AppEnv { DB?: D1Database; SITE_ORIGIN?: string; STRIPE_SECRET_KEY?: string; STRIPE_WEBHOOK_SECRET?: string; STRIPE_MONTHLY_PRICE_ID?: string; STRIPE_YEARLY_PRICE_ID?: string; MAC_DOWNLOAD_URL?: string; DEMO_VIDEO_URL?: string; DEMO_POSTER_URL?: string; GOOGLE_CLIENT_ID?: string; GOOGLE_CLIENT_SECRET?: string; SESSION_SECRET?: string }
+export interface AppEnv { DB?: D1Database; SITE_ORIGIN?: string; STRIPE_SECRET_KEY?: string; STRIPE_WEBHOOK_SECRET?: string; STRIPE_MONTHLY_PRICE_ID?: string; STRIPE_YEARLY_PRICE_ID?: string; MAC_DOWNLOAD_URL?: string; WINDOWS_DOWNLOAD_URL?: string; LINUX_DOWNLOAD_URL?: string; DEMO_VIDEO_URL?: string; DEMO_POSTER_URL?: string; GOOGLE_CLIENT_ID?: string; GOOGLE_CLIENT_SECRET?: string; SESSION_SECRET?: string }
 export const settings = () => env as unknown as AppEnv;
 export function database(): D1Database {
   const db = settings().DB;

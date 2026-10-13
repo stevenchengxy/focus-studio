@@ -37,7 +37,7 @@ struct AssistantToolResultCard: View {
         case "create_demo_cut": return L10n.tr("An editable copy is ready. The original recording is preserved.")
         case "add_region_effect", "update_region_effect", "delete_region_effect",
              "add_zoom", "update_zoom", "remove_zoom", "set_zoom_style", "update_settings", "set_chapters",
-             "set_background_image", "set_background_music", "set_sound_effects":
+             "set_background_image", "set_background_music", "set_sound_effects", "edit_voiceover", "set_audio_mix":
             return L10n.tr("The edit has been applied.")
         default: return L10n.tr("Result received. Details are available below.")
         }

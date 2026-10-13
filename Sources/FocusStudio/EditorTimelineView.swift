@@ -203,7 +203,7 @@ struct EditorTimelineView: View {
                 }
 
                             timelineRow(label: "Audio", icon: "waveform") {
-                    AudioTrack(settings: project.settings.productDemoAudio)
+                    AudioTrack(settings: project.settings.productDemoAudio, duration: duration)
                         .contentShape(Rectangle())
                         .onTapGesture { selectedTool = .audio }
                 }
@@ -577,19 +577,21 @@ struct EditorTimelineView: View {
 
 private struct AudioTrack: View {
     let settings: ProductDemoAudioSettings?
+    let duration: Double
 
     var body: some View {
         let hasMusic = settings?.backgroundMusicPath != nil
         let hasEffects = settings?.clickSoundEnabled == true
             || settings?.zoomTransitionSoundEnabled == true
-        let hasEnhancements = hasMusic || hasEffects
+        let voices = settings?.voiceovers ?? []
+        let hasEnhancements = hasMusic || hasEffects || !voices.isEmpty
         RoundedRectangle(cornerRadius: 6, style: .continuous)
             .fill(hasEnhancements ? Color.cyan.opacity(0.46) : Color.white.opacity(0.025))
             .overlay(alignment: .leading) {
                 HStack(spacing: 6) {
                     Image(systemName: hasMusic ? "music.note" : (hasEffects ? "waveform" : "plus.circle"))
                     Group {
-                        if hasMusic {
+                        if hasMusic && voices.isEmpty {
                             Text(verbatim: trackTitle)
                         } else {
                             Text(LocalizedStringKey(trackTitle))
@@ -607,9 +609,22 @@ private struct AudioTrack: View {
                 .foregroundStyle(hasEnhancements ? Color.white.opacity(0.88) : StudioTheme.secondaryText)
                 .padding(.horizontal, 9)
             }
+            .overlay(alignment: .bottomLeading) {
+                GeometryReader { geometry in
+                    ForEach(voices) { clip in
+                        let start = min(duration, max(0, clip.timelineStart))
+                        let end = min(duration, max(start, clip.timelineEnd))
+                        Capsule().fill(Color.white.opacity(clip.isEnabled ? 0.85 : 0.18))
+                            .frame(width: max(0, (end - start) / max(duration, 0.001) * geometry.size.width), height: 3)
+                            .offset(x: start / max(duration, 0.001) * geometry.size.width, y: geometry.size.height - 5)
+                            .help(clip.title)
+                    }
+                }.allowsHitTesting(false)
+            }
     }
 
     private var trackTitle: String {
+        if !(settings?.voiceovers ?? []).isEmpty { return "Voiceover" }
         if settings?.backgroundMusicPath != nil { return musicName }
         if settings?.clickSoundEnabled == true || settings?.zoomTransitionSoundEnabled == true {
             return "Sound effects"

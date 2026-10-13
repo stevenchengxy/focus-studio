@@ -41,6 +41,7 @@ struct AIAssistantTests {
         step("app control: library"); try await libraryControl(root: root)
         step("zoom tools"); try await zoomTools(root: root)
         step("region effect tools"); try await regionEffectTools(root: root)
+        step("voiceover tools"); try await voiceoverTools(root: root)
         step("non-destructive demo editing"); try await demoEditing(root: root)
         step("video track editing tools"); try await timelineEditingTools(root: root)
         step("audio tools"); try await audioTools(root: root)
@@ -1247,6 +1248,11 @@ struct AIAssistantTests {
         }
 
         /// Like StudioModel: the editor is saved and closed, then the new project opens.
+        func importVoiceover(from url: URL, projectID: UUID) async throws -> VoiceoverClip {
+            imported.append(url)
+            return VoiceoverClip(title: url.deletingPathExtension().lastPathComponent, filePath: url.path, sourceDuration: 6)
+        }
+
         func importVideo(from url: URL, title: String?) async throws -> RecordingProject {
             try newProject(from: url, title: title ?? url.deletingPathExtension().lastPathComponent, duration: 8)
         }

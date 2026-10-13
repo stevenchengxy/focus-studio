@@ -1430,3 +1430,31 @@
 "Finish a saved render without using another export." = "继续保存已渲染的视频，不重复占用导出次数。";
 "Your rendered video is safe. Open Settings → Account → Recover export to finish without using another export." = "已渲染的视频已保留。请前往“设置 → 账户 → 恢复导出”继续保存，不重复占用导出次数。";
 "The saved export file is missing. Your source recording has not changed." = "未找到待恢复的视频，原始录屏未改动。";
+
+/* Voiceover editing */
+"Voiceover" = "旁白";
+"Import voiceover" = "导入旁白";
+"Voiceover clip" = "旁白片段";
+"Add a recorded explanation or an audio file." = "导入已录制的解说或音频文件。";
+"Timeline start" = "时间线位置";
+"Volume %" = "音量 %";
+"Restore full audio" = "还原完整音频";
+"Remove voiceover" = "移除旁白";
+"Audio beyond the video end is not played." = "超出视频结尾的音频不会播放。";
+"Lower music during voiceover" = "旁白时降低音乐";
+"Music under voice" = "旁白时音乐";
+"Check the audio times, volume and fades." = "请检查音频时间、音量及淡入淡出。";
+"Apply" = "应用";
+
+/* Voiceover recording */
+"Audio mix" = "声音混音";
+"Record voiceover" = "录制旁白";
+"Microphone level" = "麦克风电平";
+"Save voiceover" = "保存旁白";
+"Cancel voiceover" = "取消旁白";
+"Waiting for microphone access…" = "等待麦克风权限…";
+"Saving voiceover…" = "正在保存旁白…";
+"Record from the selected frame. Use headphones when playing the preview." = "从所选帧录制旁白。播放预览时建议戴耳机。";
+"Allow microphone access in System Settings to record voiceover." = "请在系统设置中允许麦克风访问，再录制旁白。";
+"The microphone could not start. Check the input device and try again." = "麦克风无法启动，请检查输入设备后重试。";
+"Record a little longer before saving." = "录制时间太短，请再录制一会儿。";

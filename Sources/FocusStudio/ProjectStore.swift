@@ -186,6 +186,10 @@ actor ProjectStore {
             persistedProject.sourceVideoPath = URL(fileURLWithPath: persistedProject.sourceVideoPath).lastPathComponent
         }
         if var audio = persistedProject.settings.productDemoAudio {
+            audio.voiceovers = audio.voiceovers?.map { clip in
+                var copy = clip; copy.filePath = relativeAssetPath(clip.filePath, in: directory) ?? clip.filePath
+                return copy
+            }
             audio.backgroundMusicPath = relativeAssetPath(audio.backgroundMusicPath, in: directory)
             audio.clickSoundPath = relativeAssetPath(audio.clickSoundPath, in: directory)
             audio.zoomTransitionSoundPath = relativeAssetPath(audio.zoomTransitionSoundPath, in: directory)
@@ -227,6 +231,18 @@ actor ProjectStore {
             return value
         }
         return try projectDirectory(for: project.id).appendingPathComponent(project.sourceVideoPath)
+    }
+
+    func importVoiceover(from sourceURL: URL, for project: RecordingProject) async throws -> VoiceoverClip {
+        let asset = AVURLAsset(url: sourceURL)
+        guard let track = try await asset.loadTracks(withMediaType: .audio).first else { throw StoreError.invalidAudio }
+        let duration = try await track.load(.timeRange).duration.seconds
+        guard duration.isFinite, duration >= 0.02 else { throw StoreError.invalidAudio }
+        let id = UUID()
+        let path = try copyAudioAsset(from: sourceURL, into: projectDirectory(for: project.id),
+                                     stem: "voiceover-" + id.uuidString.lowercased()).path
+        return VoiceoverClip(id: id, title: sourceURL.deletingPathExtension().lastPathComponent,
+                             filePath: path, sourceDuration: duration)
     }
 
     func importBackgroundMusic(from sourceURL: URL, for project: RecordingProject) async throws -> String {
@@ -355,6 +371,10 @@ actor ProjectStore {
         var project = stored
         project.sourceVideoPath = resolvedAssetPath(project.sourceVideoPath, in: directory) ?? project.sourceVideoPath
         if var audio = project.settings.productDemoAudio {
+            audio.voiceovers = audio.voiceovers?.map { clip in
+                var copy = clip; copy.filePath = resolvedAssetPath(clip.filePath, in: directory) ?? clip.filePath
+                return copy
+            }
             audio.backgroundMusicPath = resolvedAssetPath(audio.backgroundMusicPath, in: directory)
             audio.clickSoundPath = resolvedAssetPath(audio.clickSoundPath, in: directory)
             audio.zoomTransitionSoundPath = resolvedAssetPath(audio.zoomTransitionSoundPath, in: directory)

@@ -88,6 +88,7 @@ struct EditorInspectorView: View {
     let onSaveMediaToShared: (UUID) -> Void
     let isImportingMedia: Bool
     let onSelectRegion: (UUID?) -> Void
+    let onPausePlayback: () -> Void
     @State private var isGeneratingChapters = false
     @State private var captionsMessage: String?
     @State private var trimStartDraft = 0.0
@@ -937,11 +938,13 @@ struct EditorInspectorView: View {
                 }
             }
 
+            EditorVoiceoverSection(project: $project, insertionTime: { playbackClock.time }, pausePlayback: onPausePlayback)
+
             if project.settings.productDemoAudio != nil {
                 InspectorSection("Captured audio") {
                     LabeledSlider(
                         value: audioBinding(\.sourceAudioVolume),
-                        range: 0...1,
+                        range: 0...2,
                         label: "Original",
                         suffix: "%",
                         multiplier: 100,

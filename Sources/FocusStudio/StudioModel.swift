@@ -1926,6 +1926,21 @@ final class StudioModel: ObservableObject {
         }
     }
 
+    func chooseVoiceover(for project: RecordingProject) async -> VoiceoverClip? {
+        let panel = NSOpenPanel()
+        panel.title = L10n.tr("Import voiceover")
+        panel.allowedContentTypes = [.audio]; panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        do { return try await store.importVoiceover(from: url, for: project) }
+        catch { show(error); return nil }
+    }
+
+    func importVoiceover(from url: URL, projectID: UUID) async throws -> VoiceoverClip {
+        if let blocker = automationBlocker { throw blocker.failure }
+        guard let project = project(id: projectID) else { throw ProjectStore.StoreError.projectNotFound }
+        return try await store.importVoiceover(from: url, for: project)
+    }
+
     func importBackgroundMusic(for project: RecordingProject) async -> String? {
         let panel = NSOpenPanel()
         panel.title = L10n.tr("Choose background music")

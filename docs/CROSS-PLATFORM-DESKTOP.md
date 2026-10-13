@@ -15,7 +15,7 @@ This is an installable Windows/Linux companion for the hosted Studio editor. It 
 | macOS native effects, native project library, MCP automation | Not included | Not included |
 | Offline editor startup | Not supported | Not supported |
 
-The editor is loaded from `https://focus-studio.stevenchengxy19.chatgpt.site/studio`; an internet connection is required to open it and authorize exports. Locally imported media, browser recording data and export recovery journals stay in the app's Chromium profile. Normal uninstall keeps that profile so unfinished work is not silently removed.
+The editor is loaded from `https://focus-studio.stevenchengxy19.chatgpt.site/studio`; an internet connection is required to open it and authorize exports. Imported media, recordings and active edits stay in memory until export; closing the window loses unexported work. Rendered export recovery journals are retained in the app's Chromium profile. Normal uninstall keeps that profile.
 
 The website decides which codecs and controls are available. Selecting “system sound” is a request, not a promise that a stream contains sound: the editor must inspect returned audio tracks. On Windows the chooser requires a second, explicit checkbox because loopback includes sound from other windows too. On Linux the system-audio control is disabled. Microphone and imported/recorded narration remain usable where the OS permits them.
 
@@ -98,7 +98,7 @@ Screen and microphone streams use standard `getDisplayMedia` and `getUserMedia`.
 
 Local validation covers 14 policy, capture, token-storage and account-race tests, plus an actual Electron integration smoke using a local HTTPS fixture for the pinned host. The smoke verifies sandbox preferences, absence of Node in the page, bridge rejection, installed camera-denial policy, chooser isolation, and rejection of privileges from the offline screen. It neither records the user's screen nor calls a live paid account.
 
-A Linux x64 unpacked app, AppImage and Debian installer were built on macOS. Windows/Linux runtime checks must be recorded against the actual GitHub Actions run before release. Source-level unit tests and macOS-hosted Electron smoke are not evidence of successful microphone/system-audio capture on a Windows or Linux machine. Required live acceptance: X11 and Wayland screen/window selection, microphone denial/grant/revocation, Windows loopback including its warning, account pairing, a free successful export and receipt recovery, install/uninstall, and session data persistence.
+A Linux x64 unpacked app, AppImage and Debian installer were built on macOS. The Windows and Linux jobs in [CI run 38441738897](https://github.com/stevenchengxy/focus-studio/actions/runs/38441738897) both passed the real Electron smoke, unit tests and installer builds. Source-level unit tests and macOS-hosted Electron smoke are not evidence of successful microphone/system-audio capture on a Windows or Linux machine. Required live acceptance: X11 and Wayland screen/window selection, microphone denial/grant/revocation, Windows loopback including its warning, account pairing, a free successful export and receipt recovery, install/uninstall, and session data persistence.
 
 The current release has no Windows signing credential. macOS remains the separate native Swift app. Linux ARM64, Windows ARM64, native MCP, native offline editing and full multi-track parity remain outside this preview.
 

@@ -51,6 +51,7 @@ public enum AIProjectReport {
             lines.append("No eligible clicks or typing were captured inside the visible crop. Browser/AX automation may not emit system input events. Use add_zoom at your observed interaction times; enabling automatic zooms cannot recover missing events.")
         }
         lines.append("Audio: music \(music) (volume \(seconds(audio.backgroundMusicVolume))) | click sound \(audio.clickSoundEnabled ? "on" : "off") | zoom whoosh \(audio.zoomTransitionSoundEnabled ? "on" : "off")")
+        lines.append("Voiceover: \(audio.voiceovers?.count ?? 0) clip(s). edit_voiceover adds a local audio file, edits source_in/source_out/timeline_start/volume/fades or removes a clip; get_project exposes stable IDs. set_audio_mix controls recorded audio and music ducking. Video ripple edits also remap speech, so finish picture editing first when possible.")
         lines.append("Export: \(settings.exportWidth) px wide | \(settings.frameRate) fps")
         if let timeline = try? DemoVideoTimeline(project: project) {
             lines.append("Video track: \(timeline.clips.count) clip(s) | \(timeline.transitions.filter { $0.preset != .cut }.count) visual transition(s). Use get_timeline for stable clip IDs and in/out points.")
@@ -196,9 +197,15 @@ public enum AIProjectReport {
                 "title": AIJSONValue(track?.title ?? URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent),
                 "track_id": track.map { .string($0.id) } ?? .null,
                 "volume": .rounded(audio.backgroundMusicVolume),
+                "fade_in": .rounded(audio.backgroundMusicFadeIn),
+                "fade_out": .rounded(audio.backgroundMusicFadeOut),
             ]
         }
         return [
+            "source_volume": .rounded(audio.sourceAudioVolume),
+            "voiceovers": .array((audio.voiceovers ?? []).map(VoiceoverToolSupport.data)),
+            "duck_music": AIJSONValue(audio.voiceoverDuckingLevel != nil),
+            "duck_level": audio.voiceoverDuckingLevel.map { .rounded($0) } ?? .null,
             "background_music": music,
             "click": AIJSONValue(audio.clickSoundEnabled),
             "click_volume": .rounded(audio.clickSoundVolume),

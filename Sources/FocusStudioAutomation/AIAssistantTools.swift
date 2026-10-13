@@ -51,6 +51,8 @@ public enum AIAssistantToolCatalog {
             SetChaptersTool(),
             SetBackgroundImageTool(),
             SetBackgroundMusicTool(),
+            EditVoiceoverTool(),
+            SetAudioMixTool(),
             SetSoundEffectsTool(),
             ListMediaAssetsTool(),
             ImportMediaAssetTool(),

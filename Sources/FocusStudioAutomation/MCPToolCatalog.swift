@@ -467,6 +467,15 @@ public struct MCPToolCatalog: Sendable {
             propertyDescriptions: ["track": "A bundled track id or title (listed by get_status), an audio file (an absolute path, or relative to your working directory), or \"none\"."]
         ),
         MCPToolSpec(
+            tool: EditVoiceoverTool(), title: "Edit voiceover", description: EditVoiceoverTool().summary,
+            scope: .project, annotations: MCPToolAnnotations(readOnly: false, destructive: true),
+            propertyDescriptions: ["path": "Local audio file, absolute or relative to your working directory. Copied into the project."]
+        ),
+        MCPToolSpec(
+            tool: SetAudioMixTool(), title: "Set audio mix", description: SetAudioMixTool().summary,
+            scope: .project, annotations: MCPToolAnnotations(readOnly: false, idempotent: true)
+        ),
+        MCPToolSpec(
             tool: SetSoundEffectsTool(), title: "Set sound effects",
             description: "Turn a project's click sound and zoom whoosh on or off, optionally with volumes from 0 to 1. Focus Studio opens the project in its editor.",
             scope: .project, annotations: MCPToolAnnotations(readOnly: false, idempotent: true)

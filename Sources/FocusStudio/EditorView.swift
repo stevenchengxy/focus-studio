@@ -99,7 +99,8 @@ struct EditorView: View {
                     onImportSharedMedia: importSharedMedia,
                     onSaveMediaToShared: saveMediaToShared,
                     isImportingMedia: isImportingMedia,
-                    onSelectRegion: presentRegionSelection
+                    onSelectRegion: presentRegionSelection,
+                    onPausePlayback: { isPlaying = false }
                 )
                 .id(selectedTool)
                 .transition(StudioMotion.panel(reduceMotion: reduceMotion))

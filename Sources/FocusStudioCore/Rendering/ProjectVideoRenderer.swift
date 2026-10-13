@@ -258,7 +258,7 @@ public enum ProjectVideoRenderer {
         var includesAudio = false
         var audioMixParameters: [AVAudioMixInputParameters] = []
         let audioSettings = project.settings.resolvedProductDemoAudio
-        let sourceAudioVolume = sanitizedVolume(audioSettings.sourceAudioVolume)
+        let sourceAudioVolume = Float(audioSettings.sourceAudioVolume.isFinite ? audioSettings.sourceAudioVolume.clamped(to: 0...2) : 1)
         let audioSources: [(assetID: UUID?, asset: AVURLAsset, videoRange: CMTimeRange)] =
             [(nil, sourceAsset, sourceVideoTimeRange)]
             + timeline.mediaAssets.compactMap { media in
@@ -297,6 +297,32 @@ public enum ProjectVideoRenderer {
           }
         }
 
+        let voiceovers = audioSettings.voiceovers ?? []
+        for voice in voiceovers where voice.isEnabled && voice.volume > 0 && voice.timelineStart < duration {
+            _ = try voice.validated()
+            let url = try resolveAudioURL(path: voice.filePath, relativeTo: sourceURL.deletingLastPathComponent())
+            let asset = AVURLAsset(url: url)
+            guard let sourceTrack = try await asset.loadTracks(withMediaType: .audio).first else {
+                throw ProjectRenderError.audioAssetHasNoAudioTrack(url)
+            }
+            let available = try await sourceTrack.load(.timeRange)
+            let length = min(voice.duration, duration - voice.timelineStart)
+            let selected = CMTimeRange(start: available.start + CMTime(seconds: voice.sourceStart, preferredTimescale: 60_000),
+                                       duration: CMTime(seconds: length, preferredTimescale: 60_000))
+            guard selected.end.seconds <= available.end.seconds + 0.002 else {
+                throw ProjectRenderError.invalidAudioDuration(url)
+            }
+            guard let track = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else {
+                throw ProjectRenderError.couldNotCreateCompositionTrack(.audio)
+            }
+            try track.insertTimeRange(selected, of: sourceTrack,
+                                      at: CMTime(seconds: voice.timelineStart, preferredTimescale: 60_000))
+            audioMixParameters.append(musicMixParameters(for: track, duration: length,
+                volume: Float(voice.volume), fadeIn: voice.fadeIn, fadeOut: voice.fadeOut,
+                offset: voice.timelineStart))
+            includesAudio = true
+        }
+
         if let backgroundMusicPath = normalizedPath(audioSettings.backgroundMusicPath) {
             let musicURL = try? resolveAudioURL(
                 path: backgroundMusicPath,
@@ -313,7 +339,8 @@ public enum ProjectVideoRenderer {
                     duration: duration,
                     volume: sanitizedVolume(audioSettings.backgroundMusicVolume),
                     fadeIn: sanitizedDuration(audioSettings.backgroundMusicFadeIn),
-                    fadeOut: sanitizedDuration(audioSettings.backgroundMusicFadeOut)
+                    fadeOut: sanitizedDuration(audioSettings.backgroundMusicFadeOut),
+                    voiceovers: voiceovers, duckLevel: audioSettings.voiceoverDuckingLevel
                 )
                 audioMixParameters.append(parameters)
                 includesAudio = true
@@ -598,50 +625,17 @@ public enum ProjectVideoRenderer {
     }
 
     private static func musicMixParameters(
-        for track: AVCompositionTrack,
-        duration: Double,
-        volume: Float,
-        fadeIn: Double,
-        fadeOut: Double
+        for track: AVCompositionTrack, duration: Double, volume: Float,
+        fadeIn: Double, fadeOut: Double, offset: Double = 0,
+        voiceovers: [VoiceoverClip] = [], duckLevel: Double? = nil
     ) -> AVMutableAudioMixInputParameters {
         let parameters = AVMutableAudioMixInputParameters(track: track)
-        let total = max(0, duration)
-        var effectiveFadeIn = min(fadeIn, total)
-        var effectiveFadeOut = min(fadeOut, total)
-        if effectiveFadeIn + effectiveFadeOut > total,
-           effectiveFadeIn + effectiveFadeOut > 0 {
-            let scale = total / (effectiveFadeIn + effectiveFadeOut)
-            effectiveFadeIn *= scale
-            effectiveFadeOut *= scale
-        }
-
-        if effectiveFadeIn > 0 {
-            parameters.setVolumeRamp(
-                fromStartVolume: 0,
-                toEndVolume: volume,
-                timeRange: CMTimeRange(
-                    start: .zero,
-                    duration: CMTime(seconds: effectiveFadeIn, preferredTimescale: 600)
-                )
-            )
-        } else {
-            parameters.setVolume(volume, at: .zero)
-        }
-
-        let fadeOutStart = max(effectiveFadeIn, total - effectiveFadeOut)
-        parameters.setVolume(
-            volume,
-            at: CMTime(seconds: fadeOutStart, preferredTimescale: 600)
-        )
-        if effectiveFadeOut > 0 {
-            parameters.setVolumeRamp(
-                fromStartVolume: volume,
-                toEndVolume: 0,
-                timeRange: CMTimeRange(
-                    start: CMTime(seconds: fadeOutStart, preferredTimescale: 600),
-                    duration: CMTime(seconds: effectiveFadeOut, preferredTimescale: 600)
-                )
-            )
+        let points = VoiceoverMix.musicEnvelope(duration: duration, volume: Double(volume),
+            fadeIn: fadeIn, fadeOut: fadeOut, voiceovers: voiceovers, duckLevel: duckLevel)
+        for (a, b) in zip(points, points.dropFirst()) where b.time > a.time {
+            parameters.setVolumeRamp(fromStartVolume: Float(a.gain), toEndVolume: Float(b.gain),
+                timeRange: CMTimeRange(start: CMTime(seconds: offset + a.time, preferredTimescale: 60_000),
+                                      duration: CMTime(seconds: b.time - a.time, preferredTimescale: 60_000)))
         }
         return parameters
     }

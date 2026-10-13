@@ -39,6 +39,11 @@ extension ProjectStore {
         }
         project.settings.backgroundImagePath = try copyAsset(project.settings.backgroundImagePath, stem: "background")
         if var audio = project.settings.productDemoAudio {
+            audio.voiceovers = try audio.voiceovers?.map { clip in
+                var copy = clip
+                copy.filePath = try copyAsset(clip.filePath, stem: "voiceover-" + clip.id.uuidString.lowercased()) ?? clip.filePath
+                return copy
+            }
             audio.backgroundMusicPath = try copyAsset(audio.backgroundMusicPath, stem: "background-music")
             audio.clickSoundPath = try copyAsset(audio.clickSoundPath, stem: "click-sound")
             audio.zoomTransitionSoundPath = try copyAsset(audio.zoomTransitionSoundPath, stem: "zoom-sound")

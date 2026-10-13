@@ -45,6 +45,8 @@ update_settings
 set_chapters
 set_background_image
 set_background_music
+edit_voiceover
+set_audio_mix
 set_sound_effects
 capture_frame
 export_project

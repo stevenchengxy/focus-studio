@@ -1431,3 +1431,31 @@
 "Finish a saved render without using another export." = "Finish a saved render without using another export.";
 "Your rendered video is safe. Open Settings → Account → Recover export to finish without using another export." = "Your rendered video is safe. Open Settings → Account → Recover export to finish without using another export.";
 "The saved export file is missing. Your source recording has not changed." = "The saved export file is missing. Your source recording has not changed.";
+
+/* Voiceover editing */
+"Voiceover" = "Voiceover";
+"Import voiceover" = "Import voiceover";
+"Voiceover clip" = "Voiceover clip";
+"Add a recorded explanation or an audio file." = "Add a recorded explanation or an audio file.";
+"Timeline start" = "Timeline start";
+"Volume %" = "Volume %";
+"Restore full audio" = "Restore full audio";
+"Remove voiceover" = "Remove voiceover";
+"Audio beyond the video end is not played." = "Audio beyond the video end is not played.";
+"Lower music during voiceover" = "Lower music during voiceover";
+"Music under voice" = "Music under voice";
+"Check the audio times, volume and fades." = "Check the audio times, volume and fades.";
+"Apply" = "Apply";
+
+/* Voiceover recording */
+"Audio mix" = "Audio mix";
+"Record voiceover" = "Record voiceover";
+"Microphone level" = "Microphone level";
+"Save voiceover" = "Save voiceover";
+"Cancel voiceover" = "Cancel voiceover";
+"Waiting for microphone access…" = "Waiting for microphone access…";
+"Saving voiceover…" = "Saving voiceover…";
+"Record from the selected frame. Use headphones when playing the preview." = "Record from the selected frame. Use headphones when playing the preview.";
+"Allow microphone access in System Settings to record voiceover." = "Allow microphone access in System Settings to record voiceover.";
+"The microphone could not start. Check the input device and try again." = "The microphone could not start. Check the input device and try again.";
+"Record a little longer before saving." = "Record a little longer before saving.";

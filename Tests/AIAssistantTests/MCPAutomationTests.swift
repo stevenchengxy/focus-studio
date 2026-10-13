@@ -11,7 +11,7 @@ extension AIAssistantTests {
     static let mcpV1ToolNames = [
         "get_status", "list_projects", "get_project", "rename_project", "delete_project", "import_video", "create_screenshot_demo",
         "list_recording_sources", "start_recording", "capture_recording_frame", "perform_recording_action", "perform_recording_text", "stop_recording", "wait_for_recording", "analyze_demo_pacing", "create_demo_cut", "get_timeline", "resolve_timeline_frame", "list_media_assets", "list_global_media_assets", "import_global_media_asset", "add_global_media_to_project", "import_media_asset", "insert_media_asset", "split_clip", "trim_clip", "delete_clip", "move_clip", "set_transition", "set_clip_audio", "set_image_duration", "undo_clip_edit", "redo_clip_edit", "update_zoom", "add_zoom", "remove_zoom", "add_region_effect", "update_region_effect", "delete_region_effect", "set_zoom_style", "update_settings",
-        "set_chapters", "set_background_image", "set_background_music", "set_sound_effects", "capture_frame", "export_project",
+        "set_chapters", "set_background_image", "set_background_music", "edit_voiceover", "set_audio_mix", "set_sound_effects", "capture_frame", "export_project",
         "assemble_video", "list_assets", "wait_for_job",
     ]
 
@@ -42,7 +42,7 @@ extension AIAssistantTests {
         for mcpOnly in ["rename_project", "delete_project", "import_video", "create_screenshot_demo", "wait_for_job"] {
             check(!inAppNames.contains(mcpOnly), "\(mcpOnly) is not in the in-app catalog")
         }
-        check(inApp.count == 55 && Set(["get_project", "get_status", "get_timeline", "resolve_timeline_frame", "split_clip", "set_transition", "set_image_duration", "undo_clip_edit", "redo_clip_edit", "list_media_assets", "list_global_media_assets", "import_global_media_asset", "add_global_media_to_project", "import_media_asset", "insert_media_asset", "prepare_clip_ai_reference", "wait_for_recording", "prepare_demo_page", "run_demo_task", "perform_recording_text"]).isSubset(of: inAppNames), "the in-app catalog has its shared and project media tools: \(inApp.count)")
+        check(inApp.count == 57 && Set(["get_project", "get_status", "get_timeline", "resolve_timeline_frame", "split_clip", "set_transition", "set_image_duration", "undo_clip_edit", "redo_clip_edit", "list_media_assets", "list_global_media_assets", "import_global_media_asset", "add_global_media_to_project", "import_media_asset", "insert_media_asset", "prepare_clip_ai_reference", "wait_for_recording", "prepare_demo_page", "run_demo_task", "perform_recording_text"]).isSubset(of: inAppNames), "the in-app catalog has its shared and project media tools: \(inApp.count)")
 
         let scopes: [String: MCPToolScope] = [
             "get_status": .global, "list_projects": .global, "import_video": .global, "create_screenshot_demo": .global, "list_global_media_assets": .global, "import_global_media_asset": .global,
@@ -50,7 +50,7 @@ extension AIAssistantTests {
             "analyze_demo_pacing": .projectReadOnly, "get_project": .projectReadOnly, "get_timeline": .projectReadOnly, "resolve_timeline_frame": .projectReadOnly, "list_media_assets": .projectReadOnly, "list_assets": .projectReadOnly, "assemble_video": .projectReadOnly,
             "rename_project": .library, "delete_project": .library,
             "create_demo_cut": .project, "add_global_media_to_project": .project, "import_media_asset": .project, "insert_media_asset": .project, "split_clip": .project, "trim_clip": .project, "delete_clip": .project, "move_clip": .project, "set_transition": .project, "set_clip_audio": .project, "set_image_duration": .project, "undo_clip_edit": .project, "redo_clip_edit": .project, "update_zoom": .project, "add_zoom": .project, "remove_zoom": .project, "add_region_effect": .project, "update_region_effect": .project, "delete_region_effect": .project, "set_zoom_style": .project, "update_settings": .project, "set_chapters": .project,
-            "set_background_image": .project, "set_background_music": .project, "set_sound_effects": .project, "capture_frame": .project,
+            "set_background_image": .project, "set_background_music": .project, "edit_voiceover": .project, "set_audio_mix": .project, "set_sound_effects": .project, "capture_frame": .project,
             "export_project": .project,
         ]
         let readOnly: Set<String> = ["analyze_demo_pacing", "get_status", "list_projects", "get_project", "get_timeline", "resolve_timeline_frame", "list_media_assets", "list_global_media_assets", "list_assets", "wait_for_recording", "wait_for_job"]
@@ -59,8 +59,8 @@ extension AIAssistantTests {
         // Tools that bound their own wait are never turned into jobs.
         let boundedWaits: Set<String> = ["capture_recording_frame", "perform_recording_action", "perform_recording_text", "wait_for_recording", "wait_for_job"]
         // Replacing an existing file (overwrite: true) is destructive too.
-        let destructive: Set<String> = ["perform_recording_action", "perform_recording_text", "delete_project", "delete_clip", "delete_region_effect", "remove_zoom", "set_chapters", "update_settings", "set_zoom_style", "export_project", "assemble_video"]
-        let idempotent: Set<String> = ["update_region_effect", "update_zoom", "trim_clip", "move_clip", "set_transition", "set_clip_audio", "set_image_duration", "perform_recording_action", "perform_recording_text", "rename_project", "delete_project", "list_recording_sources", "set_zoom_style", "update_settings", "set_background_image", "set_background_music", "set_sound_effects"]
+        let destructive: Set<String> = ["edit_voiceover", "perform_recording_action", "perform_recording_text", "delete_project", "delete_clip", "delete_region_effect", "remove_zoom", "set_chapters", "update_settings", "set_zoom_style", "export_project", "assemble_video"]
+        let idempotent: Set<String> = ["set_audio_mix", "update_region_effect", "update_zoom", "trim_clip", "move_clip", "set_transition", "set_clip_audio", "set_image_duration", "perform_recording_action", "perform_recording_text", "rename_project", "delete_project", "list_recording_sources", "set_zoom_style", "update_settings", "set_background_image", "set_background_music", "set_sound_effects"]
         for spec in catalog.tools {
             let name = spec.name
             check(spec.scope == scopes[name], "\(name) scope: \(spec.scope)")
@@ -170,8 +170,8 @@ extension AIAssistantTests {
         let parsed = try JSONSerialization.jsonObject(with: listing)
         check((parsed as? [Any])?.count == mcpV1ToolNames.count && AIJSONValue(jsonObject: parsed) == catalog.descriptors, "the listing survives JSONSerialization")
         // Keep a bounded allowance as the catalog gains frame positioning
-        // alongside media and editing tools.
-        check(listing.count < 65_000, "the listing is compact: \(listing.count) bytes")
+        // alongside media, editing and two voiceover/mix tools.
+        check(listing.count < 70_000, "the listing is compact: \(listing.count) bytes")
 
         // A custom catalog (tests, later tools) builds specs the same way.
         let custom = MCPToolSpec(tool: SetSoundEffectsTool(), title: "Effects", description: String(repeating: "x", count: 70), scope: .project, requiresProjectID: false, annotations: MCPToolAnnotations(readOnly: false))

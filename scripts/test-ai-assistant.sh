@@ -43,6 +43,7 @@ swiftc -parse-as-library -g \
   Sources/FocusStudioAutomation/DemoEditingTools.swift \
   Sources/FocusStudioAutomation/TimelineEditingTools.swift \
   Sources/FocusStudioAutomation/RegionEffectTools.swift \
+  Sources/FocusStudioAutomation/VoiceoverTools.swift \
   Sources/FocusStudioAutomation/MediaLibraryTools.swift \
   Sources/FocusStudioAutomation/AIProjectReport.swift \
   Sources/FocusStudioAutomation/AIAutomationTools.swift \
@@ -62,6 +63,7 @@ swiftc -parse-as-library -g \
   Tests/AIAssistantTests/DemoEditingTests.swift \
   Tests/AIAssistantTests/TimelineEditingTests.swift \
   Tests/AIAssistantTests/RegionEffectToolsTests.swift \
+  Tests/AIAssistantTests/VoiceoverToolsTests.swift \
   Tests/AIAssistantTests/ExportEntitlementTests.swift \
   Tests/AIAssistantTests/MediaLibraryToolsTests.swift \
   Tests/AIAssistantTests/VideoTimelineTests.swift \
