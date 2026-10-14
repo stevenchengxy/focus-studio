@@ -10,9 +10,10 @@ import ts from 'typescript';
 // Run the real SQL against SQLite, matching D1's transactional batch semantics.
 // Only the Cloudflare transport and Stripe HTTPS responses are mocked.
 const temp=await mkdtemp(join(tmpdir(),'focus-backend-'));
+await writeFile(join(temp,'product-access.mjs'),ts.transpileModule(await readFile(new URL('../lib/product-access.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText);
 for(const name of ['primitives','exports','devices','stripe','google-auth']) {
   const source=await readFile(new URL(`../lib/server/${name}.ts`,import.meta.url),'utf8');
-  const js=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText.replaceAll("'./primitives'","'./primitives.mjs'");
+  const js=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText.replaceAll("'./primitives'","'./primitives.mjs'").replaceAll("'../product-access'","'./product-access.mjs'");
   await writeFile(join(temp,`${name}.mjs`),js);
 }
 const primitive=await import(pathToFileURL(join(temp,'primitives.mjs')));
@@ -33,45 +34,46 @@ const rejectCode=(code)=>error=>error?.code===code;
 const env={STRIPE_SECRET_KEY:'fake-test-key',STRIPE_WEBHOOK_SECRET:'fake-signing-secret',STRIPE_MONTHLY_PRICE_ID:'price_monthly',STRIPE_YEARLY_PRICE_ID:'price_yearly'};
 function subscription(status='active',end=99999){return {id:'sub_test',customer:'cus_test',status,items:{data:[{current_period_end:end,price:{id:'price_monthly'}}]}};}
 
-test('one free export cannot be double-reserved by concurrent devices',async()=>{
- const db=database();account(db);const results=await Promise.allSettled(Array.from({length:20},(_,i)=>reserveExport(db,'userA',`job${i}`,'project',100)));
- assert.equal(results.filter(r=>r.status==='fulfilled').length,1);
- assert.ok(results.filter(r=>r.status==='rejected').every(r=>r.reason.code==='export_in_progress'));
- assert.equal(db.raw.prepare("SELECT COUNT(*) n FROM export_jobs WHERE status='reserved'").get().n,1);
+test('free policy allows concurrent unlimited exports with no trial allocation',async()=>{
+ const db=database();account(db);const results=await Promise.all(Array.from({length:20},(_,i)=>reserveExport(db,'userA',`job${i}`,'project',100)));
+ assert.equal(results.length,20);assert.ok(results.every(r=>r.mode==='free'&&r.status==='reserved'));
+ await Promise.all(results.map(r=>updateExport(db,'userA',r.exportId,'commit',101)));
+ const state=await entitlement(db,'userA',102);assert.equal(state.canExport,true);assert.equal(state.exportLimit,null);assert.equal(state.activeExportId,null);assert.ok(state.freeExportsRemaining>1);
+ assert.equal(db.raw.prepare("SELECT COUNT(*) n FROM export_jobs WHERE status='committed'").get().n,20);
 });
-test('failed/cancelled renders release trial; only successful commit consumes it, retry is idempotent',async()=>{
+test('free export retries remain idempotent; canceled jobs cannot publish, completed jobs remain intact',async()=>{
  const db=database();account(db);const first=await reserveExport(db,'userA','cancel','p',100);
  await updateExport(db,'userA',first.exportId,'release',101);
+ await assert.rejects(updateExport(db,'userA',first.exportId,'commit',102),rejectCode('export_released'));
  const second=await reserveExport(db,'userA','success','p',102);
  assert.equal((await reserveExport(db,'userA','success','p',103)).exportId,second.exportId);
  await assert.rejects(reserveExport(db,'userA','success','other',103),rejectCode('idempotency_conflict'));
  await updateExport(db,'userA',second.exportId,'commit',104);await updateExport(db,'userA',second.exportId,'commit',105);
  assert.equal((await updateExport(db,'userA',second.exportId,'release',106)).status,'committed');
- await assert.rejects(reserveExport(db,'userA','again','p',107),rejectCode('subscription_required'));
- assert.equal((await entitlement(db,'userA',107)).freeExportsRemaining,0);
+ assert.equal((await reserveExport(db,'userA','again','p',107)).mode,'free');
 });
-test('expired leases recover quota but cannot later commit or renew',async()=>{
- const db=database();account(db);const old=await reserveExport(db,'userA','old','p',100);
- const next=await reserveExport(db,'userA','new','p',7301);
- await assert.rejects(updateExport(db,'userA',old.exportId,'commit',7302),rejectCode('export_lease_expired'));
- await assert.rejects(updateExport(db,'userA',old.exportId,'renew',7302),rejectCode('export_lease_expired'));
- const renew=await updateExport(db,'userA',next.exportId,'renew',7400);assert.equal(renew.expiresAt,14600);
- await updateExport(db,'userA',next.exportId,'commit',14599);
-});
-test('account boundary hides other users exports',async()=>{
- const db=database();account(db);account(db,'userB');const job=await reserveExport(db,'userA','a','p',100);
- await assert.rejects(updateExport(db,'userB',job.exportId,'commit',101),rejectCode('export_not_found'));
- assert.equal((await reserveExport(db,'userB','a','p',101)).mode,'trial');
-});
-test('paid export does not consume trial; expired or past-due subscriptions do not authorize',async()=>{
+test('old expired trial and paid renders can be recovered without renewed subscriptions',async()=>{
  const db=database();account(db);
- db.raw.prepare('INSERT INTO subscriptions VALUES(?,?,?,?,?,?,?)').run('sub1','userA','active','monthly','price_monthly',1000,100);
- const a=await reserveExport(db,'userA','paidA','p',100);const b=await reserveExport(db,'userA','paidB','p',100);
- assert.equal(a.mode,'subscription');assert.equal(b.mode,'subscription');await updateExport(db,'userA',a.exportId,'commit',101);
- assert.equal((await entitlement(db,'userA',102)).freeExportsRemaining,1);
- db.raw.prepare("UPDATE subscriptions SET status='past_due'").run();
- await assert.rejects(updateExport(db,'userA',b.exportId,'commit',103),rejectCode('subscription_required'));
- assert.equal((await reserveExport(db,'userA','trial','p',103)).mode,'trial');
+ db.raw.prepare("INSERT INTO export_jobs VALUES(?,?,?,?,?,?,?,?,?)").run('oldtrial','userA','oldtrial','p','trial','expired',90,1,null);
+ db.raw.prepare("INSERT INTO export_jobs VALUES(?,?,?,?,?,?,?,?,?)").run('oldpaid','userA','oldpaid','p','subscription','expired',90,1,null);
+ assert.equal((await updateExport(db,'userA','oldtrial','commit',7302)).status,'committed');
+ const renewed=await updateExport(db,'userA','oldpaid','renew',7400);assert.equal(renewed.expiresAt,14600);assert.equal(renewed.mode,'free');
+ assert.equal((await updateExport(db,'userA','oldpaid','commit',14601)).status,'committed');
+});
+test('account boundary still hides other users legacy export receipts',async()=>{
+ const db=database();account(db);account(db,'userB');const job=await reserveExport(db,'userA','a','p',100);
+ for(const action of ['commit','renew','release'])await assert.rejects(updateExport(db,'userB',job.exportId,action,101),rejectCode('export_not_found'));
+ assert.equal((await reserveExport(db,'userB','a','p',101)).mode,'free');
+});
+test('past-due subscriptions and used trials are retained but no longer limit exports',async()=>{
+ const db=database();account(db);
+ db.raw.prepare('INSERT INTO subscriptions VALUES(?,?,?,?,?,?,?)').run('sub1','userA','past_due','monthly','price_monthly',99,100);
+ db.raw.prepare("INSERT INTO export_jobs VALUES(?,?,?,?,?,?,?,?,?)").run('usedtrial','userA','used','p','trial','committed',90,1,2);
+ const before=db.raw.prepare('SELECT * FROM subscriptions').get();
+ const a=await reserveExport(db,'userA','new','p',100);await updateExport(db,'userA',a.exportId,'commit',101);
+ const state=await entitlement(db,'userA',102);assert.equal(state.plan,'free');assert.equal(state.canExport,true);assert.equal(state.subscriptionStatus,'past_due');
+ assert.deepEqual(db.raw.prepare('SELECT * FROM subscriptions').get(),before);
+ assert.equal(db.raw.prepare("SELECT mode FROM export_jobs WHERE id='usedtrial'").get().mode,'trial');
 });
 test('device approval is explicit, short-lived and returns hashed reusable token on delivery retry',async()=>{
  const db=database();account(db);const grant=await createDeviceGrant(db,'https://studio.test',100);
@@ -108,7 +110,7 @@ test('Stripe signature verification rejects tampering and replay beyond five min
  await assert.rejects(primitive.verifyStripeSignature(raw,header,'secret',1301),rejectCode('invalid_signature'));
  await assert.rejects(primitive.verifyStripeSignature(raw,`t=1000,t=1000,v1=${signature}`,'secret',1100),rejectCode('invalid_signature'));
 });
-test('only configured, paid and unexpired Stripe plans authorize',()=>{
+test('legacy subscription history still classifies configured active plans accurately',()=>{
  assert.equal(canonicalSubscriptions([subscription('active')],'a',env,100)[0].active,true);
  assert.equal(canonicalSubscriptions([subscription('trialing')],'a',env,100)[0].active,false);
  assert.equal(canonicalSubscriptions([subscription('active',99)],'a',env,100)[0].active,false);
@@ -121,17 +123,13 @@ test('an older in-flight canonical Stripe response cannot re-enable canceled sub
  globalThis.fetch=async()=>{count++;if(count===1){startedFirst();return new Promise(r=>releaseFirst=()=>r(Response.json({data:[subscription('active')],has_more:false})));}return Response.json({data:[subscription('canceled')],has_more:false});};
  try{const old=synchronizeCustomer(db,env,'cus_test',100);await firstStarted;await synchronizeCustomer(db,env,'cus_test',101);releaseFirst();await assert.rejects(old,rejectCode('sync_in_progress'));assert.equal(db.raw.prepare('SELECT status FROM subscriptions').get().status,'canceled');}finally{globalThis.fetch=previous;}
 });
-test('checkout validates advertised prices and fixes return origin server-side',async()=>{
- const db=database();const acc=account(db,'userA','cus_test');const previous=globalThis.fetch;let sent;
- globalThis.fetch=async(url,options)=>{
-   if(url.includes('subscriptions?'))return Response.json({data:[],has_more:false});
-   if(url.includes('/prices/'))return Response.json({currency:'usd',unit_amount:2900,active:true,recurring:{interval:'month',interval_count:1}});
-   if(url.endsWith('checkout/sessions')){sent=new URLSearchParams(options.body);return Response.json({id:'cs_fake',url:'https://checkout.stripe.com/fake',expires_at:86500});}
-   throw new Error('Unexpected Stripe request');
- };
- try{const result=await createCheckout(db,env,acc,'monthly','https://studio.test',100);assert.equal(result.url,'https://checkout.stripe.com/fake');assert.equal(sent.get('success_url'),'https://studio.test/account?checkout=success');assert.equal(sent.get('line_items[0][price]'),'price_monthly');assert.equal(sent.get('mode'),'subscription');
-   globalThis.fetch=async(url)=>url.includes('subscriptions?')?Response.json({data:[],has_more:false}):Response.json({currency:'usd',unit_amount:9,active:true,recurring:{interval:'month',interval_count:1}});
-   await assert.rejects(createCheckout(db,env,acc,'monthly','https://studio.test',101),rejectCode('invalid_price_configuration'));
+test('checkout is paused with configured keys and cannot create customers or Stripe sessions',async()=>{
+ const db=database();const acc=account(db);const previous=globalThis.fetch;let calls=0;
+ globalThis.fetch=async()=>{calls++;throw new Error('No payment network request is permitted.');};
+ try{
+   for(const plan of ['monthly','yearly'])await assert.rejects(createCheckout(db,env,acc,plan,'https://studio.test',100),rejectCode('billing_paused'));
+   assert.equal(calls,0);assert.equal(db.raw.prepare('SELECT stripe_customer_id FROM accounts').get().stripe_customer_id,null);
+   assert.equal(db.raw.prepare('SELECT COUNT(*) n FROM checkout_sessions').get().n,0);
  }finally{globalThis.fetch=previous;}
 });
 

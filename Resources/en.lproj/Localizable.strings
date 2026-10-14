@@ -1532,3 +1532,11 @@
 "The update service returned HTTP 503." = "The update service returned HTTP 503.";
 "The update service returned HTTP 504." = "The update service returned HTTP 504.";
 "The last update check did not complete. Please try again." = "The last update check did not complete. Please try again.";
+
+"Free access" = "Free access";
+"Record, edit and export without signing in." = "Record, edit and export without signing in.";
+"Unlimited local exports" = "Unlimited local exports";
+"Your projects stay on this Mac. No account or connection is needed to export." = "Your projects stay on this Mac. No account or connection is needed to export.";
+"AI providers may charge separately. Generation always asks for confirmation." = "AI providers may charge separately. Generation always asks for confirmation.";
+"Visit the community" = "Visit the community";
+"Save a previously rendered video to your Mac." = "Save a previously rendered video to your Mac.";

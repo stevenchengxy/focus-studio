@@ -102,9 +102,9 @@ final class StudioModel: ObservableObject {
     let codexAssistant = CodexDirectorService()
     /// LLM provider keys and the default text model for every AI feature.
     let aiGateway = AIGatewayStore()
-    /// Recording and editing remain local; successful exports use this account gate.
+    /// Retains legacy account credentials and export recovery; product exports are free and local.
     let subscription = NativeSubscriptionStore()
-    private let exportAuthorizationProvider: any ExportAuthorizing
+    private let exportAuthorizationProvider: (any ExportAuthorizing)?
     /// The one assistant conversation for the whole app, created on first use.
     /// Its context follows whatever project is open; see ``AIAssistantContext``.
     private(set) lazy var assistantSession: AIAssistantSession = makeAssistantSession()
@@ -210,7 +210,7 @@ final class StudioModel: ObservableObject {
         self.inputMonitoringAccess = inputMonitoringAccess
         self.screenCaptureAccess = screenCaptureAccess
         self.finishCapture = finishCapture
-        self.exportAuthorizationProvider = exportAuthorization ?? subscription.client
+        self.exportAuthorizationProvider = exportAuthorization ?? (ProductAccessPolicy.requiresExportAccount ? subscription.client : nil)
         refreshInteractionTrackingPermission()
         // A capture can fail by itself (the stream stops, the window closes):
         // its attempt then ends as failed, without waiting for Finish or Cancel,

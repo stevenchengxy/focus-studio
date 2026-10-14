@@ -1531,3 +1531,11 @@
 "The update service returned HTTP 503." = "更新服务暂时不可用（HTTP 503），请稍后重试。";
 "The update service returned HTTP 504." = "更新服务暂时不可用（HTTP 504），请稍后重试。";
 "The last update check did not complete. Please try again." = "上次检查未完成，请重试。";
+
+"Free access" = "免费使用";
+"Record, edit and export without signing in." = "无需登录，即可录制、编辑和导出。";
+"Unlimited local exports" = "不限次数，本地导出";
+"Your projects stay on this Mac. No account or connection is needed to export." = "项目保存在这台 Mac 上，导出无需账号或网络。";
+"AI providers may charge separately. Generation always asks for confirmation." = "AI 服务商可能单独收费，生成前会请你确认。";
+"Visit the community" = "访问社区";
+"Save a previously rendered video to your Mac." = "将之前已渲染的视频保存到这台 Mac。";

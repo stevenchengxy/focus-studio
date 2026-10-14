@@ -18,7 +18,7 @@ function externalURL(raw) {
     const url = new URL(raw);
     // Authentication and billing stay in the user's normal browser. No arbitrary
     // protocols, hosts, userinfo, or local files may reach shell.openExternal.
-    return trustedURL(raw) && ['/account', '/account/', '/', '/downloads', '/privacy', '/terms'].includes(url.pathname);
+    return trustedURL(raw) && ['/account', '/account/', '/community', '/community/', '/help', '/', '/downloads', '/privacy', '/terms'].includes(url.pathname);
   } catch { return false; }
 }
 

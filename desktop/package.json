@@ -1,6 +1,6 @@
 {
   "name": "focus-studio-desktop",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Installable screen recording and demo editing companion for Focus Studio",
   "desktopName": "focus-studio-desktop.desktop",
   "private": true,
@@ -15,7 +15,8 @@
     "dist:windows": "electron-builder --win nsis --x64 --publish never",
     "dist:linux": "electron-builder --linux AppImage deb --x64 --publish never",
     "pack:linux": "electron-builder --linux --x64 --dir --publish never",
-    "checksums": "node scripts/checksums.cjs"
+    "checksums": "node scripts/checksums.cjs",
+    "test:studio": "electron test/studio-free-smoke.cjs"
   },
   "devDependencies": {
     "@electron/fuses": "2.1.3",

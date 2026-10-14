@@ -8,7 +8,7 @@ Focus Studio 是一个面向各类产品的原生 macOS Demo 录制与编辑器�
 
 新用户可按 [Codex 连接指南](docs/CODEX-SETUP.md) 分别配置应用内助手与外部 MCP 控制；生成视频或图片前按 [AI 模型配置](docs/AI-MODEL-SETUP.md) 设置 Ark、Gemini/Veo 等提供商。录制到剪辑的步骤见 [Demo 工作流](docs/AI-DEMO-WORKFLOW.md)，产品宣传镜头的构思见 [AI Promo Skill](skills/focus-ai-promo/SKILL.md)。
 
-产品网站：[Focus Studio](https://focus-studio.stevenchengxy19.chatgpt.site/) · [账户与套餐](https://focus-studio.stevenchengxy19.chatgpt.site/account)。六种局部特效、账户配对、免费导出与中断恢复的使用说明见 [经典特效与账户导出](docs/CLASSIC-EFFECTS-AND-ACCOUNTS.md)。
+产品网站：[Focus Studio](https://focus-studio.stevenchengxy19.chatgpt.site/) · [账户与社区](https://focus-studio.stevenchengxy19.chatgpt.site/account)。目前录制、剪辑与导出免费开放；本地导出无需登录或联网。可通过 ChatGPT 登录[社区](https://focus-studio.stevenchengxy19.chatgpt.site/community)，选择分享产品 Demo 或 AI 素材，本地项目不会自动上传。六种局部特效与编辑功能的使用说明见 [经典特效与账户导出](docs/CLASSIC-EFFECTS-AND-ACCOUNTS.md)。
 
 ## 已实现
 

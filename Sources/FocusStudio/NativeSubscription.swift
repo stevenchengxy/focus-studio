@@ -104,6 +104,7 @@ actor NativeSubscriptionClient: ExportAuthorizing {
     }
 
     func reserve(projectID: String, idempotencyKey: UUID) async throws -> ExportReservation {
+        if !ProductAccessPolicy.requiresExportAccount { return ExportReservation(id: idempotencyKey.uuidString) }
         guard reservingProjects.insert(projectID).inserted else {
             throw SubscriptionServiceError(code: "export_in_progress", message: "Another export is already in progress. Try again after it finishes.")
         }
@@ -122,9 +123,13 @@ actor NativeSubscriptionClient: ExportAuthorizing {
         return ExportReservation(id: reservation.exportId)
     }
     func renew(_ reservation: ExportReservation) async throws {
+        if !ProductAccessPolicy.requiresExportAccount { return }
         _ = try await retry { try await self.request("exports/\(reservation.id)/renew", body: [:]) }
     }
     func commit(_ reservation: ExportReservation) async throws {
+        // Also recovers renders staged by older versions without requiring
+        // an account, a network connection, or a still-valid billing lease.
+        if !ProductAccessPolicy.requiresExportAccount { return }
         let response = try await retry { try await self.request("exports/\(reservation.id)/commit", body: [:]) }
         try Self.validateCommitReceipt(response.data, reservation: reservation)
     }
@@ -139,6 +144,7 @@ actor NativeSubscriptionClient: ExportAuthorizing {
         }
     }
     func release(_ reservation: ExportReservation) async {
+        if !ProductAccessPolicy.requiresExportAccount { return }
         _ = try? await retry { try await self.request("exports/\(reservation.id)/release", body: [:]) }
     }
     private func retry<T>(_ action: () async throws -> T) async throws -> T {
@@ -200,6 +206,11 @@ final class NativeSubscriptionStore: ObservableObject {
 
     func refresh() async {
         guard !isWorking else { return }
+        guard ProductAccessPolicy.requiresExportAccount else {
+            recoveries = ExportRecoveryStore.records()
+            error = nil
+            return
+        }
         isWorking = true; defer { isWorking = false }
         do {
             if try await client.hasToken() { account = try await client.account() }
@@ -247,7 +258,7 @@ final class NativeSubscriptionStore: ObservableObject {
             try await ExportRecoveryStore.recover(record, authorizer: client, to: destination)
             error = nil
             NSWorkspace.shared.activateFileViewerSelecting([destination])
-            account = try await client.account()
+            if ProductAccessPolicy.requiresExportAccount { account = try await client.account() }
         } catch { self.error = error.localizedDescription }
     }
     func openAccount() { NSWorkspace.shared.open(NativeSubscriptionClient.serviceURL.appendingPathComponent("account")) }

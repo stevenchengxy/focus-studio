@@ -15,6 +15,20 @@
       "when": 1791909188922,
       "tag": "0001_certain_thundra",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1791984559182,
+      "tag": "0002_flawless_vulture",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1791985737391,
+      "tag": "0003_whole_rumiko_fujikawa",
+      "breakpoints": true
     }
   ]
 }

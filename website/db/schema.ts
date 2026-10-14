@@ -45,3 +45,29 @@ export const oauthRequests = sqliteTable('oauth_requests', {
 export const webSessions = sqliteTable('web_sessions', {
   hash: text('hash').primaryKey(), accountId: text('account_id').notNull().references(() => accounts.id), expiresAt: integer('expires_at').notNull(),
 });
+
+// Community assets stay private in R2; every read checks publication/ownership.
+export const communityPosts = sqliteTable('community_posts', {
+  id: text('id').primaryKey(), ownerId: text('owner_id').notNull(),
+  title: text('title').notNull(), description: text('description').notNull().default(''),
+  caption: text('caption').notNull().default(''), productUrl: text('product_url'),
+  category: text('category').notNull(), authorName: text('author_name').notNull(),
+  status: text('status').notNull().default('draft'), license: text('license'),
+  filename: text('filename').notNull(), mimeType: text('mime_type').notNull(),
+  sizeBytes: integer('size_bytes').notNull(), mediaState: text('media_state').notNull().default('pending'),
+  posterKey: text('poster_key'), posterBytes: integer('poster_bytes'), posterToken: text('poster_token'), posterExpiresAt: integer('poster_expires_at'),
+  objectKey: text('object_key'), uploadToken: text('upload_token'), uploadExpiresAt: integer('upload_expires_at'),
+  createdAt: integer('created_at').notNull(), updatedAt: integer('updated_at').notNull(),
+  uploadedAt: integer('uploaded_at'), publishedAt: integer('published_at'),
+  licenseAcceptedAt: integer('license_accepted_at'), deletedAt: integer('deleted_at'),
+  moderationHold: integer('moderation_hold').notNull().default(0), moderationReason: text('moderation_reason'),
+  moderatedAt: integer('moderated_at'), moderatedBy: text('moderated_by'),
+}, t => [
+  index('community_public_feed').on(t.status, t.publishedAt, t.id),
+  index('community_owner_items').on(t.ownerId, t.updatedAt),
+]);
+export const communityReports = sqliteTable('community_reports', {
+  id: text('id').primaryKey(), postId: text('post_id').notNull().references(() => communityPosts.id, {onDelete: 'cascade'}),
+  reporterId: text('reporter_id').notNull(), reason: text('reason').notNull(),
+  details: text('details').notNull().default(''), createdAt: integer('created_at').notNull(),
+}, t => [uniqueIndex('community_one_report_per_user').on(t.postId, t.reporterId)]);

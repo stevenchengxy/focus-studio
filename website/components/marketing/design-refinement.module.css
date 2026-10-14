@@ -71,3 +71,21 @@
 @media (max-width: 850px) { .heroAtmosphere { height: 400px; width: 110vw; } .heroSculpture { right: -42px; top: -10px; --focus-sculpture-size: 205px; width: 205px; height: 205px; opacity: .48; } .compositionFrame { left: -35px; top: 67px; width: 145px; height: 190px; opacity: .5; } .focusThread { margin-top: 42px; } .refinedSite :global(.possibilities) { padding-top: 60px; } .refinedSite :global(.editor-proof h2) { margin-bottom: 53px; } }
 @media (max-width: 600px) { .heroAtmosphere { height: 330px; width: 100vw; } .heroSculpture { right: -29px; top: -31px; --focus-sculpture-size: 128px; width: 128px; height: 128px; opacity: .42; } .compositionFrame { display: none; } .orbitDot { display: none; } .lightField { background: radial-gradient(ellipse at 100% 0%, var(--atmosphere-lilac, #e1d8f355), transparent 65%); } .focusThread { width: 65%; gap: 11px; margin-top: 36px; } .refinedSite :global(.possibilities) { padding-top: 43px; } .refinedSite :global(.editor-proof h2) { margin-bottom: 44px; } .editorContours { inset: -10px 10px 10px; border-radius: 14px; } .editorContours::before { inset: -10px 10px 10px; border-radius: 18px; } .editorContours::after { inset: -35px -25px; } .closingArt { --focus-sculpture-size: 140px; width: 140px; height: 133px; margin-bottom: 20px; } }
 @media (prefers-reduced-motion: reduce) { .compositionFrame, .focusThread > div > i { animation: none; } .refinedSite :global(.button > svg), .refinedSite :global(.text-link > svg), .refinedSite :global(.brand-mark), .refinedSite :global(.main-nav a)::after { transition: none; } }
+/* Language controls keep their space without squeezing the product wordmark. */
+.refinedSite :global(.nav-account) { display: none; }
+:global(html[data-locale="zh"]) .refinedSite :global(h1), :global(html[data-locale="zh"]) .refinedSite :global(h2), :global(html[data-locale="zh"]) .refinedSite :global(h3) { letter-spacing: -.035em; line-height: 1.2; }
+:global(html[data-locale="zh"]) .refinedSite :global(.serif-word) { font-style: normal; }
+@media (max-width: 850px) {
+  .refinedSite :global(.mobile-menu) { display: grid; place-items: center; color: var(--ink); }
+  .refinedSite :global(.mobile-menu svg) { width: 20px; height: 20px; }
+  .refinedSite :global(.main-nav.is-open) { display: flex; position: absolute; top: 73px; left: 0; right: 0; flex-direction: column; padding: 22px 28px 28px; margin: 0; background: var(--paper); border-bottom: 1px solid var(--line); gap: 23px; font-size: 14px; box-shadow: 0 10px 15px #1e14170a; }
+  .refinedSite :global(.nav-account) { display: inline; }
+}
+@media (max-width: 600px) {
+  .refinedSite :global(.brand) { font-size: 17px; gap: 7px; letter-spacing: -.5px; }
+  .refinedSite :global(.brand-icon) { width: 29px; height: 29px; }
+  .refinedSite :global(.nav-actions) { gap: 8px; }
+  .refinedSite :global(.nav-actions .sign-in) { display: none; }
+  .refinedSite :global(.main-nav.is-open) { top: 68px; }
+  .refinedSite :global(.hero-note span) { display: block; border: 0; margin: 7px 0 0; padding: 0; }
+}

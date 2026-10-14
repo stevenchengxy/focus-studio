@@ -9,6 +9,7 @@ test('trust is exact HTTPS origin and Studio path, not hostname prefixes or user
     `${p.SITE_ORIGIN.replace('https:', 'http:')}/studio`, `${p.SITE_ORIGIN}:444/studio`,
     `https://user@${new URL(p.SITE_ORIGIN).host}/studio`, `${p.SITE_ORIGIN}/account`]) assert.equal(p.trustedURL(url, true), false, url);
   assert.equal(p.externalURL(`${p.SITE_ORIGIN}/account?code=123456-ABCDEF`), true);
+  assert.equal(p.externalURL(`${p.SITE_ORIGIN}/community`), true);
   for (const url of ['https://evil.test', 'ms-settings:privacy', `${p.SITE_ORIGIN}/api/anything`]) assert.equal(p.externalURL(url), false);
 });
 test('only the current top-level Studio frame can invoke privileged IPC', () => {

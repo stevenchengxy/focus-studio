@@ -1,3 +1,7 @@
+# Current access policy
+
+As of 1.14.4, Focus Studio creation and export are free. Native exports run locally without account/network authorization. New Stripe checkout and portal creation are paused even if credentials are configured. Historical billing data is retained. The sections below describe the retained subscription implementation for a possible future explicit reactivation, not current user-facing policy. See `community.md` for ChatGPT community identity and sharing.
+
 # Accounts, subscriptions and export entitlement
 
 This website preserves the Sites trusted ChatGPT identity integration and includes an optional Google OpenID Connect adapter requested for this product. It uses a D1 database, Stripe Checkout and customer portal. No card details are handled by Focus Studio. Sites identity headers must **only** be trusted behind the Sites identity proxy. Do not expose this Worker directly on an untrusted host.
