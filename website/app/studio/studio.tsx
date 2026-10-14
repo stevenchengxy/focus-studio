@@ -149,6 +149,13 @@ export function BrowserStudio() {
   const fetchAccount=useCallback(() => {studioRequest("/api/account").then(r=>r.json()).then(data=>{if(mounted.current)setAccount(data as Account);}).catch(()=>{if(mounted.current)setAccount({authenticated:false});});},[]);
 
   useEffect(() => {
+    window.focusDesktop?.setActivity?.({
+      recording: startingCapture || phase === 'recording' || phase === 'paused' || voiceRecording || voiceBusy,
+      exporting: phase === 'exporting' || playing,
+    });
+  }, [startingCapture, phase, voiceRecording, voiceBusy, playing]);
+
+  useEffect(() => {
     mounted.current=true;fetchAccount();
     const desktopBridge=window.focusDesktop;desktopBridge?.getCapabilities().then(value=>{if(mounted.current){setDesktop(value);if(value.systemAudio==='unavailable')setIncludeAudio(false);}}).catch(()=>{});const unsubscribeAccount=desktopBridge?.onAccountChanged(fetchAccount);
     void refreshMicrophones();

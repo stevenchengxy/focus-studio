@@ -6,6 +6,7 @@ interface DesktopBridge {
   startSignIn():Promise<{userCode:string;expiresIn:number}>;
   signOut():Promise<void>;
   onAccountChanged(fn:()=>void):()=>void;
+  setActivity?(state:{recording:boolean;exporting:boolean}):void;
 }
 declare global {interface Window {focusDesktop?:DesktopBridge;}}
 export async function studioRequest(path:string,body?:unknown){

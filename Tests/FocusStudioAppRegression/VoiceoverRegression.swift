@@ -38,6 +38,23 @@ enum VoiceoverRegression {
         let audio = settings["productDemoAudio"] as! [String: Any]
         let path = (audio["voiceovers"] as! [[String: Any]])[0]["filePath"] as! String
         precondition(!path.hasPrefix("/"), "Stored narration is portable and project-owned")
+        let staged = try await store.importVoiceover(from: audioURL, for: loaded)
+        await store.discardImportedVoiceovers([voice, staged], for: loaded)
+        precondition(FileManager.default.fileExists(atPath: voice.filePath)
+                     && !FileManager.default.fileExists(atPath: staged.filePath),
+                     "Rollback removes only uncommitted narration while retaining project references")
+
+        let deleted = RecordingProject(title: "Deleted during import", sourceVideoPath: "raw.mp4", duration: 4,
+                                       sourceWidth: 640, sourceHeight: 360)
+        try await store.save(deleted)
+        let deletedFolder = directory.appendingPathComponent("Projects").appendingPathComponent(deleted.id.uuidString)
+        try FileManager.default.removeItem(at: deletedFolder)
+        do {
+            _ = try await store.importVoiceover(from: audioURL, for: deleted)
+            preconditionFailure("An import must not resurrect a deleted project")
+        } catch ProjectStore.StoreError.projectNotFound { }
+        precondition(!FileManager.default.fileExists(atPath: deletedFolder.path),
+                     "A stale import leaves no orphan folder after project deletion")
 
         let working = try await store.createVideoEditingCopy(from: loaded, edited: loaded, title: "Voiceover working copy")
         let copied = working.settings.resolvedProductDemoAudio.voiceovers![0]

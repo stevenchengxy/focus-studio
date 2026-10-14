@@ -117,6 +117,7 @@ struct InstallationSettingsView: View {
 
     var body: some View {
         Form {
+            AppUpdateSettingsSection()
             Section("This copy") {
                 LabeledContent("Version", value: installation.current.map { "\($0.release.version) (\($0.release.build))" } ?? "—")
                 Text(verbatim: Bundle.main.bundleURL.path).font(.caption).textSelection(.enabled)
@@ -154,8 +155,7 @@ struct InstallationSettingsView: View {
                     Text(verbatim: backup).font(.caption).textSelection(.enabled)
                 }
             }
-            Section("Updates and permissions") {
-                Text("Open a newer trusted release, then use its installation action. Automatic online updates are not enabled.")
+            Section("Installation and permissions") {
                 Text("Projects and credentials stay in your user Library. Other app copies are never deleted automatically.")
                 Text("Local builds are not Apple-notarized. Moving or rebuilding an ad-hoc signed app may require granting macOS permissions again.")
                 Text("After opening the installed copy, quit the older window yourself and replace any old Dock shortcut with the app in Applications.")

@@ -239,7 +239,9 @@ actor ProjectStore {
         let duration = try await track.load(.timeRange).duration.seconds
         guard duration.isFinite, duration >= 0.02 else { throw StoreError.invalidAudio }
         let id = UUID()
-        let path = try copyAudioAsset(from: sourceURL, into: projectDirectory(for: project.id),
+        // AVFoundation loading above yields. The project may have been deleted
+        // meanwhile; never recreate its directory for an orphaned import.
+        let path = try copyAudioAsset(from: sourceURL, into: validatedProjectDirectory(for: project.id),
                                      stem: "voiceover-" + id.uuidString.lowercased()).path
         return VoiceoverClip(id: id, title: sourceURL.deletingPathExtension().lastPathComponent,
                              filePath: path, sourceDuration: duration)
@@ -256,6 +258,20 @@ actor ProjectStore {
             into: directory,
             stem: "background-music-\(UUID().uuidString.lowercased())"
         ).path
+    }
+
+    /// Only undo newly imported, unreferenced narration. Never follows a stored path outside this project.
+    func discardImportedVoiceovers(_ clips: [VoiceoverClip], for project: RecordingProject) {
+        guard let directory = try? validatedProjectDirectory(for: project.id) else { return }
+        let referenced = Set((project.settings.resolvedProductDemoAudio.voiceovers ?? []).map(\.id))
+        for clip in clips where !referenced.contains(clip.id) {
+            let url = URL(fileURLWithPath: clip.filePath).standardizedFileURL
+            guard url.deletingLastPathComponent().path == directory.standardizedFileURL.path,
+                  url.resolvingSymlinksInPath().deletingLastPathComponent().path == directory.resolvingSymlinksInPath().path,
+                  url.deletingPathExtension().lastPathComponent == "voiceover-" + clip.id.uuidString.lowercased(),
+                  (try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])).map({ $0.isRegularFile == true && $0.isSymbolicLink != true }) == true else { continue }
+            try? fileManager.removeItem(at: url)
+        }
     }
 
     func importBackgroundImage(from sourceURL: URL, for project: RecordingProject) throws -> String {

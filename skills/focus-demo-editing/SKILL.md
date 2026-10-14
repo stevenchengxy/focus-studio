@@ -1,13 +1,13 @@
 ---
 name: focus-demo-editing
-description: Record and finish a product demo with Codex and Focus Studio, or edit an existing take. Use for clipping, splitting, trimming and reordering footage; importing video and images into the native media library; removing slow AI waits; adjusting zooms, sound and transitions; then previewing and exporting while preserving the original project.
+description: Record and finish a product demo with Codex and Focus Studio, or edit an existing take. Use for clipping, splitting, trimming and reordering footage; importing video and images into the native media library; removing slow AI waits; adjusting zooms, narration, captions, sound and transitions; then previewing and exporting while preserving the original project.
 ---
 
 # Focus Studio demo workflow
 
 Turn the user's recording goal into a finished, editable demo through Focus Studio's MCP tools. The result is
 an original take, a separate edited project, a small workflow report, and the requested MP4. No Ark account or
-paid image/video generation is needed.
+paid image/video generation is needed. AI narration is optional and uses a separately configured speech service with approval in Focus Studio.
 
 For recording, read [the recording guide](../focus-studio-mcp/SKILL.md). For native timeline, audio and zoom parameters and
 receipts, read [editing-tools.md](references/editing-tools.md). Use the currently connected tools' schemas;
@@ -40,7 +40,7 @@ reversible edits. Honor the app's actual recording/connection prompts and the us
    and leave enough reading time for the content shown. Use a wider shot when a long response extends outside
    the zoomed area. Global zoom style controls apply to the whole project and can regenerate automatic zooms;
    make global changes before individual adjustments, then inspect the resulting zoom IDs again.
-5. **Finish sound and joins.** Use `set_transition` on an outgoing clip to choose a cut, fade to black or flash
+5. **Finish sound and joins.** If narration is requested, follow the [narrated-demo workflow](#ai-narration-and-captions) below after the picture edit. Use `set_transition` on an outgoing clip to choose a cut, fade to black or flash
    and set its duration. Use `set_clip_audio` to mute or adjust that clip's source sound; background music and
    click/zoom sounds are separate project controls. Let visual effects serve the demonstration rather than
    putting one at every cut. Preview both sides of edited joins and listen where sound matters.
@@ -89,6 +89,33 @@ Native Focus Studio supports extra video/image clips, including simple still tit
 multi-layer compositing, complex typography, crossfades or a separate marketing assembly, continue with
 [product-demo-composer](../product-demo-composer/SKILL.md) after the native camera edit. Its export has cursor
 and zooms baked in; retain the native project for future edits.
+
+## AI narration and captions
+
+For a demo with spoken explanation, keep the source take and work on its edited copy. Use the
+[narration tool guide](../focus-studio-mcp/SKILL.md#narrated-demos-through-codex) for the exact tool contract.
+
+- Inspect `list_speech_models` first. It reports configured values, not successful synthesis. Missing
+  credentials belong in **Settings › AI models › AI narration**, never in chat or MCP arguments. Keep
+  the user's provider and voice choices; the product being demonstrated can be any app or website.
+- Finish picture cuts and zooms before generating speech. Read the final timeline, write concise,
+  truthful sentences, and call `generate_voiceover` with the working `project_id` and short
+  `segments: [{text, start_time}]` in output seconds. Leave room for each spoken sentence. Optional
+  `model`, `voice`, `speed` and `add_captions` control the selected service; captions default on.
+- Let the actual Focus Studio approval dialog present the provider, voice and script before paid
+  requests. Existing permission to control the app does not bypass that dialog. A failure with
+  `requests_sent > 0`, or an uncertain response after synthesis starts, must not trigger an automatic
+  retry: usage may already have been charged. Inspect the result and resolve another paid attempt
+  with the user before generating again.
+- Read `get_project` and the generation receipt. Sentence captions use measured audio duration,
+  **not word-level alignment**. Existing captions and narration are preserved; collisions and
+  overflow are errors, not permission to delete them. Use `edit_voiceover` for timing, trims,
+  volume and fades; use `set_audio_mix` to balance source sound and lower music under speech.
+  Recheck alignment if the picture is edited afterward.
+- Inspect rendered caption boundaries with `capture_frame`, then play a draft export to check speech,
+  music, cuts and readability together. Verify audio exists in the final `export_project` result.
+  Add the provider/model/voice, generated clip IDs, measured timings and actual listening checks to
+  `workflow.json`; never store credentials there.
 
 ## Local focus and floating cards
 

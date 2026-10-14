@@ -17,7 +17,7 @@ export function installerFor(platform: string, configured?: string) {
       // Download proxy accepts only our published GitHub assets, never arbitrary URLs.
       if (candidate.protocol === 'https:' && candidate.hostname === 'github.com' && !candidate.username && !candidate.password &&
           candidate.pathname.startsWith('/stevenchengxy/focus-studio/releases/download/') &&
-          candidate.pathname.endsWith(installer.suffix)) url = candidate.href;
+          candidate.pathname.endsWith(installer.suffix)) { decodeURIComponent(candidate.pathname); url = candidate.href; }
     } catch { /* use the verified installer */ }
   }
   return { ...installer, url, filename: decodeURIComponent(new URL(url).pathname.split('/').at(-1)!) };
@@ -30,9 +30,21 @@ export async function installerResponse(request: Request, platform: string, conf
   if (!installer) return new Response('Unknown platform', { status: 404 });
   const requestHeaders = new Headers({ Accept: 'application/octet-stream', 'User-Agent': 'Focus-Studio-Downloads' });
   const range = request.headers.get('range');
-  if (range && /^bytes=\d*-\d*$/.test(range)) requestHeaders.set('Range', range);
+  const validRange = range && /^bytes=(?:\d+-\d*|-\d+)$/.test(range);
+  if (validRange) requestHeaders.set('Range', range);
+  const ifRange = request.headers.get('if-range');
+  if (validRange && ifRange) requestHeaders.set('If-Range', ifRange);
   try {
     const response = await fetcher(installer.url, { method: request.method === 'HEAD' ? 'HEAD' : 'GET', headers: requestHeaders, redirect: 'follow' });
+    if (response.status === 416) {
+      await response.body?.cancel();
+      const headers = new Headers({ 'Cache-Control': 'no-store', 'Accept-Ranges': 'bytes' });
+      const contentRange = response.headers.get('content-range');
+      if (contentRange && /^bytes \*\/\d+$/.test(contentRange)) headers.set('Content-Range', contentRange);
+      const etag = response.headers.get('etag');
+      if (etag) headers.set('ETag', etag);
+      return new Response(null, { status: 416, headers });
+    }
     const type = response.headers.get('content-type') || '';
     if ((response.status !== 200 && response.status !== 206) || /text\/|json|xml/i.test(type) || (request.method !== 'HEAD' && !response.body)) {
       await response.body?.cancel();

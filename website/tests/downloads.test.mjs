@@ -30,3 +30,17 @@ test('HTML errors never masquerade as installer downloads', async () => {
     assert.equal(response.headers.get('content-disposition'),null);
   }
 });
+test('unsatisfiable resume range keeps upstream416 and total size',async()=>{
+  const result=await installerResponse(new Request('https://studio.test/api/download/mac',{headers:{Range:'bytes=100-'}}),'mac',undefined,async()=>new Response(null,{status:416,headers:{'Content-Range':'bytes */100','ETag':'"release-a"'}}));
+  assert.equal(result.status,416);
+  assert.equal(result.headers.get('content-range'),'bytes */100');
+  assert.equal(result.headers.get('etag'),'"release-a"');
+  assert.equal(result.headers.get('content-disposition'),null);
+});
+test('invalid range syntax is not forwarded to installer storage',async()=>{
+  const result=await installerResponse(new Request('https://studio.test/api/download/mac',{headers:{Range:'bytes=-','If-Range':'"wrong"'}}),'mac',undefined,async(url,options)=>{
+    assert.equal(options.headers.get('range'),null); assert.equal(options.headers.get('if-range'),null);
+    return new Response(new Uint8Array([1]),{headers:{'Content-Type':'application/octet-stream'}});
+  });
+  assert.equal(result.status,200);
+});

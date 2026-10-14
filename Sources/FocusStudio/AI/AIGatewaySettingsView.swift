@@ -6,23 +6,35 @@ import SwiftUI
 struct AIGatewaySettingsView: View {
     @ObservedObject var store: AIGatewayStore
     @State private var selectedKind: AIProviderKind = .openAI
+    @State private var showsNarration = false
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(spacing: 10) {
-                defaultModelBar
-                assistantBrainBar
-                mediaGenerationBar
+            Picker("AI service", selection: $showsNarration) {
+                Text("Text and video").tag(false)
+                Text("AI narration").tag(true)
             }
-            .padding(.horizontal, 18)
+            .pickerStyle(.segmented)
+            .frame(width: 300)
             .padding(.vertical, 12)
-            Divider()
-            HStack(spacing: 0) {
-                providerList
-                    .frame(width: 190)
+            .accessibilityIdentifier("ai.serviceTab")
+            if showsNarration {
+                AISpeechSettingsView(store: store)
+            } else {
+                VStack(spacing: 10) {
+                    defaultModelBar
+                    assistantBrainBar
+                    mediaGenerationBar
+                }
+                .padding(.horizontal, 18)
+                .padding(.bottom, 12)
                 Divider()
-                AIProviderDetailView(store: store, kind: selectedKind)
-                    .id(selectedKind)
+                HStack(spacing: 0) {
+                    providerList.frame(width: 190)
+                    Divider()
+                    AIProviderDetailView(store: store, kind: selectedKind)
+                        .id(selectedKind)
+                }
             }
         }
         .frame(width: 700, height: 650)
@@ -196,6 +208,171 @@ struct AIGatewaySettingsView: View {
         case .needsTest: return "Not tested"
         case .unconfigured: return "No API key"
         }
+    }
+}
+
+/// Narration uses its own provider and key, irrespective of the assistant brain.
+private struct AISpeechSettingsView: View {
+    @ObservedObject var store: AIGatewayStore
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                HStack(spacing: 12) {
+                    Image(systemName: "waveform")
+                        .foregroundStyle(StudioTheme.purple)
+                    Text("AI narration").font(.system(size: 17, weight: .semibold))
+                    Spacer()
+                    Picker("Voice provider", selection: $store.preferredSpeechProvider) {
+                        ForEach(SpeechProviderKind.allCases, id: \.self) { provider in
+                            Text(verbatim: provider.title).tag(provider)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 240)
+                    .accessibilityIdentifier("ai.speech.provider")
+                }
+                AISpeechProviderDetailView(store: store, provider: store.preferredSpeechProvider)
+                    .id(store.preferredSpeechProvider)
+            }
+            .padding(22)
+        }
+    }
+}
+
+private struct AISpeechProviderDetailView: View {
+    @ObservedObject var store: AIGatewayStore
+    let provider: SpeechProviderKind
+    @State private var keyDraft = ""
+    @State private var keyMessage: String?
+    @State private var showsAdvanced = false
+
+    private var configuration: AISpeechProviderConfiguration { store.speechConfiguration(for: provider) }
+    private var hasKey: Bool { store.speechProvidersWithKeys.contains(provider) }
+    private var isTesting: Bool { store.testingSpeechProviders.contains(provider) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 18) {
+                GridRow {
+                    fieldLabel("API key")
+                    HStack(spacing: 8) {
+                        SecureField("Narration API key", text: $keyDraft,
+                                    prompt: Text(LocalizedStringKey(hasKey ? "Key saved" : provider == .openAICompatible ? "Optional for a local service" : "Paste API key")))
+                            .textFieldStyle(.roundedBorder)
+                            .labelsHidden()
+                            .onSubmit(saveKey)
+                            .accessibilityIdentifier("ai.speech.apiKey")
+                        Button("Save", action: saveKey)
+                            .disabled(keyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        if hasKey {
+                            Button("Remove") {
+                                keyDraft = ""
+                                do { try store.setSpeechAPIKey("", for: provider); keyMessage = nil }
+                                catch { keyMessage = "Could not remove the saved key." }
+                            }
+                        }
+                    }
+                }
+                GridRow {
+                    fieldLabel("Model")
+                    Picker("Narration model", selection: modelBinding) {
+                        ForEach(store.speechModelChoices, id: \.self) { model in
+                            Text(verbatim: model).tag(model)
+                        }
+                    }
+                    .labelsHidden()
+                    .accessibilityIdentifier("ai.speech.model")
+                }
+                GridRow {
+                    fieldLabel("Voice")
+                    Picker("Narration voice", selection: voiceBinding) {
+                        ForEach(store.speechVoiceChoices, id: \.self) { voice in
+                            Text(verbatim: voice).tag(voice)
+                        }
+                    }
+                    .labelsHidden()
+                    .accessibilityIdentifier("ai.speech.voice")
+                }
+            }
+            .font(.system(size: 13))
+
+            DisclosureGroup("Advanced", isExpanded: $showsAdvanced) {
+                Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
+                    GridRow {
+                        fieldLabel("Base URL")
+                        TextField("Base URL", text: baseURLBinding,
+                                  prompt: Text(verbatim: provider.defaultBaseURL.isEmpty ? "https://voice.example/v1" : provider.defaultBaseURL))
+                            .accessibilityIdentifier("ai.speech.baseURL")
+                    }
+                    GridRow {
+                        fieldLabel("Model ID")
+                        TextField("Custom model ID", text: modelBinding)
+                            .accessibilityIdentifier("ai.speech.customModel")
+                    }
+                    GridRow {
+                        fieldLabel("Voice ID")
+                        TextField("Custom voice ID", text: voiceBinding)
+                            .accessibilityIdentifier("ai.speech.customVoice")
+                    }
+                }
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12, design: .monospaced))
+                .padding(.top, 12)
+            }
+            .font(.system(size: 13))
+
+            Divider()
+            HStack(alignment: .top, spacing: 12) {
+                Button("Check connection") { Task { await store.testSpeech(provider) } }
+                    .disabled(isTesting || (!hasKey && provider != .openAICompatible))
+                    .accessibilityIdentifier("ai.speech.test")
+                if isTesting { ProgressView().controlSize(.small) }
+                Text(verbatim: L10n.tr(keyMessage ?? statusMessage))
+                    .font(.system(size: 12))
+                    .foregroundStyle(keyMessage != nil || configuration.lastTestState == .failed
+                                     ? StudioTheme.warning : StudioTheme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                Spacer(minLength: 0)
+            }
+            Text("Codex can turn your script into narration and captions. Generation asks for confirmation before using paid credits.")
+                .font(.system(size: 12))
+                .foregroundStyle(StudioTheme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .onAppear { showsAdvanced = provider == .openAICompatible || !configuration.baseURLOverride.isEmpty }
+        .onDisappear { keyDraft = "" }
+    }
+
+    private var statusMessage: String {
+        if isTesting { return "Checking credentials without generating audio…" }
+        return configuration.lastTestSummary ?? "Checks your key without generating audio."
+    }
+    private func fieldLabel(_ value: LocalizedStringKey) -> some View {
+        Text(value).foregroundStyle(StudioTheme.secondaryText).gridColumnAlignment(.trailing)
+    }
+    private var modelBinding: Binding<String> {
+        Binding(get: { configuration.effectiveModelID }, set: { value in
+            store.updateSpeechConfiguration(provider) { $0.modelID = value }
+        })
+    }
+    private var voiceBinding: Binding<String> {
+        Binding(get: { configuration.effectiveVoiceID }, set: { value in
+            store.updateSpeechConfiguration(provider) { $0.voiceID = value }
+        })
+    }
+    private var baseURLBinding: Binding<String> {
+        Binding(get: { configuration.baseURLOverride }, set: { value in
+            store.updateSpeechConfiguration(provider) { $0.baseURLOverride = value }
+        })
+    }
+    private func saveKey() {
+        let value = keyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
+        keyDraft = ""
+        do { try store.setSpeechAPIKey(value, for: provider); keyMessage = nil }
+        catch { keyMessage = "Could not save the key. Please try again." }
     }
 }
 

@@ -16,6 +16,7 @@ struct AIGatewayTests {
         try await storeTesting()
         await mediaModelSelections()
         await geminiMediaModels()
+        try await speechSettings()
 do {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent("FocusStudioSecrets-\(UUID().uuidString)", isDirectory: true)
     let fileURL = directory.appendingPathComponent("secrets.json")
@@ -294,6 +295,8 @@ do {
               "lenient decoding of older payloads")
         check(legacy.preferredVideoModelID == AIGatewayStore.recommendedVideoModelID,
               "old preference payload gains a reviewable Seedance choice")
+        check(legacy.preferredSpeechProvider == .minimax && legacy.speechProviders.count == 3,
+              "older preferences gain separate narration defaults without changing text preferences")
     }
 
     // MARK: - Mocked HTTP
@@ -508,6 +511,63 @@ do {
         check(reloaded.preferredVideoProvider == .ark && reloaded.preferredVideoModelID == store.preferredVideoModelID,
               "video provider and exact model ID persist together")
     }
+    @MainActor
+    static func speechSettings() async throws {
+        let suiteName = "FocusStudio.AIGatewayTests.speech.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let keychain = InMemoryKeychainStore(values: ["openAI": "TEXT-ONLY-TEST-KEY"])
+        let store = AIGatewayStore(defaults: defaults, keychain: keychain, session: MockURLProtocol.makeSession())
+        do {
+            _ = try store.resolvedSpeechAPIKey(provider: .openAI)
+            fatalError("FAIL: narration must not reuse text credentials implicitly")
+        } catch {}
+        try store.setSpeechAPIKey("VOICE-TEST-KEY", for: .minimax)
+        check(keychain.values["speech.minimax"] == "VOICE-TEST-KEY", "voice secrets have separate accounts")
+        store.updateSpeechConfiguration(.minimax) { $0.voiceID = "custom-speaker"; $0.modelID = "custom-model" }
+        let reloaded = AIGatewayStore(defaults: defaults, keychain: keychain)
+        check(reloaded.speechConfiguration(for: .minimax).effectiveVoiceID == "custom-speaker"
+              && reloaded.speechConfiguration(for: .minimax).effectiveModelID == "custom-model",
+              "custom narration model and voice survive restart")
+        let payload = String(decoding: defaults.data(forKey: AIGatewayStore.defaultsKey) ?? Data(), as: UTF8.self)
+        check(!payload.contains("VOICE-TEST-KEY") && !payload.contains("TEXT-ONLY-TEST-KEY"), "narration keys never reach preferences")
+
+        MockURLProtocol.reset { request, body in
+            guard request.url?.path == "/v1/get_voice", request.httpMethod == "POST",
+                  request.value(forHTTPHeaderField: "Authorization") == "Bearer VOICE-TEST-KEY",
+                  json(body)["voice_type"] as? String == "system" else { return (401, Data()) }
+            return (200, Data(#"{"system_voice":[{"voice_id":"Chinese-Mandarin_Warm_Bestie"}],"base_resp":{"status_code":0}}"#.utf8))
+        }
+        await store.testSpeech(.minimax)
+        check(store.speechConfiguration(for: .minimax).lastTestState == .verified, "MiniMax voice list verifies key")
+        check(store.speechConfiguration(for: .minimax).cachedVoiceIDs == ["Chinese-Mandarin_Warm_Bestie"], "provider voices become selectable")
+        check(MockURLProtocol.recorded.count == 1 && MockURLProtocol.recorded.allSatisfy { $0.request.url?.path.hasSuffix("get_voice") == true },
+              "connection test never calls speech synthesis")
+        try store.setSpeechAPIKey("NEW-VOICE-TEST-KEY", for: .minimax)
+        check(store.speechConfiguration(for: .minimax).lastTestState == .notTested, "new key invalidates verification")
+
+        store.preferredSpeechProvider = .openAICompatible
+        store.updateSpeechConfiguration(.openAICompatible) {
+            $0.baseURLOverride = "http://localhost:8080/v1"
+            $0.modelID = "local-tts"
+            $0.voiceID = "speaker-1"
+        }
+        MockURLProtocol.reset { request, _ in
+            check(request.httpMethod == "GET" && request.url?.path == "/v1/models", "compatible test only reads model metadata")
+            return (404, Data())
+        }
+        await store.testSpeech(.openAICompatible)
+        check(store.speechConfiguration(for: .openAICompatible).lastTestState == .configurationValid,
+              "unsupported list endpoint is not falsely marked connected")
+        let localKey = try store.resolvedSpeechAPIKey(provider: .openAICompatible)
+        check(localKey.isEmpty, "local compatible voice service can omit a key")
+        store.updateSpeechConfiguration(.openAICompatible) { $0.baseURLOverride = "https://host.test/v1?key=secret" }
+        do {
+            _ = try store.resolvedSpeechConfiguration()
+            fatalError("FAIL: voice key must not be allowed in endpoint URL")
+        } catch {}
+    }
+
 }
 
 /// Answers every request of a mocked session from a handler. Bodies arrive

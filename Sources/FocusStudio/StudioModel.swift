@@ -410,6 +410,17 @@ final class StudioModel: ObservableObject {
             app: self
         )
         context.exportAuthorization = exportAuthorizationProvider
+        context.speechConfiguration = { [weak self] in
+            guard let self else { throw AIToolError.noProject }
+            return try self.aiGateway.resolvedSpeechConfiguration()
+        }
+        context.speechAPIKey = { [weak self] provider in
+            guard let self else { throw AIToolError.noProject }
+            return try self.aiGateway.resolvedSpeechAPIKey(provider: provider)
+        }
+        context.confirmSpeechGeneration = { summary in
+            await SpeechGenerationConsent.ask(summary: summary)
+        }
         context.preferredVideoModelID = { [weak self] in self?.aiGateway.preferredVideoModelID }
         context.geminiVideoAPIKey = { [weak self] in
             guard let self, self.aiGateway.configuration(for: .googleGemini).isEnabled else { return nil }
@@ -1939,6 +1950,11 @@ final class StudioModel: ObservableObject {
         if let blocker = automationBlocker { throw blocker.failure }
         guard let project = project(id: projectID) else { throw ProjectStore.StoreError.projectNotFound }
         return try await store.importVoiceover(from: url, for: project)
+    }
+
+    func discardImportedVoiceovers(_ clips: [VoiceoverClip], projectID: UUID) async {
+        guard let project = project(id: projectID) else { return }
+        await store.discardImportedVoiceovers(clips, for: project)
     }
 
     func importBackgroundMusic(for project: RecordingProject) async -> String? {

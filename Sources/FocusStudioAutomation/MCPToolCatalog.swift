@@ -476,6 +476,14 @@ public struct MCPToolCatalog: Sendable {
             scope: .project, annotations: MCPToolAnnotations(readOnly: false, idempotent: true)
         ),
         MCPToolSpec(
+            tool: ListSpeechModelsTool(), title: "Speech configuration", description: ListSpeechModelsTool().summary,
+            scope: .global, annotations: .reads
+        ),
+        MCPToolSpec(
+            tool: GenerateVoiceoverTool(), title: "Generate narration", description: GenerateVoiceoverTool().summary,
+            scope: .project, annotations: MCPToolAnnotations(readOnly: false, openWorld: true)
+        ),
+        MCPToolSpec(
             tool: SetSoundEffectsTool(), title: "Set sound effects",
             description: "Turn a project's click sound and zoom whoosh on or off, optionally with volumes from 0 to 1. Focus Studio opens the project in its editor.",
             scope: .project, annotations: MCPToolAnnotations(readOnly: false, idempotent: true)

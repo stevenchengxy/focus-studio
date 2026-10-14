@@ -11,7 +11,7 @@ extension AIAssistantTests {
     static let mcpV1ToolNames = [
         "get_status", "list_projects", "get_project", "rename_project", "delete_project", "import_video", "create_screenshot_demo",
         "list_recording_sources", "start_recording", "capture_recording_frame", "perform_recording_action", "perform_recording_text", "stop_recording", "wait_for_recording", "analyze_demo_pacing", "create_demo_cut", "get_timeline", "resolve_timeline_frame", "list_media_assets", "list_global_media_assets", "import_global_media_asset", "add_global_media_to_project", "import_media_asset", "insert_media_asset", "split_clip", "trim_clip", "delete_clip", "move_clip", "set_transition", "set_clip_audio", "set_image_duration", "undo_clip_edit", "redo_clip_edit", "update_zoom", "add_zoom", "remove_zoom", "add_region_effect", "update_region_effect", "delete_region_effect", "set_zoom_style", "update_settings",
-        "set_chapters", "set_background_image", "set_background_music", "edit_voiceover", "set_audio_mix", "set_sound_effects", "capture_frame", "export_project",
+        "set_chapters", "set_background_image", "set_background_music", "edit_voiceover", "set_audio_mix", "list_speech_models", "generate_voiceover", "set_sound_effects", "capture_frame", "export_project",
         "assemble_video", "list_assets", "wait_for_job",
     ]
 
@@ -42,20 +42,20 @@ extension AIAssistantTests {
         for mcpOnly in ["rename_project", "delete_project", "import_video", "create_screenshot_demo", "wait_for_job"] {
             check(!inAppNames.contains(mcpOnly), "\(mcpOnly) is not in the in-app catalog")
         }
-        check(inApp.count == 57 && Set(["get_project", "get_status", "get_timeline", "resolve_timeline_frame", "split_clip", "set_transition", "set_image_duration", "undo_clip_edit", "redo_clip_edit", "list_media_assets", "list_global_media_assets", "import_global_media_asset", "add_global_media_to_project", "import_media_asset", "insert_media_asset", "prepare_clip_ai_reference", "wait_for_recording", "prepare_demo_page", "run_demo_task", "perform_recording_text"]).isSubset(of: inAppNames), "the in-app catalog has its shared and project media tools: \(inApp.count)")
+        check(inApp.count == 59 && Set(["get_project", "get_status", "get_timeline", "resolve_timeline_frame", "split_clip", "set_transition", "set_image_duration", "undo_clip_edit", "redo_clip_edit", "list_media_assets", "list_global_media_assets", "import_global_media_asset", "add_global_media_to_project", "import_media_asset", "insert_media_asset", "prepare_clip_ai_reference", "wait_for_recording", "prepare_demo_page", "run_demo_task", "perform_recording_text", "list_speech_models", "generate_voiceover"]).isSubset(of: inAppNames), "the in-app catalog has its shared and project media tools: \(inApp.count)")
 
         let scopes: [String: MCPToolScope] = [
-            "get_status": .global, "list_projects": .global, "import_video": .global, "create_screenshot_demo": .global, "list_global_media_assets": .global, "import_global_media_asset": .global,
+            "get_status": .global, "list_projects": .global, "import_video": .global, "create_screenshot_demo": .global, "list_global_media_assets": .global, "import_global_media_asset": .global, "list_speech_models": .global,
             "list_recording_sources": .global, "start_recording": .global, "capture_recording_frame": .global, "perform_recording_action": .global, "perform_recording_text": .global, "stop_recording": .global, "wait_for_recording": .global, "wait_for_job": .global,
             "analyze_demo_pacing": .projectReadOnly, "get_project": .projectReadOnly, "get_timeline": .projectReadOnly, "resolve_timeline_frame": .projectReadOnly, "list_media_assets": .projectReadOnly, "list_assets": .projectReadOnly, "assemble_video": .projectReadOnly,
             "rename_project": .library, "delete_project": .library,
             "create_demo_cut": .project, "add_global_media_to_project": .project, "import_media_asset": .project, "insert_media_asset": .project, "split_clip": .project, "trim_clip": .project, "delete_clip": .project, "move_clip": .project, "set_transition": .project, "set_clip_audio": .project, "set_image_duration": .project, "undo_clip_edit": .project, "redo_clip_edit": .project, "update_zoom": .project, "add_zoom": .project, "remove_zoom": .project, "add_region_effect": .project, "update_region_effect": .project, "delete_region_effect": .project, "set_zoom_style": .project, "update_settings": .project, "set_chapters": .project,
             "set_background_image": .project, "set_background_music": .project, "edit_voiceover": .project, "set_audio_mix": .project, "set_sound_effects": .project, "capture_frame": .project,
-            "export_project": .project,
+            "export_project": .project, "generate_voiceover": .project,
         ]
-        let readOnly: Set<String> = ["analyze_demo_pacing", "get_status", "list_projects", "get_project", "get_timeline", "resolve_timeline_frame", "list_media_assets", "list_global_media_assets", "list_assets", "wait_for_recording", "wait_for_job"]
+        let readOnly: Set<String> = ["analyze_demo_pacing", "get_status", "list_projects", "get_project", "get_timeline", "resolve_timeline_frame", "list_media_assets", "list_global_media_assets", "list_assets", "wait_for_recording", "wait_for_job", "list_speech_models"]
         // Calls that make the app show something else run one at a time.
-        let stayPut: Set<String> = ["analyze_demo_pacing", "get_status", "list_projects", "get_project", "get_timeline", "resolve_timeline_frame", "list_media_assets", "list_global_media_assets", "list_assets", "assemble_video", "wait_for_recording", "wait_for_job"]
+        let stayPut: Set<String> = ["analyze_demo_pacing", "get_status", "list_projects", "get_project", "get_timeline", "resolve_timeline_frame", "list_media_assets", "list_global_media_assets", "list_assets", "assemble_video", "wait_for_recording", "wait_for_job", "list_speech_models"]
         // Tools that bound their own wait are never turned into jobs.
         let boundedWaits: Set<String> = ["capture_recording_frame", "perform_recording_action", "perform_recording_text", "wait_for_recording", "wait_for_job"]
         // Replacing an existing file (overwrite: true) is destructive too.
@@ -93,7 +93,7 @@ extension AIAssistantTests {
             let annotations = spec.annotations
             check(annotations.readOnly == readOnly.contains(name), "\(name) readOnlyHint")
             check(annotations.destructive == destructive.contains(name), "\(name) destructiveHint")
-            check(annotations.openWorld == (["perform_recording_action", "perform_recording_text"].contains(name)), "\(name) external input effects are disclosed")
+            check(annotations.openWorld == (["perform_recording_action", "perform_recording_text", "generate_voiceover"].contains(name)), "\(name) external input and provider effects are disclosed")
             if !annotations.readOnly { check(annotations.idempotent == idempotent.contains(name), "\(name) idempotentHint") }
             // Clients skip approval for read-only tools and run them in parallel.
             check(!(spec.navigates && annotations.readOnly), "\(name): a call that changes what Focus Studio shows is not readOnlyHint")
@@ -435,6 +435,11 @@ extension AIAssistantTests {
         // Work cancelled by someone else is an error result, never a silent drop.
         let selfCancelled = callResult(await quick.run(tool: "export_project", progress: nil) { _ in throw CancellationError() }, "self-cancelled")
         check(selfCancelled.isError && selfCancelled.text.contains("cancelled before it finished"), "a cancellation the caller did not ask for is reported")
+        let paidCancelled = callResult(await quick.run(tool: "generate_voiceover", progress: nil) { _ in throw CancellationError() }, "paid self-cancelled")
+        check(paidCancelled.isError && paidCancelled.structuredContent?["retry"] == false
+              && paidCancelled.structuredContent?["provider_usage"] == "unknown"
+              && paidCancelled.text.contains("do not automatically retry") && !paidCancelled.text.contains("Run it again"),
+              "a generic cancelled speech job never recommends replaying a possibly billed request")
 
         // Finished results expire after the retention time and beyond the capacity.
         let bounded = AutomationJobs(detachAfter: 0, retention: 60, capacity: 1)

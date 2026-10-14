@@ -163,6 +163,11 @@ public final class AutomationJobs {
             return .result(result)
         case .cancelled:
             // Cancelled by someone other than this caller (the app quitting).
+            if tool == "generate_voiceover", !Task.isCancelled {
+                return .result(.failure(AIToolFailure(
+                    "Narration generation was cancelled. Provider usage is unknown; do not automatically retry. Inspect the project and confirm a new request first.",
+                    data: ["status": "cancelled", "provider_usage": "unknown", "retry": false])))
+            }
             return Task.isCancelled ? .cancelled : .result(.failure("\(tool) was cancelled before it finished; nothing more will happen. Run it again if needed."))
         }
     }

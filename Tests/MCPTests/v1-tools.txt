@@ -47,6 +47,8 @@ set_background_image
 set_background_music
 edit_voiceover
 set_audio_mix
+list_speech_models
+generate_voiceover
 set_sound_effects
 capture_frame
 export_project

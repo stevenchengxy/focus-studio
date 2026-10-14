@@ -29,6 +29,7 @@ enum AutomationBridgeRegression {
         try await libraryActions()
         try await englishUnderChineseUI()
         try await longCallsDetach()
+        try await cancelledNarrationRetainsBillingReceipt()
         try windowPresenterSteps()
         try await installationBusyFollowsAutomation()
         print("AutomationBridgeRegression: PASS (main window presenter: a hidden app is unhidden instead of opening another window, a minimized window is restored, a closed one is never reused, edits by project_id open the editor and save, switching saves the other project, parallel calls take turns, refusals while busy or recording, while the in-app assistant works (also after an Allow at the sound prompt) and during an editor export, unknown/withheld tools, project_id validation, read-only tools stay put, capture_frame inline JPEG, working-directory export with progress, import/screenshot/rename/Trash, English results and refusals under a Chinese UI, detached jobs with wait_for_job and cancellation, reads skip the queue, queued calls detach in time, a call whose time runs out waiting for its turn answers waiting_for_turn with heartbeats and runs when called again, the installer's busy state republished as AI calls and detached jobs begin and end)")
@@ -441,6 +442,25 @@ enum AutomationBridgeRegression {
 
     // MARK: - Long calls
 
+    private static func cancelledNarrationRetainsBillingReceipt() async throws {
+        let fixture = try await BridgeFixture()
+        defer { fixture.cleanup() }
+        let spec = MCPToolSpec(tool: CancelledSpeechFixture(), title: "Speech fixture", description: "Offline paid cancellation receipt fixture.",
+                               scope: .global, annotations: .reads)
+        let catalog = MCPToolCatalog(tools: MCPToolCatalog.v1.tools.filter { $0.name != spec.name } + [spec])
+        let bridge = AutomationBridge(model: fixture.model, catalog: catalog, jobs: AutomationJobs(detachAfter: 0.05))
+        let running = try await fixture.succeed(bridge, "generate_voiceover", [:])
+        guard let id = running.structuredContent?["job_id"]?.stringValue else {
+            throw BridgeFailure("The narration fixture should detach before cancellation")
+        }
+        for task in bridge.jobs.cancelRunning() { await task.value }
+        let result = try await fixture.fail(bridge, "wait_for_job", ["job_id": id, "timeout_seconds": 0])
+        try expect(result.structuredContent?["status"] == "cancelled"
+                   && result.structuredContent?["requests_sent"] == 1
+                   && result.structuredContent?["retry"] == false,
+                   "The native MCP bridge must retain billing context after paid cancellation: \(result.json)")
+    }
+
     private static func longCallsDetach() async throws {
         let fixture = try await BridgeFixture()
         defer { fixture.cleanup() }
@@ -609,6 +629,20 @@ private final class PausingCompletion: TextCompletionProviding, @unchecked Senda
 
 /// Sleeps for `seconds`, reporting progress every 0.1 s, and notes that it
 /// started and whether it was cancelled.
+private struct CancelledSpeechFixture: AIAssistantTool {
+    let name = "generate_voiceover"
+    let summary = "Offline cancellation fixture."
+    var parametersSchema: [String: Any] { ["type": "object", "properties": [:]] }
+    func run(arguments: [String: Any], context: AIAssistantContext, progress: @escaping @Sendable (String) -> Void) async throws -> AIToolResult {
+        do { try await Task.sleep(for: .seconds(30)) }
+        catch {
+            throw AIToolFailure("Provider requests may have incurred usage; do not automatically retry.",
+                                data: ["status": "cancelled", "requests_sent": 1, "retry": false])
+        }
+        throw BridgeFailure("The cancelled fixture must not complete")
+    }
+}
+
 private struct SlowTool: AIAssistantTool {
     var name = "slow_tool"
     let summary = "Sleep."

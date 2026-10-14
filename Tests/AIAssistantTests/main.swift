@@ -42,6 +42,7 @@ struct AIAssistantTests {
         step("zoom tools"); try await zoomTools(root: root)
         step("region effect tools"); try await regionEffectTools(root: root)
         step("voiceover tools"); try await voiceoverTools(root: root)
+        step("speech tools"); try await speechTools(root: root)
         step("non-destructive demo editing"); try await demoEditing(root: root)
         step("video track editing tools"); try await timelineEditingTools(root: root)
         step("audio tools"); try await audioTools(root: root)

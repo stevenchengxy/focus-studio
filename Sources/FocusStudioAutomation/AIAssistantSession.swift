@@ -1241,6 +1241,12 @@ public final class AIAssistantSession: ObservableObject {
                         messages.append(AIAssistantMessage(role: .tool, text: Self.modelReceipt(frame), attachments: frame.attachments, toolName: "capture_recording_frame", displayText: receiptText(for: "capture_recording_frame", result: frame)))
                         persistHistory(interrupted: true)
                     }
+                } catch let failure as AIToolFailure where tool.name == "generate_voiceover" && Task.isCancelled {
+                    guard turnGeneration == generation else { return }
+                    clearStatus()
+                    messages.append(AIAssistantMessage(role: .error, text: failure.localizedDescription, toolName: tool.name))
+                    persistHistory(interrupted: true)
+                    return
                 } catch is CancellationError {
                     guard turnGeneration == generation else { return }
                     appendStopped()
@@ -1311,6 +1317,8 @@ public final class AIAssistantSession: ObservableObject {
         case "get_timeline", "resolve_timeline_frame": return demoText("Checking the video clips…", "正在检查视频片段…")
         case "split_clip", "trim_clip", "delete_clip", "move_clip", "set_image_duration": return demoText("Editing the video track…", "正在编辑视频滑轨…")
         case "set_transition": return demoText("Adjusting the transition…", "正在调整转场效果…")
+        case "generate_voiceover": return demoText("Generating narration…", "正在生成旁白…")
+        case "list_speech_models": return demoText("Checking speech configuration…", "正在检查语音配置…")
         case "edit_voiceover", "set_audio_mix": return demoText("Adjusting voiceover and mix…", "正在调整旁白与混音…")
         case "set_clip_audio": return demoText("Adjusting clip audio…", "正在调整片段声音…")
         case "undo_clip_edit": return demoText("Undoing the last video edit…", "正在撤销上一步视频剪辑…")
@@ -1339,6 +1347,8 @@ public final class AIAssistantSession: ObservableObject {
         case "start_recording": return demoText("Recording started.", "录制已开始。")
         case "stop_recording": return demoText("Recording saved and opened in the editor.", "录制已保存，并已在编辑器中打开。")
         case "get_project": return demoText("Recording details checked.", "已检查录制详情。")
+        case "generate_voiceover": return demoText("Narration added.", "旁白已加入。")
+        case "list_speech_models": return demoText("Speech configuration checked.", "已检查语音配置。")
         case "edit_voiceover", "set_audio_mix": return demoText("Voiceover and mix updated.", "旁白与混音已更新。")
         case "get_timeline", "resolve_timeline_frame": return demoText("Video clips checked.", "已检查视频片段。")
         case "split_clip", "trim_clip", "delete_clip", "move_clip", "set_transition", "set_clip_audio", "set_image_duration":
@@ -1431,7 +1441,7 @@ public final class AIAssistantSession: ObservableObject {
         - In manual recording, do not stop until the user says the demo is finished or the requested duration ends. In an explicitly requested automated recording, stop after the authorized demo actions complete. Never start a second recording while one is in progress.
         - When the intent is ambiguous (which window, what the image should show, clip length, mood, which clips to join), ask one short clarifying question instead of guessing.
         - The user's currently selected video model is \(context.preferredVideoModelID() ?? ArkMediaClient.defaultVideoModel). Use that exact model for video generation; the visible picker and paid confirmation card determine the final model and estimate. Never silently switch to a cheaper tier or claim a model is unavailable solely because it is not the old default. If a model or provider is not configured, explain the precise setting needed. Label estimates with their actual currency (Ark uses CNY; Gemini Veo uses USD), and never equate USD with 元.
-        - Narration editing uses edit_voiceover with a local audio file and stable voiceover_id. Offer to import a recorded explanation; never claim text-to-speech or noise removal exists. set_audio_mix can lower music under speech. Preserve source speech while removing waits; inspect get_project voiceovers before ripple cuts.
+        - Narration editing uses edit_voiceover with a local audio file and stable voiceover_id. For AI speech, first inspect list_speech_models. Finish picture edits, then call generate_voiceover with short sentence segments and output start_time values. Use the configured provider and exact requested model/voice; never silently substitute. The app asks approval of the complete script before paid requests. Matching captions use measured sentence durations, not word alignment. If requests_sent is positive after a failure, report possible provider usage and do not retry without a new user request. Never claim noise removal exists. set_audio_mix can lower music under speech. Preserve source speech while removing waits; inspect get_project voiceovers before ripple cuts.
         - Match the requested clip length and media references to that selected model before calling generate_video. Veo 3.1 accepts exactly 4, 6, or 8 seconds; 1080p and 4K require 8 seconds, its audio cannot be disabled, and it cannot extend an arbitrary uploaded video. Seedance capabilities depend on its exact model ID. If the user's request conflicts with the selected model, explain the conflict and let them choose a supported setting; never silently alter the duration, model, or requested source.
         - For polished product marketing, help the user make a shot brief before generation: product truth/benefit, authentic UI or supplied reference frame, one legible motion beat, camera/framing, light/material, compositing space, duration, and what must remain editable. Offer two or three distinct directions when the visual brief is vague. Generic blue-purple light tunnels, floating glass cards and fake dashboards are not a substitute for the user's real product. Use short abstract transitions only to support a real product scene.
         - For a requested AI variation of one timeline clip, read get_timeline to obtain its stable clip_id, prepare_clip_ai_reference to capture its actual first/last appearance and bounded silent reference video, discuss the desired change, then call generate_video with those references and the selected model. Generated output is a separate shared-library asset; the original recording and clip stay intact. Show/preview the result before importing it into the project's library or inserting it on the timeline unless the user already requested insertion. Generated UI can distort text/numbers, so retain the real screen recording for factual UI and use generated shots for cutaways, backgrounds and composited accents.

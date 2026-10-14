@@ -29,12 +29,12 @@ struct EditVoiceoverTool: AIAssistantTool {
         "voiceover_id": ["type": "string", "description": "Stable id required for update/remove."],
         "path": ["type": "string", "description": "Local audio file required for add; copied into the project."],
         "title": ["type": "string"],
-        "source_in": ["type": "number", "minimum": 0],
-        "source_out": ["type": "number", "minimum": 0, "description": "Must be after source_in and within source_duration; omitted on add means full source."],
-        "timeline_start": ["type": "number", "minimum": 0],
-        "volume": ["type": "number", "minimum": 0, "maximum": 2],
-        "fade_in": ["type": "number", "minimum": 0, "maximum": 30],
-        "fade_out": ["type": "number", "minimum": 0, "maximum": 30],
+        "source_in": ["type": "number", "minimum": 0, "description": "Source start in seconds, at least 0; omitted on add means 0."],
+        "source_out": ["type": "number", "minimum": 0, "description": "Source end in seconds, at least 0, after source_in and within source_duration; omitted on add means full source."],
+        "timeline_start": ["type": "number", "minimum": 0, "description": "Output start in seconds, at least 0; omitted on add means 0."],
+        "volume": ["type": "number", "minimum": 0, "maximum": 2, "description": "Narration volume from 0 to 2; 0 mutes, 1 is original volume."],
+        "fade_in": ["type": "number", "minimum": 0, "maximum": 30, "description": "Fade-in length from 0 to 30 seconds."],
+        "fade_out": ["type": "number", "minimum": 0, "maximum": 30, "description": "Fade-out length from 0 to 30 seconds."],
         "enabled": ["type": "boolean"]
     ]] }
     func run(arguments raw: [String: Any], context: AIAssistantContext,
@@ -111,12 +111,12 @@ struct SetAudioMixTool: AIAssistantTool {
     let name = "set_audio_mix"
     let summary = "Set the recorded-audio gain, music gain/fades and automatic music ducking during enabled voiceover clips. Omitted fields remain unchanged. duck_music false disables ducking; true defaults to 25% of music volume. These edits use the same mix for preview/export and can be undone."
     var parametersSchema: [String: Any] { ["type": "object", "properties": [
-        "source_volume": ["type": "number", "minimum": 0, "maximum": 2],
-        "music_volume": ["type": "number", "minimum": 0, "maximum": 1],
-        "music_fade_in": ["type": "number", "minimum": 0, "maximum": 30],
-        "music_fade_out": ["type": "number", "minimum": 0, "maximum": 30],
+        "source_volume": ["type": "number", "minimum": 0, "maximum": 2, "description": "Recorded-audio volume from 0 to 2; 0 mutes, 1 is original volume."],
+        "music_volume": ["type": "number", "minimum": 0, "maximum": 1, "description": "Background music volume from 0 to 1."],
+        "music_fade_in": ["type": "number", "minimum": 0, "maximum": 30, "description": "Music fade-in length from 0 to 30 seconds."],
+        "music_fade_out": ["type": "number", "minimum": 0, "maximum": 30, "description": "Music fade-out length from 0 to 30 seconds."],
         "duck_music": ["type": "boolean"],
-        "duck_level": ["type": "number", "minimum": 0, "maximum": 1, "description": "Music multiplier during speech; only used when ducking is enabled."]
+        "duck_level": ["type": "number", "minimum": 0, "maximum": 1, "description": "Music multiplier from 0 to 1 during speech; only used when ducking is enabled."]
     ]] }
     func run(arguments raw: [String: Any], context: AIAssistantContext,
              progress: @escaping @Sendable (String) -> Void) async throws -> AIToolResult {
