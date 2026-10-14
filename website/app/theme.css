@@ -1,23 +1,23 @@
-/* Theme surfaces stay separate from media: no inversion, image filters or
-   animated backdrop effects. Each palette keeps the same editorial layout. */
+/* Light restores the original warm-paper marketing palette in globals.css.
+   Dark overrides surround media without filtering or recoloring video pixels. */
 :root {
   color-scheme: light;
-  --paper: #f5f8fd;
-  --ink: #1c293d;
-  --muted: #45576e;
-  --purple: #075ec4;
-  --line: #cad6e5;
-  --surface: #ffffffa8;
+  --paper: #f5f3ec;
+  --ink: #242326;
+  --muted: #737176;
+  --purple: #8665f8;
+  --line: #dedbd4;
+  --surface: #faf8f2;
   --surface-raised: #ffffff;
-  --surface-soft: #edf3fc;
-  --glass-border: #ffffffd6;
+  --surface-soft: #e9e6de;
+  --glass-border: #dedbd4;
   --glass-highlight: #ffffff;
-  --control-bg: #ffffffb8;
-  --control-hover: #e2efff;
-  --action-bg: #086bd2;
+  --control-bg: #f1eee7;
+  --control-hover: #eae7df;
+  --action-bg: #242326;
   --action-fg: #fff;
-  --action-hover: #075ab7;
-  --accent: #dcecff;
+  --action-hover: #414043;
+  --accent: #e4dcf8;
   --accent-foreground: var(--ink);
   --secondary: var(--surface-soft);
   --secondary-foreground: var(--ink);
@@ -29,15 +29,15 @@
   --primary-foreground: var(--action-fg);
   --border: var(--line);
   --input: var(--line);
-  --shadow-color: #354e8226;
+  --shadow-color: #31264d26;
   --success: #347b63;
   --danger: #9b3d51;
   --danger-surface: #fff0f3;
   --danger-border: #f2ced8;
-  --atmosphere-lilac: #b7a7f78c;
-  --atmosphere-blue: #9fdcf4a6;
-  --atmosphere-mint: #c5eee87a;
-  --atmosphere-blush: #f7dfeb;
+  --atmosphere-lilac: #dcd3f16b;
+  --atmosphere-blue: #d2ded447;
+  --atmosphere-mint: #c9efda47;
+  --atmosphere-blush: #f5f3ec;
 }
 
 html[data-theme="dark"] {
@@ -68,142 +68,95 @@ html[data-theme="dark"] {
   --atmosphere-mint: #49685817;
 }
 
-html[data-theme] body { background: var(--paper); color: var(--ink); }
-html[data-theme] .site-header { background: color-mix(in srgb, var(--paper) 88%, transparent); border-color: var(--glass-border); backdrop-filter: blur(10px); }
-html[data-theme] .focus-site { background: radial-gradient(ellipse 80% 520px at 72% 190px, var(--atmosphere-blue), transparent 78%), var(--paper); }
-html[data-theme] .main-nav { color: var(--muted); }
-html[data-theme] .main-nav a:hover { color: var(--ink); }
-html[data-theme] .main-nav.is-open { background: var(--surface-raised); color: var(--ink); border-color: var(--line); }
-html[data-theme] .mobile-menu { color: var(--ink); }
-html[data-theme] .button-dark { background: var(--action-bg); color: var(--action-fg); box-shadow: inset 0 1px 0 var(--glass-highlight), 0 5px 18px var(--shadow-color); }
-html[data-theme] .button-dark:hover { background: var(--action-hover); }
-html[data-theme] .button-outline { border-color: var(--line); background: var(--control-bg); color: var(--ink); }
-html[data-theme] .button-plain { color: var(--ink); }
-html[data-theme] .button-plain:hover, html[data-theme] .button-outline:hover { background: var(--control-hover); }
-html[data-theme] .focus-site :is(.hero-description,.hero-note,.hero-footnote,.feature-copy>p,.feature-copy .step-index,.section-heading>p,.film-copy>p,.closing-note,.footer-links,.footer-bottom,.footer-bottom>button) { color: var(--muted); }
-html[data-theme] .hero-footnote>a { color: var(--ink); }
-html[data-theme] .hero-note span, html[data-theme] .feature-tags>span, html[data-theme] .faq-list details, html[data-theme] .site-footer, html[data-theme] .footer-bottom, html[data-theme] .footer-links a>span { border-color: var(--line); }
-html[data-theme] .feature-tags>span { color: var(--muted); background: var(--control-bg); }
-html[data-theme] .faq-list details>p { color: var(--muted); }
-html[data-theme] .faq-list details>.text-link { color: var(--purple); }
-html[data-theme] .faq-list summary>svg { color: var(--muted); }
-html[data-theme] .skip-link { color: var(--action-fg); background: var(--action-bg); }
+html[data-theme="dark"] body { background: var(--paper); color: var(--ink); }
+html[data-theme="dark"] .site-header { background: color-mix(in srgb, var(--paper) 88%, transparent); border-color: var(--glass-border); backdrop-filter: blur(10px); }
+html[data-theme="dark"] .focus-site { background: radial-gradient(ellipse 80% 520px at 72% 190px, var(--atmosphere-blue), transparent 78%), var(--paper); }
+html[data-theme="dark"] .main-nav { color: var(--muted); }
+html[data-theme="dark"] .main-nav a:hover { color: var(--ink); }
+html[data-theme="dark"] .main-nav.is-open { background: var(--surface-raised); color: var(--ink); border-color: var(--line); }
+html[data-theme="dark"] .mobile-menu { color: var(--ink); }
+html[data-theme="dark"] .button-dark { background: var(--action-bg); color: var(--action-fg); box-shadow: inset 0 1px 0 var(--glass-highlight), 0 5px 18px var(--shadow-color); }
+html[data-theme="dark"] .button-dark:hover { background: var(--action-hover); }
+html[data-theme="dark"] .button-outline { border-color: var(--line); background: var(--control-bg); color: var(--ink); }
+html[data-theme="dark"] .button-plain { color: var(--ink); }
+html[data-theme="dark"] .button-plain:hover, html[data-theme="dark"] .button-outline:hover { background: var(--control-hover); }
+html[data-theme="dark"] .focus-site :is(.hero-description,.hero-note,.hero-footnote,.feature-copy>p,.feature-copy .step-index,.section-heading>p,.film-copy>p,.closing-note,.footer-links,.footer-bottom,.footer-bottom>button) { color: var(--muted); }
+html[data-theme="dark"] .hero-footnote>a { color: var(--ink); }
+html[data-theme="dark"] .hero-note span, html[data-theme="dark"] .feature-tags>span, html[data-theme="dark"] .faq-list details, html[data-theme="dark"] .site-footer, html[data-theme="dark"] .footer-bottom, html[data-theme="dark"] .footer-links a>span { border-color: var(--line); }
+html[data-theme="dark"] .feature-tags>span { color: var(--muted); background: var(--control-bg); }
+html[data-theme="dark"] .faq-list details>p { color: var(--muted); }
+html[data-theme="dark"] .faq-list details>.text-link { color: var(--purple); }
+html[data-theme="dark"] .faq-list summary>svg { color: var(--muted); }
+html[data-theme="dark"] .skip-link { color: var(--action-fg); background: var(--action-bg); }
 
 /* A porcelain frame around the interactive illustration; the scene itself is
    deliberately unchanged, like the adjacent real product screenshot. */
-html[data-theme] .focus-site .fs-motion-showcase { border-color: var(--glass-border); box-shadow: inset 0 1px 0 var(--glass-highlight), 0 28px 60px -25px var(--shadow-color); background: var(--surface); }
-html[data-theme] .fs-motion-top, html[data-theme] .fs-motion-controls { color: var(--ink); background: var(--surface-soft); border-color: var(--line); }
-html[data-theme] .fs-motion-top>span:nth-child(2) { color: var(--muted); }
-html[data-theme] .fs-motion-top button { color: var(--ink); background: var(--control-bg); border-color: var(--glass-border); }
-html[data-theme] .fs-motion-top button:hover { background: var(--control-hover); }
-html[data-theme] .fs-motion-controls>button { color: var(--muted); }
-html[data-theme] .fs-motion-controls>button:hover { background: var(--control-hover); color: var(--ink); }
-html[data-theme] .fs-motion-controls>button.selected { background: var(--accent); color: var(--ink); border-color: var(--glass-border); box-shadow: inset 0 1px 0 var(--glass-highlight); }
+html[data-theme="dark"] .focus-site .fs-motion-showcase { border-color: var(--glass-border); box-shadow: inset 0 1px 0 var(--glass-highlight), 0 28px 60px -25px var(--shadow-color); background: var(--surface); }
+html[data-theme="dark"] .fs-motion-top, html[data-theme="dark"] .fs-motion-controls { color: var(--ink); background: var(--surface-soft); border-color: var(--line); }
+html[data-theme="dark"] .fs-motion-top>span:nth-child(2) { color: var(--muted); }
+html[data-theme="dark"] .fs-motion-top button { color: var(--ink); background: var(--control-bg); border-color: var(--glass-border); }
+html[data-theme="dark"] .fs-motion-top button:hover { background: var(--control-hover); }
+html[data-theme="dark"] .fs-motion-controls>button { color: var(--muted); }
+html[data-theme="dark"] .fs-motion-controls>button:hover { background: var(--control-hover); color: var(--ink); }
+html[data-theme="dark"] .fs-motion-controls>button.selected { background: var(--accent); color: var(--ink); border-color: var(--glass-border); box-shadow: inset 0 1px 0 var(--glass-highlight); }
 
 /* Semi-transparent fills and fixed highlights create glass without repainting
    large blurred surfaces while the little product illustrations animate. */
-html[data-theme] .focus-site .ai-section { color: var(--ink); background: radial-gradient(ellipse at 75% 35%, var(--atmosphere-lilac), transparent 65%), var(--surface-soft); border-block: 1px solid var(--glass-border); }
-html[data-theme] .ai-copy h2 .serif-word, html[data-theme] .ai-copy>.text-link { color: var(--purple); }
-html[data-theme] .ai-copy>p, html[data-theme] .ai-copy>.eyebrow, html[data-theme] .ai-steps small { color: var(--muted); }
-html[data-theme] .ai-steps b { color: var(--ink); }
-html[data-theme] .ai-steps>div>span { color: var(--purple); border-color: var(--glass-border); background: var(--control-bg); }
-html[data-theme] .ai-orbit { border-color: var(--glass-border); opacity: .28; }
-html[data-theme] .conversation { background: linear-gradient(130deg, var(--surface-raised), var(--surface)); border-color: var(--glass-border); color: var(--ink); box-shadow: inset 0 1px 0 var(--glass-highlight), 0 20px 50px -20px var(--shadow-color); }
-html[data-theme] .conversation-top { border-color: var(--line); }
-html[data-theme] .conversation-top small, html[data-theme] .conversation-preview small, html[data-theme] .conversation-tools small, html[data-theme] .conversation-composer, html[data-theme] .illustration-note { color: var(--muted); }
-html[data-theme] .conversation-reply, html[data-theme] .conversation-tools>div, html[data-theme] .conversation-preview { color: var(--ink); }
-html[data-theme] .conversation-user { background: var(--accent); color: var(--ink); border-color: var(--glass-border); }
-html[data-theme] .conversation-preview { background: var(--surface-soft); border-color: var(--line); }
-html[data-theme] .conversation-tools small, html[data-theme] .conversation-composer { border-color: var(--line); }
-html[data-theme] .conversation-tools>div>svg { color: var(--success); }
-html[data-theme] .conversation-preview>svg { color: var(--muted); }
-html[data-theme] .ai-spark, html[data-theme] .conversation-composer>span { color: var(--purple); background: var(--accent); }
+html[data-theme="dark"] .focus-site .ai-section { color: var(--ink); background: radial-gradient(ellipse at 75% 35%, var(--atmosphere-lilac), transparent 65%), var(--surface-soft); border-block: 1px solid var(--glass-border); }
+html[data-theme="dark"] .ai-copy h2 .serif-word, html[data-theme="dark"] .ai-copy>.text-link { color: var(--purple); }
+html[data-theme="dark"] .ai-copy>p, html[data-theme="dark"] .ai-copy>.eyebrow, html[data-theme="dark"] .ai-steps small { color: var(--muted); }
+html[data-theme="dark"] .ai-steps b { color: var(--ink); }
+html[data-theme="dark"] .ai-steps>div>span { color: var(--purple); border-color: var(--glass-border); background: var(--control-bg); }
+html[data-theme="dark"] .ai-orbit { border-color: var(--glass-border); opacity: .28; }
+html[data-theme="dark"] .conversation { background: linear-gradient(130deg, var(--surface-raised), var(--surface)); border-color: var(--glass-border); color: var(--ink); box-shadow: inset 0 1px 0 var(--glass-highlight), 0 20px 50px -20px var(--shadow-color); }
+html[data-theme="dark"] .conversation-top { border-color: var(--line); }
+html[data-theme="dark"] .conversation-top small, html[data-theme="dark"] .conversation-preview small, html[data-theme="dark"] .conversation-tools small, html[data-theme="dark"] .conversation-composer, html[data-theme="dark"] .illustration-note { color: var(--muted); }
+html[data-theme="dark"] .conversation-reply, html[data-theme="dark"] .conversation-tools>div, html[data-theme="dark"] .conversation-preview { color: var(--ink); }
+html[data-theme="dark"] .conversation-user { background: var(--accent); color: var(--ink); border-color: var(--glass-border); }
+html[data-theme="dark"] .conversation-preview { background: var(--surface-soft); border-color: var(--line); }
+html[data-theme="dark"] .conversation-tools small, html[data-theme="dark"] .conversation-composer { border-color: var(--line); }
+html[data-theme="dark"] .conversation-tools>div>svg { color: var(--success); }
+html[data-theme="dark"] .conversation-preview>svg { color: var(--muted); }
+html[data-theme="dark"] .ai-spark, html[data-theme="dark"] .conversation-composer>span { color: var(--purple); background: var(--accent); }
 
-html[data-theme] .focus-site .pricing-section { background: radial-gradient(ellipse at 80% 15%, var(--atmosphere-blue), transparent 60%), var(--surface-soft); }
-html[data-theme] .free-plan { color: var(--ink); background: var(--surface); border-color: var(--glass-border); box-shadow: inset 0 1px 0 var(--glass-highlight); }
-html[data-theme] .pro-plan { color: var(--ink); background: linear-gradient(130deg, var(--surface-raised), var(--accent)); border-color: var(--glass-border); box-shadow: inset 0 1px 0 var(--glass-highlight), 0 16px 30px -20px var(--shadow-color); }
-html[data-theme] .plan-price>span, html[data-theme] .free-plan>p, html[data-theme] .plan-details, html[data-theme] .billing-description, html[data-theme] .pricing-note { color: var(--muted); }
-html[data-theme] .plan-details svg { color: var(--success); }
-html[data-theme] .plan-badge { background: var(--accent); color: var(--purple); }
-html[data-theme] .billing-switch { border-color: var(--glass-border); background: var(--control-bg); }
-html[data-theme] .billing-switch>button { color: var(--muted); }
-html[data-theme] .billing-switch>button>span { color: var(--muted); }
-html[data-theme] .billing-switch>button.selected { background: var(--surface-raised); color: var(--ink); box-shadow: 0 1px 4px var(--shadow-color); }
-html[data-theme] .checkout-message { background: var(--surface-raised); color: var(--ink); border: 1px solid var(--line); }
+html[data-theme="dark"] .focus-site .pricing-section { background: radial-gradient(ellipse at 80% 15%, var(--atmosphere-blue), transparent 60%), var(--surface-soft); }
+html[data-theme="dark"] .free-plan { color: var(--ink); background: var(--surface); border-color: var(--glass-border); box-shadow: inset 0 1px 0 var(--glass-highlight); }
+html[data-theme="dark"] .pro-plan { color: var(--ink); background: linear-gradient(130deg, var(--surface-raised), var(--accent)); border-color: var(--glass-border); box-shadow: inset 0 1px 0 var(--glass-highlight), 0 16px 30px -20px var(--shadow-color); }
+html[data-theme="dark"] .plan-price>span, html[data-theme="dark"] .free-plan>p, html[data-theme="dark"] .plan-details, html[data-theme="dark"] .billing-description, html[data-theme="dark"] .pricing-note { color: var(--muted); }
+html[data-theme="dark"] .plan-details svg { color: var(--success); }
+html[data-theme="dark"] .plan-badge { background: var(--accent); color: var(--purple); }
+html[data-theme="dark"] .billing-switch { border-color: var(--glass-border); background: var(--control-bg); }
+html[data-theme="dark"] .billing-switch>button { color: var(--muted); }
+html[data-theme="dark"] .billing-switch>button>span { color: var(--muted); }
+html[data-theme="dark"] .billing-switch>button.selected { background: var(--surface-raised); color: var(--ink); box-shadow: 0 1px 4px var(--shadow-color); }
+html[data-theme="dark"] .checkout-message { background: var(--surface-raised); color: var(--ink); border: 1px solid var(--line); }
 
-html[data-theme] .dialog-surface { color: var(--ink); background: linear-gradient(145deg, var(--surface-raised), var(--paper)); border-color: var(--glass-border); box-shadow: inset 0 1px 0 var(--glass-highlight), 0 22px 80px #09061433; }
-html[data-theme] .dialog-close { background: var(--surface-soft); color: var(--ink); }
-html[data-theme] .dialog-close:hover { background: var(--control-hover); }
-html[data-theme] .platform-tabs { background: var(--surface-soft); border-color: var(--glass-border); }
-html[data-theme] .platform-tabs>button { color: var(--muted); }
-html[data-theme] .platform-tabs>button.selected { background: var(--surface-raised); color: var(--ink); }
-html[data-theme] .platform-content>p, html[data-theme] .platform-content>small { color: var(--muted); }
-html[data-theme] .platform-content>.text-link { color: var(--purple); }
-html[data-theme] .platform-icon { color: var(--purple); background: var(--accent); }
+html[data-theme="dark"] .dialog-surface { color: var(--ink); background: linear-gradient(145deg, var(--surface-raised), var(--paper)); border-color: var(--glass-border); box-shadow: inset 0 1px 0 var(--glass-highlight), 0 22px 80px #09061433; }
+html[data-theme="dark"] .dialog-close { background: var(--surface-soft); color: var(--ink); }
+html[data-theme="dark"] .dialog-close:hover { background: var(--control-hover); }
+html[data-theme="dark"] .platform-tabs { background: var(--surface-soft); border-color: var(--glass-border); }
+html[data-theme="dark"] .platform-tabs>button { color: var(--muted); }
+html[data-theme="dark"] .platform-tabs>button.selected { background: var(--surface-raised); color: var(--ink); }
+html[data-theme="dark"] .platform-content>p, html[data-theme="dark"] .platform-content>small { color: var(--muted); }
+html[data-theme="dark"] .platform-content>.text-link { color: var(--purple); }
+html[data-theme="dark"] .platform-icon { color: var(--purple); background: var(--accent); }
 html[data-theme="dark"] .platform-icon.mint { color: #b7d8c4; background: #2d443b; }
-html[data-theme] .video-dialog-surface { color: var(--ink); background: var(--surface-raised); border-color: var(--glass-border); }
-html[data-theme] .video-dialog-header { color: var(--ink); }
-html[data-theme] .video-dialog-header>.dialog-close { color: var(--ink); background: var(--control-bg); }
-html[data-theme] .video-dialog p { color: var(--muted); }
+html[data-theme="dark"] .video-dialog-surface { color: var(--ink); background: var(--surface-raised); border-color: var(--glass-border); }
+html[data-theme="dark"] .video-dialog-header { color: var(--ink); }
+html[data-theme="dark"] .video-dialog-header>.dialog-close { color: var(--ink); background: var(--control-bg); }
+html[data-theme="dark"] .video-dialog p { color: var(--muted); }
 
 .document-nav { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 65px; }
-html[data-theme] .document-shell p, html[data-theme] .document-shell li { color: var(--muted); }
-html[data-theme] .document-shell code { background: var(--surface-soft); color: var(--purple); border-color: var(--line); }
-html[data-theme] .document-shell p a, html[data-theme] .document-shell li a, html[data-theme] .document-back { color: var(--purple); }
-html[data-theme] .document-note { background: var(--surface-soft); border-color: var(--glass-border); }
+html[data-theme="dark"] .document-shell p, html[data-theme="dark"] .document-shell li { color: var(--muted); }
+html[data-theme="dark"] .document-shell code { background: var(--surface-soft); color: var(--purple); border-color: var(--line); }
+html[data-theme="dark"] .document-shell p a, html[data-theme="dark"] .document-shell li a, html[data-theme="dark"] .document-back { color: var(--purple); }
+html[data-theme="dark"] .document-note { background: var(--surface-soft); border-color: var(--glass-border); }
 
 /* Artwork keeps its original palette. Dark-mode surfaces only surround it. */
 html[data-theme="dark"] .focus-site .zoom-art { background: #36323c; }
 html[data-theme="dark"] .focus-site .timeline-art { background: #302a3b; }
 html[data-theme="dark"] .focus-site .feature-art::after { border-color: #ffffff0c; }
 html[data-theme="dark"] .focus-site .editor-proof figure { border-color: var(--glass-border); box-shadow: 0 20px 60px #0004; }
-
-/* Iced glass: the colour belongs to the atmosphere, with white surfaces and a
-   clear blue action colour. These static gradients never affect video pixels. */
-html[data-theme="light"] .focus-site {
-  background:
-    radial-gradient(ellipse 68% 650px at 4% 190px, #beb1f5b3, transparent 76%),
-    radial-gradient(ellipse 62% 680px at 100% 280px, #9ed7eca6, transparent 78%),
-    radial-gradient(ellipse 60% 430px at 52% 560px, #fae6eee0, transparent 80%),
-    var(--paper);
-}
-html[data-theme="light"] .site-header {
-  background: linear-gradient(110deg, #ffffffd9, #eff8ffbf);
-  border-bottom-color: #ffffffeb;
-  box-shadow: 0 1px 0 #7290bb12;
-}
-html[data-theme="light"] :is(.button-dark,.skip-link) {
-  background: linear-gradient(145deg, #0874da, #075ccb);
-  border: 1px solid #ffffff66;
-  box-shadow: inset 0 1px 1px #ffffff80, 0 8px 20px #146cca26;
-}
-html[data-theme="light"] .button-dark:hover { background: linear-gradient(145deg,#0873d7,#064faf); }
-html[data-theme="light"] :is(.brand-mark,.best-light svg) { color: #1579da; }
-html[data-theme="light"] .best-light svg { stroke: #3e8df0; }
-html[data-theme="light"] .button-outline { border-color: #fff; box-shadow: inset 0 1px 0 #fff, 0 4px 10px #4064910d; }
-html[data-theme="light"] .focus-site .fs-motion-showcase {
-  border: 1px solid #fffffff2;
-  border-radius: 22px;
-  background: #ffffffb8;
-  box-shadow: inset 0 1px 1px #fff, 0 2px 3px #4b6e9110, 0 24px 65px -28px #3d589e55;
-}
-html[data-theme="light"] :is(.fs-motion-top,.fs-motion-controls) { background: linear-gradient(115deg,#ffffffed,#f3f8ffde); border-color: #ffffffed; }
-html[data-theme="light"] .fs-motion-controls>button.selected { color: #fff; background: linear-gradient(145deg,#0b74d5,#0962c7); border-color: #ffffffa6; box-shadow: inset 0 1px 0 #ffffff55, 0 3px 8px #347ace24; }
-html[data-theme="light"] .fs-scene { background: radial-gradient(ellipse at 12% 5%,#b4adf7b3,transparent 65%),radial-gradient(ellipse at 95% 85%,#95d8edc9,transparent 68%),linear-gradient(125deg,#d9d8f6,#f6eff5 54%,#d2e9f1); }
-html[data-theme="light"] .fs-scene-light-violet { background: radial-gradient(ellipse,#d4c5ff99,transparent 66%); }
-html[data-theme="light"] .fs-scene-light-mint { background: radial-gradient(ellipse,#b9eaff99,transparent 65%); }
-html[data-theme="light"] .fs-scene-pointer>span { background: #086bd2; }
-html[data-theme="light"] .fs-scene-bottom, html[data-theme="light"] .fs-scene-bottom>span { color: #445976; }
-html[data-theme="light"] .fs-scene-progress>i { background: #438ade; }
-html[data-theme="light"] .focus-site .zoom-art { background: radial-gradient(ellipse at top right,#a9dff29c,transparent 68%),linear-gradient(135deg,#d8d2f3,#edf4fc); }
-html[data-theme="light"] .focus-site .timeline-art { background: radial-gradient(ellipse at bottom right,#f8e1e99c,transparent 68%),linear-gradient(125deg,#d8e7f7,#d6d1ef); }
-html[data-theme="light"] .focus-site .ai-section { background: radial-gradient(ellipse at 9% 20%,#c4b9f480,transparent 60%),radial-gradient(ellipse at 88% 80%,#a8dbee85,transparent 65%),#e9eef9; }
-html[data-theme="light"] .conversation { border-color: #fff; border-radius: 24px; background: linear-gradient(135deg,#fffffff0,#f9fcffb3); box-shadow: inset 0 2px 1px #fff, 0 20px 44px -22px #3a528a50; }
-html[data-theme="light"] .conversation-user { background: linear-gradient(120deg,#e5ecff,#dcf1fc); border-color: #fff; }
-html[data-theme="light"] .focus-site .pricing-section { background: radial-gradient(ellipse at 80% 12%,#b8e5f085,transparent 70%),radial-gradient(ellipse at 12% 92%,#d3c7f285,transparent 65%),#eff3fb; }
-html[data-theme="light"] .pro-plan { background: linear-gradient(135deg,#fff,#edf7ff 60%,#e4ddfa); border-radius: 24px; border-color: #fff; box-shadow: inset 0 2px 0 #fff, 0 20px 36px -24px #5274a861; }
-html[data-theme="light"] .free-plan { border-radius: 24px; }
-html[data-theme="light"] .dialog-surface { background: radial-gradient(ellipse at 95% 8%,#d4eaff85,transparent 65%),linear-gradient(135deg,#fff,#f5f3fc); border-color: #fff; }
 
 @media(max-width:1100px) { .nav-actions { gap: 15px; } .main-nav { margin-right: 0; gap: 20px; } }
 @media(max-width:600px) { .nav-actions { gap: 11px; } .document-nav { margin-bottom: 47px; } }

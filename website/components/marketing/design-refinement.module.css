@@ -47,16 +47,6 @@
 .refinedSite :global(.closing-section)::before { content: ""; position: absolute; pointer-events: none; inset: 0 10%; z-index: -1; background: radial-gradient(ellipse at 50% 25%, var(--atmosphere-lilac, #ded4ef65), transparent 55%); }
 .closingArt { --focus-sculpture-size: 180px; width: 180px; height: 170px; margin: 0 auto 27px; }
 .refinedSite :global(.closing-section h2) { position: relative; }
-:global(html[data-theme="light"]) .lightField { background: radial-gradient(ellipse at 85% 20%,#bde7fb70,transparent 42%),radial-gradient(ellipse at 10% 50%,#b7a6ed59,transparent 44%); }
-:global(html[data-theme="light"]) .compositionFrame { border-color: #ffffffeb; background: linear-gradient(135deg,#ffffffe0,#ffffff4d 52%,#cdebf56b); box-shadow: inset 2px 2px 2px #fff, inset -1px -1px 1px #ffffffb3, 0 20px 36px -15px #536a955c; }
-:global(html[data-theme="light"]) .compositionFrame::before { border-color: #ffffffb3; }
-:global(html[data-theme="light"]) .compositionFrame::after { border-color: #a9cbe54d; }
-:global(html[data-theme="light"]) .compositionFrame i { border-color: #5a91b780; }
-:global(html[data-theme="light"]) .orbitDot { background: #76bcea; }
-:global(html[data-theme="light"]) .refinedSite :global(.hero-actions .button-dark) { box-shadow: inset 0 1px 1px #ffffffa6,0 10px 24px #2571c733; }
-:global(html[data-theme="light"]) .refinedSite :global(.main-nav a)::after { background: #3895e6; }
-:global(html[data-theme="light"]) .editorContours { border-color: #9ec8e76b; }
-:global(html[data-theme="light"]) .editorContours::before { border-color: #b7b5eb61; }
 @keyframes frameDrift { 0%,100% { transform: perspective(800px) translateY(0) rotateY(22deg) rotateZ(-17deg); } 50% { transform: perspective(800px) translateY(-11px) rotateY(16deg) rotateZ(-13deg); } }
 @keyframes lightTrace { 0%,20% { transform: translateX(-120%); opacity: 0; } 30% { opacity: .8; } 75%,100% { transform: translateX(330%); opacity: 0; } }
 @media (min-width: 1550px) { .heroAtmosphere { width: 1470px; } .heroSculpture { right: -10px; --focus-sculpture-size: 360px; width: 360px; height: 360px; } }
