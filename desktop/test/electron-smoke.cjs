@@ -25,7 +25,7 @@ app.whenReady().then(async () => {
     assert.equal(new URL(request.url).origin, SITE_ORIGIN);
     return new Response('<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'self\'; frame-src \'none\'"></head><body><h1>Focus Studio smoke fixture</h1></body></html>', {headers: {'content-type': 'text/html'}});
   });
-  const desktop = await createDesktop({show: false});
+  const desktop = await createDesktop({show: false, checkUpdates: false});
   console.log('Smoke: main window loaded.');
   const wc = desktop.window.webContents;
   const preferences = wc.getLastWebPreferences();
@@ -33,6 +33,9 @@ app.whenReady().then(async () => {
   const bridge = await wc.executeJavaScript(`(async () => ({node:typeof require,process:typeof process,version:window.focusDesktop.version,caps:await window.focusDesktop.getCapabilities()}))()`);
   assert.equal(bridge.node, 'undefined'); assert.equal(bridge.process, 'undefined'); assert.equal(bridge.version, 1);
   assert.equal(bridge.caps.platform, process.platform);
+  assert.equal(await wc.executeJavaScript(`window.focusDesktop.setActivity({recording:false,exporting:false}).then(()=>true)`), true);
+  assert.equal(await wc.executeJavaScript(`window.focusDesktop.setActivity({recording:'false',exporting:false}).then(()=>false,()=>true)`), true);
+  assert.equal(await wc.executeJavaScript(`window.focusDesktop.setActivity({recording:false,exporting:false,path:'/tmp'}).then(()=>false,()=>true)`), true);
   const badRequest = await wc.executeJavaScript(`window.focusDesktop.request({path:'https://evil.test',method:'GET'}).then(()=>false,()=>true)`);
   assert.equal(badRequest, true);
   const anonymous = await wc.executeJavaScript(`window.focusDesktop.request({path:'/api/account',method:'GET'})`);
@@ -57,6 +60,7 @@ app.whenReady().then(async () => {
   console.log('Smoke: trusted chooser passed.');
   await wc.loadURL('focus-desktop://shell/unavailable.html');
   assert.equal(await wc.executeJavaScript(`window.focusDesktop.getCapabilities().then(()=>false,()=>true)`), true);
+  assert.equal(await wc.executeJavaScript(`window.focusDesktop.setActivity({recording:false,exporting:false}).then(()=>false,()=>true)`), true);
   desktop.window.destroy(); clearTimeout(watchdog);
   console.log('PASS: real Electron sandbox, account bridge, origin rejection, camera denial, chooser isolation, and offline privilege rejection.');
   app.exit(0);

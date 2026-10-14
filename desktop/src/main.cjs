@@ -6,6 +6,7 @@ const {SITE_ORIGIN, STUDIO_URL, trustedURL, externalURL, trustedIPC, capabilitie
 const {AccountClient} = require('./account.cjs');
 const {TokenVault} = require('./vault.cjs');
 const {CaptureController} = require('./capture.cjs');
+const {UpdateController} = require('./updates.cjs');
 
 const SHELL_ORIGIN = 'focus-desktop://shell';
 const safePreferences = {nodeIntegration: false, nodeIntegrationInWorker: false, nodeIntegrationInSubFrames: false,
@@ -16,7 +17,7 @@ function registerScheme() {
   protocol.registerSchemesAsPrivileged([{scheme: 'focus-desktop', privileges: {standard: true, secure: true, supportFetchAPI: true}}]);
 }
 
-async function createDesktop({show = true} = {}) {
+async function createDesktop({show = true, checkUpdates = true} = {}) {
   const remoteSession = session.fromPartition('persist:focus-studio-v1');
   const localSession = session.fromPartition('focus-studio-shell');
   const files = {'/chooser.html': 'text/html', '/chooser.js': 'text/javascript', '/shell.css': 'text/css', '/unavailable.html': 'text/html'};
@@ -39,6 +40,9 @@ async function createDesktop({show = true} = {}) {
   let microphoneGranted = false;
   let microphonePrompt = false;
   let pairingPrompt = false;
+  // An older web editor may not report activity. Treat unknown activity as busy
+  // so an update dialog can never interrupt a recording from that editor.
+  let activity = null;
   const contents = () => mainWindow?.webContents;
   const vault = new TokenVault({directory: app.getPath('userData'), safeStorage});
   const onAccountChanged = () => { if (contents() && !contents().isDestroyed()) contents().send('focus:account-changed'); };
@@ -62,6 +66,13 @@ async function createDesktop({show = true} = {}) {
     } finally { pairingPrompt = false; }
   });
   ipcMain.handle('focus:sign-out', event => { requireTrusted(event); return account.signOut(); });
+  ipcMain.handle('focus:activity', (event, value) => {
+    requireTrusted(event);
+    if (!value || typeof value.recording !== 'boolean' || typeof value.exporting !== 'boolean' ||
+        Object.keys(value).some(key => !['recording', 'exporting'].includes(key))) throw new Error('Invalid editor activity.');
+    activity = {recording: value.recording, exporting: value.exporting};
+    void updates.flush();
+  });
 
   function chooserSender(event) {
     return chooser && !chooser.isDestroyed() && event.sender === chooser.webContents &&
@@ -103,6 +114,29 @@ async function createDesktop({show = true} = {}) {
   }
   const capture = new CaptureController({getContents: contents, getSources: () => desktopCapturer.getSources({
     types: ['screen', 'window'], thumbnailSize: {width: 320, height: 200}, fetchWindowIcons: false}), choose});
+  const updates = new UpdateController({directory: app.getPath('userData'), version: app.getVersion(),
+    isIdle: () => Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() && mainWindow.isFocused() &&
+      !capture.busy && !chooser && !microphonePrompt && !pairingPrompt &&
+      (contents().getURL() === `${SHELL_ORIGIN}/unavailable.html` || (activity && !activity.recording && !activity.exporting))),
+    openExternal: url => shell.openExternal(url),
+    present: async notice => {
+      if (notice.kind === 'available') {
+        const result = await dialog.showMessageBox(mainWindow, {type: 'info', title: 'Focus Studio update',
+          message: `Focus Studio Desktop ${notice.release.version} is available`,
+          detail: `${notice.release.title}\nInstalled: ${app.getVersion()} · ${notice.release.channel === 'preview' ? 'Preview' : 'Stable'} release\nDownload the installer, then close Focus Studio before installing. Your saved media stays on this computer.`,
+          buttons: ['Download update', 'Later'], defaultId: 0, cancelId: 1, noLink: true});
+        return result.response === 0 ? 'download' : 'later';
+      }
+      await dialog.showMessageBox(mainWindow, {type: 'info', title: 'Focus Studio updates', message: notice.message, buttons: ['OK']});
+      return 'dismiss';
+    },
+    onChanged: settings => {
+      const menu = Menu.getApplicationMenu();
+      const automatic = menu?.getMenuItemById('updates-automatic'); if (automatic) automatic.checked = settings.automatic;
+      const stable = menu?.getMenuItemById('updates-stable'); if (stable) stable.checked = settings.channel === 'stable';
+      const preview = menu?.getMenuItemById('updates-preview'); if (preview) preview.checked = settings.channel === 'preview';
+    }});
+  await updates.load();
   remoteSession.setDisplayMediaRequestHandler((request, callback) => { void capture.handle(request, callback); });
   remoteSession.setPermissionCheckHandler((wc, permission, origin, details) => {
     if (wc !== contents() || !trustedURL(origin) || details.isMainFrame !== true ||
@@ -137,7 +171,9 @@ async function createDesktop({show = true} = {}) {
   });
   wc.on('will-redirect', (event, url) => { if (!trustedURL(url, true)) event.preventDefault(); });
   wc.on('will-attach-webview', event => event.preventDefault());
-  wc.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => { if (isMainFrame && !isInPlace) pendingChoice?.finish(null); });
+  wc.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
+    if (isMainFrame && !isInPlace) { activity = null; pendingChoice?.finish(null); }
+  });
   remoteSession.on('will-download', (event, item, sender) => {
     const url = item.getURL();
     const ownBlob = typeof url === 'string' && url.startsWith(`blob:${SITE_ORIGIN}/`);
@@ -153,15 +189,25 @@ async function createDesktop({show = true} = {}) {
       {type: 'separator'}, {role: 'quit'}]},
     {label: 'Edit', submenu: [{role: 'undo'}, {role: 'redo'}, {type: 'separator'}, {role: 'cut'}, {role: 'copy'}, {role: 'paste'}, {role: 'selectAll'}]},
     {label: 'View', submenu: [{role: 'reload'}, {role: 'resetZoom'}, {role: 'zoomIn'}, {role: 'zoomOut'}, {role: 'togglefullscreen'}]},
-    {label: 'Help', submenu: [{label: 'About this desktop preview', click: () => dialog.showMessageBox(mainWindow, {
+    {label: 'Help', submenu: [
+      {label: 'Check for Updates…', enabled: Boolean(updates.platform), click: () => { void updates.check({manual: true}); }},
+      {id: 'updates-automatic', label: 'Automatically check for updates', type: 'checkbox', checked: updates.settings.automatic,
+        enabled: Boolean(updates.platform), click: item => updates.setAutomatic(item.checked)},
+      {label: 'Update channel', enabled: Boolean(updates.platform), submenu: [
+        {id: 'updates-preview', label: 'Stable and preview', type: 'radio', checked: updates.settings.channel === 'preview', click: () => updates.setChannel('preview')},
+        {id: 'updates-stable', label: 'Stable only', type: 'radio', checked: updates.settings.channel === 'stable', click: () => updates.setChannel('stable')}]},
+      {type: 'separator'},
+      {label: 'About this desktop preview', click: () => dialog.showMessageBox(mainWindow, {
       type: 'info', message: `Focus Studio Desktop ${app.getVersion()}`, detail: 'Screen and window recording, browser-based demo editing, and account export access.\nWindows: optional full-system audio. Linux: microphone only.\nInternet required. Native macOS features and MCP are not included in this preview.'})}]}
   ]));
   mainWindow.once('ready-to-show', () => { if (show) mainWindow?.show(); });
-  mainWindow.on('closed', () => { pendingChoice?.finish(null); account.dispose(); mainWindow = null; });
+  mainWindow.on('focus', () => { void updates.flush(); });
+  mainWindow.on('closed', () => { pendingChoice?.finish(null); account.dispose(); updates.dispose(); mainWindow = null; });
   await mainWindow.loadURL(STUDIO_URL).catch(async () => {
     if (mainWindow && !mainWindow.isDestroyed()) await mainWindow.loadURL(`${SHELL_ORIGIN}/unavailable.html`);
   });
-  return {window: mainWindow, account, capture, vault};
+  if (checkUpdates) updates.start();
+  return {window: mainWindow, account, capture, vault, updates};
 }
 
 if (require.main === module) {

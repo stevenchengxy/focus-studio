@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('focusDesktop', {
   request: (input) => ipcRenderer.invoke('focus:request', input),
   startSignIn: () => ipcRenderer.invoke('focus:sign-in'),
   signOut: () => ipcRenderer.invoke('focus:sign-out'),
+  setActivity: input => ipcRenderer.invoke('focus:activity', input),
   onAccountChanged: (fn) => {
     if (typeof fn !== 'function') throw new TypeError('Expected a callback.');
     const listener = () => fn();

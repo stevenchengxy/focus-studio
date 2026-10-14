@@ -23,9 +23,9 @@ The website decides which codecs and controls are available. Selecting “system
 
 Download only the artifacts from the repository's desktop release or the public website's download links, and compare against the release `SHA256SUMS.txt`.
 
-- **Windows:** run `Focus-Studio-Desktop-0.1.0-windows-x64.exe`. The installer supports installation for the current user. This preview is not Authenticode-signed, so Windows may show a publisher/reputation warning.
-- **Linux AppImage:** make `Focus-Studio-Desktop-0.1.0-linux-x86_64.AppImage` executable and open it. A FUSE-compatible installation may be required; extraction with `--appimage-extract` is an alternative. A working desktop session is required.
-- **Debian/Ubuntu:** install `Focus-Studio-Desktop-0.1.0-linux-amd64.deb` through the system package installer. Package dependencies must be resolved by the distribution.
+- **Windows:** run `Focus-Studio-Desktop-0.1.1-windows-x64.exe`. The installer supports installation for the current user. This preview is not Authenticode-signed, so Windows may show a publisher/reputation warning.
+- **Linux AppImage:** make `Focus-Studio-Desktop-0.1.1-linux-x86_64.AppImage` executable and open it. A FUSE-compatible installation may be required; extraction with `--appimage-extract` is an alternative. A working desktop session is required.
+- **Debian/Ubuntu:** install `Focus-Studio-Desktop-0.1.1-linux-amd64.deb` through the system package installer. Package dependencies must be resolved by the distribution.
 
 Wayland recording requires a working PipeWire service and desktop portal appropriate to the compositor. A portal cancellation denies capture; the app never silently records the first returned screen. Do not disable Chromium's sandbox to bypass a distribution configuration problem.
 
@@ -53,7 +53,7 @@ npm run dist:linux
 npm run checksums
 ```
 
-`.github/workflows/desktop-preview.yml` runs unit and real Electron integration smoke checks, builds Windows x64 NSIS and Linux x64 AppImage/deb, verifies Linux package metadata, and uploads installers plus checksums as Actions artifacts. It does not publish releases, sign binaries, or update the website automatically. `workflow_dispatch` can also run it manually. Release publication and the website's `WINDOWS_DOWNLOAD_URL` / `LINUX_DOWNLOAD_URL` values are separate explicit deployment steps.
+`.github/workflows/desktop-preview.yml` runs unit and real Electron integration smoke checks, builds Windows x64 NSIS and Linux x64 AppImage/deb, verifies Linux package metadata, and uploads installers plus checksums as Actions artifacts. It does not publish releases or sign binaries. `workflow_dispatch` can also run it manually. Publish verified installers using the [release workflow](UPDATES.md); the website and app update checker then discover the published release automatically.
 
 ## Website bridge, version 1
 
@@ -77,6 +77,7 @@ interface FocusDesktop {
   startSignIn(): Promise<{userCode: string; expiresIn: number}>;
   signOut(): Promise<void>;
   onAccountChanged(callback: () => void): () => void;
+  setActivity(activity: {recording: boolean; exporting: boolean}): void;
 }
 ```
 
@@ -92,11 +93,11 @@ Screen and microphone streams use standard `getDisplayMedia` and `getUserMedia`.
 - Camera, geolocation, device, filesystem and other unrelated permissions are denied. Microphone access needs explicit user approval for the current app session.
 - Downloads use the normal Save As dialog. The remote page cannot select a filesystem destination.
 - The release packaging disables Electron's Node-mode, Node environment/inspect flags and file-protocol privileges, and restricts loading to ASAR. Windows also enables embedded ASAR integrity validation.
-- No credentials are packaged. No automatic updater is configured; security/runtime upgrades require rebuilding and publishing a new installer.
+- No credentials are packaged. Daily update checks use the official release feed. Download prompts wait until the app is focused and idle; recording, playback, export, capture selection and permission dialogs defer them. The Help menu supports manual checking, a preview/stable channel and disabling automatic checks. Installation remains an explicit user action.
 
 ## Validation and remaining work
 
-Local validation covers 14 policy, capture, token-storage and account-race tests, plus an actual Electron integration smoke using a local HTTPS fixture for the pinned host. The smoke verifies sandbox preferences, absence of Node in the page, bridge rejection, installed camera-denial policy, chooser isolation, and rejection of privileges from the offline screen. It neither records the user's screen nor calls a live paid account.
+Local validation covers 24 policy, capture, token-storage, account-race and update tests, plus an actual Electron integration smoke using a local HTTPS fixture for the pinned host. The smoke verifies sandbox preferences, absence of Node in the page, bridge rejection, installed camera-denial policy, chooser isolation, bounded activity reporting, and rejection of privileges from the offline screen. It neither records the user's screen nor calls a live paid account.
 
 A Linux x64 unpacked app, AppImage and Debian installer were built on macOS. The Windows and Linux jobs in [CI run 38441738897](https://github.com/stevenchengxy/focus-studio/actions/runs/38441738897) both passed the real Electron smoke, unit tests and installer builds. Source-level unit tests and macOS-hosted Electron smoke are not evidence of successful microphone/system-audio capture on a Windows or Linux machine. Required live acceptance: X11 and Wayland screen/window selection, microphone denial/grant/revocation, Windows loopback including its warning, account pairing, a free successful export and receipt recovery, install/uninstall, and session data persistence.
 
