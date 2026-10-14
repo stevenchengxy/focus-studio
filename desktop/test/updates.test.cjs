@@ -101,7 +101,9 @@ test('settings survive restart; disabling automatic checks cancels a deferred au
   const restored = new UpdateController({directory: f.directory, platform: 'linux', version: '0.1.0', fetcher: () => assert.fail('automatic disabled')});
   await restored.load(); assert.equal(restored.platform, 'linux'); assert.equal(restored.settings.automatic, false); assert.equal(restored.settings.channel, 'stable');
   await restored.check(); restored.dispose();
-  assert.equal((await fs.stat(path.join(f.directory, 'updates.json'))).mode & 0o777, 0o600);
+  // Windows uses inherited user-profile ACLs; Node reports synthetic 0666 mode
+  // bits there even when mode: 0600 was requested. POSIX hosts enforce the mode.
+  if (process.platform !== 'win32') assert.equal((await fs.stat(path.join(f.directory, 'updates.json'))).mode & 0o777, 0o600);
   await fs.writeFile(path.join(f.directory, 'updates.json'), '{"channel":"other","automatic":"false","lastCheckedAt":"bad","token":"secret"}');
   const invalid = new UpdateController({directory: f.directory, platform: 'linux', version: '0.1.0'}); await invalid.load();
   assert.equal(invalid.settings.channel, 'preview'); assert.equal(invalid.settings.automatic, true); assert.equal(invalid.settings.token, undefined);
