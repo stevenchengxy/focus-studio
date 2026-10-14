@@ -44,16 +44,16 @@ export function FocusSculpture({ variant = "hero", className = "", size, style }
           <svg className={styles.face} viewBox="0 0 100 100" focusable="false">
             <defs>
               <linearGradient id={`${id}-porcelain`} x1="7%" y1="3%" x2="91%" y2="100%">
-                <stop stopColor="#fffefb" />
-                <stop offset=".24" stopColor="#e9dcff" />
-                <stop offset=".49" stopColor="#d2b8f4" />
-                <stop offset=".72" stopColor="#b496db" />
-                <stop offset="1" stopColor="#e4d6f5" />
+                <stop stopColor="var(--aperture-white, #fffefb)" />
+                <stop offset=".24" stopColor="var(--aperture-pearl, #e9dcff)" />
+                <stop offset=".49" stopColor="var(--aperture-ice, #d2b8f4)" />
+                <stop offset=".72" stopColor="var(--aperture-blue, #b496db)" />
+                <stop offset="1" stopColor="var(--aperture-blush, #e4d6f5)" />
               </linearGradient>
               <linearGradient id={`${id}-rim`} x1="0" y1="0" x2="1" y2="1">
                 <stop stopColor="#fffefb" stopOpacity=".95" />
                 <stop offset=".46" stopColor="#fffefb" stopOpacity=".45" />
-                <stop offset=".7" stopColor="#74518e" stopOpacity=".55" />
+                <stop offset=".7" stopColor="var(--aperture-edge, #74518e)" stopOpacity=".55" />
                 <stop offset="1" stopColor="#f8f4ff" stopOpacity=".7" />
               </linearGradient>
               <linearGradient id={`${id}-glaze`} x1="0" y1="0" x2="0" y2="1">

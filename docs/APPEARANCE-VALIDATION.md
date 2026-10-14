@@ -21,3 +21,12 @@ This checkpoint covers the light, dark and system appearance update. It does not
 - Full Windows/Linux capture and audio acceptance remains as documented in [CROSS-PLATFORM-DESKTOP.md](CROSS-PLATFORM-DESKTOP.md). Browser theme checks do not establish native recording parity.
 
 Appearance styling leaves video pixels, thumbnails, recording and export algorithms unchanged. New editor surfaces use static fills and gradients; no blur filter was added to the canvas or timeline.
+
+## Glass palette refinement — 2026-10-14
+
+- Website version 5 uses a lavender-to-ice-blue ambient gradient, a restrained blush accent, white glass surfaces and blue action gradients. Dark theme colors retain their previous values.
+- The production build through the Sites build helper and TypeScript checks passed. Light desktop (1440 px), light mobile (390 px), dark desktop and the Browser Studio sample editor were visually checked. The mobile layout's document width is 390 px, with no horizontal overflow.
+- The responsive sculpture opacity now follows the existing breakpoints. Small secondary text and blue accent text were darkened after contrast review; the white button text has at least 4.65:1 contrast across the action gradient.
+- The native library, preview background, panels, buttons and tracks use matching static gradients. No new video/timeline blur filters or animated background loops were introduced.
+- Installed macOS **1.14.2 (64)** was checked in the library and editor. Light → Dark retained the project, clip bounds, paused frame and **00:05.000** position; after stepping a frame, Dark → Light retained **00:05.033**. A screenshot misinterpretation initially reported as issue #31 was corrected and closed; no playback refresh patch is included.
+- Universal2 bundle and archive verification passed, including MCP discovery with **52 tools** on arm64 and x86_64. This remains an ad-hoc signed preview, not an Apple-notarized release.

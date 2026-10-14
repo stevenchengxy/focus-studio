@@ -95,7 +95,7 @@ struct LibraryView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                        .stroke(StudioTheme.line, lineWidth: 1)
+                                        .stroke(StudioTheme.glassEdge, lineWidth: 1)
                                 )
 
                                 Button {
@@ -111,7 +111,7 @@ struct LibraryView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                        .stroke(StudioTheme.line, lineWidth: 1)
+                                        .stroke(StudioTheme.glassEdge, lineWidth: 1)
                                 )
 
                             }
@@ -132,23 +132,25 @@ struct LibraryView: View {
                                 .frame(width: 280, height: 168)
                                 .rotationEffect(.degrees(-3))
                             RoundedRectangle(cornerRadius: 15, style: .continuous)
-                                .fill(Color(red: 0.055, green: 0.06, blue: 0.07))
+                                .fill(StudioTheme.heroScreen)
                                 .frame(width: 236, height: 132)
-                                .shadow(color: .black.opacity(0.35), radius: 16, y: 10)
+                                .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous)
+                                    .strokeBorder(StudioTheme.glassEdge, lineWidth: 1))
+                                .shadow(color: StudioTheme.heroShadow, radius: 16, y: 10)
                                 .overlay {
                                     Image(systemName: "cursorarrow.motionlines")
                                         .font(.system(size: 52, weight: .light))
-                                        .foregroundStyle(.white.opacity(0.78))
+                                        .foregroundStyle(StudioTheme.heroGlyph)
                                 }
                         }
                         .padding(.trailing, 24)
                     }
                     .padding(32)
-                    .background(StudioTheme.panelRaised.opacity(0.76))
+                    .background(StudioTheme.heroSurface)
                     .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 22, style: .continuous)
-                            .stroke(LinearGradient(colors: [StudioTheme.rim, StudioTheme.line], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
+                            .stroke(StudioTheme.glassEdge, lineWidth: 1)
                     )
                     .shadow(color: StudioTheme.panelShadow, radius: 18, y: 10)
 

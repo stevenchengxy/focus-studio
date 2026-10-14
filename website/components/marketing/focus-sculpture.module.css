@@ -163,6 +163,24 @@
 .closing .orbit { opacity: .75; }
 .closing .focusMark { opacity: .55; }
 
+:global(html[data-theme="light"]) .sculpture {
+  --aperture-white: #ffffff;
+  --aperture-pearl: #f1f1ff;
+  --aperture-ice: #dceefa;
+  --aperture-blue: #a5d1ea;
+  --aperture-blush: #e2d8f3;
+  --aperture-edge: #6d99c2;
+}
+:global(html[data-theme="light"]) .slice { border-top-color: #eef5ff; border-right-color: #91bcd9; border-bottom-color: #7d9fc5; border-left-color: #d6d9f1; }
+:global(html[data-theme="light"]) .slice:nth-child(3n) { border-right-color: #99c5df; border-left-color: #dbe2f6; }
+:global(html[data-theme="light"]) .glassEdge { border-top-color: #fff; border-left-color: #fff; border-right-color: #d4efffc9; border-bottom-color: #f4eaffb3; }
+:global(html[data-theme="light"]) .backEdge { border-color: #dcefff; }
+:global(html[data-theme="light"]) .focusMark i { border-color: #5d9ccc; }
+:global(html[data-theme="light"]) .orbit svg { stroke: #78a3c7; }
+:global(html[data-theme="light"]) .orbit svg .orbitAccent { stroke: #5a93c7; }
+:global(html[data-theme="light"]) .orbitMarker { background: #90caed; box-shadow: 0 0 0 .6em #ffffffb3; }
+:global(html[data-theme="light"]) .ground { background: radial-gradient(ellipse,#42638836, #567eaa19 38%, transparent 70%); }
+
 @keyframes aperture-float {
   0%, 100% { transform: translate3d(0, 0, 0) rotateX(14deg) rotateY(-30deg) rotateZ(-14deg); }
   50% { transform: translate3d(0, -4em, 2em) rotateX(9deg) rotateY(-21deg) rotateZ(-9deg); }

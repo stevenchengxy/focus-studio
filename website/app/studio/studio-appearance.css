@@ -1,33 +1,41 @@
 /* App chrome follows the shared website / desktop appearance preference.
    Canvas pixels and exported video are deliberately independent of this palette. */
 .browser-studio {
-  --studio-bg: #eef1f8;
-  --studio-surface: rgba(255, 255, 255, .8);
+  --studio-bg: #e7effc;
+  --studio-surface: rgba(255, 255, 255, .79);
   --studio-surface-raised: #fff;
-  --studio-surface-soft: #eff0f8;
-  --studio-text: #242434;
-  --studio-secondary: #555a70;
-  --studio-muted: #62697d;
-  --studio-line: rgba(89, 95, 137, .16);
-  --studio-edge: rgba(255, 255, 255, .95);
-  --studio-control: #e8eaf6;
-  --studio-control-hover: #dfe2f4;
-  --studio-accent: #6550c6;
+  --studio-surface-soft: #eef5ff;
+  --studio-text: #1c293d;
+  --studio-secondary: #415771;
+  --studio-muted: #4b5f76;
+  --studio-line: rgba(83, 123, 171, .18);
+  --studio-edge: rgba(255, 255, 255, .98);
+  --studio-panel-edge: rgba(255, 255, 255, .88);
+  --studio-control: #edf5ff;
+  --studio-control-hover: #e0edff;
+  --studio-accent: #0868cf;
+  --studio-link: #0757b7;
+  --studio-action-bg: linear-gradient(155deg, #0874da, #075ccb);
+  --studio-action-shadow: inset 0 1px 0 #ffffff80, 0 5px 12px -7px #0064cd9c;
   --studio-accent-text: #fff;
-  --studio-selected: #e3def9;
-  --studio-selected-line: #a799e0;
-  --studio-well: #e9ebf5;
-  --studio-preview-empty: #f7f8fd;
+  --studio-selected: #e0edff;
+  --studio-selection-bg: var(--studio-action-bg);
+  --studio-selection-text: #fff;
+  --studio-selection-line: #0763cf;
+  --studio-selected-line: #8fbce9;
+  --studio-well: #edf3fc;
+  --studio-preview-empty: #f8fbff;
   --studio-success: #376950;
   --studio-success-bg: #e4f1e9;
   --studio-success-control: #cee7d8;
   --studio-danger: #aa3f5b;
   --studio-danger-bg: #f7e3eb;
-  --studio-panel-shadow: 0 15px 36px -26px rgba(59, 61, 113, .38), inset 0 1px 0 var(--studio-edge);
+  --studio-panel-shadow: 0 20px 40px -25px rgba(49, 87, 140, .35), 0 3px 9px -6px rgba(49, 87, 140, .2), inset 0 1px 0 var(--studio-edge);
   color: var(--studio-text);
   background:
-    radial-gradient(ellipse 740px 460px at 4% 0%, #dce9fb 0%, transparent 75%),
-    radial-gradient(ellipse 600px 500px at 96% 8%, #e6e0f8 0%, transparent 74%),
+    radial-gradient(ellipse 800px 580px at 2% 3%, #d8d5f6 0%, transparent 78%),
+    radial-gradient(ellipse 780px 660px at 98% 22%, #c8e6fb 0%, transparent 78%),
+    radial-gradient(ellipse 900px 570px at 38% 95%, #f2dfe9 0%, transparent 78%),
     var(--studio-bg);
 }
 
@@ -44,6 +52,13 @@ html[data-theme="dark"] .browser-studio {
   --studio-control: #303348;
   --studio-control-hover: #3a3e56;
   --studio-accent: #b2a1ff;
+  --studio-link: var(--studio-accent);
+  --studio-action-bg: var(--studio-accent);
+  --studio-action-shadow: none;
+  --studio-selection-bg: var(--studio-selected);
+  --studio-selection-text: var(--studio-accent);
+  --studio-selection-line: var(--studio-selected-line);
+  --studio-panel-edge: var(--studio-line);
   --studio-accent-text: #1a1430;
   --studio-selected: #40365f;
   --studio-selected-line: #8474b8;
@@ -76,7 +91,7 @@ html[data-theme="dark"] .browser-studio {
 
 .browser-studio :is(.studio-canvas-panel, .studio-inspector, .studio-sound-panel) {
   background: var(--studio-surface);
-  border-color: var(--studio-line);
+  border-color: var(--studio-panel-edge);
   border-radius: 17px;
   box-shadow: var(--studio-panel-shadow);
 }
@@ -99,14 +114,14 @@ html[data-theme="dark"] .browser-studio {
 .browser-studio .studio-empty h2 { color: var(--studio-text); }
 .browser-studio .studio-empty > p { color: var(--studio-secondary); }
 .browser-studio .studio-empty > small { color: var(--studio-muted); }
-.browser-studio .studio-start-actions > .button-dark { color: var(--studio-accent-text); background: var(--studio-accent); }
+.browser-studio .studio-start-actions > .button-dark { color: var(--studio-accent-text); background: var(--studio-action-bg); box-shadow: var(--studio-action-shadow); }
 .browser-studio .studio-start-actions > .button-outline { color: var(--studio-secondary); background: var(--studio-surface-raised); border-color: var(--studio-line); }
 .browser-studio .studio-sample-button { color: var(--studio-accent); }
 .browser-studio .studio-sample-button:hover { color: var(--studio-text); }
 .browser-studio .studio-recording-actions > button { background: var(--studio-control); color: var(--studio-secondary); border-color: var(--studio-line); }
 .browser-studio .studio-recording-actions > button.stop { background: var(--studio-danger-bg); color: var(--studio-danger); border-color: var(--studio-line); }
 .browser-studio .studio-player { color: var(--studio-secondary); border-color: var(--studio-line); }
-.browser-studio .studio-player > button { background: var(--studio-accent); color: var(--studio-accent-text); border-radius: 8px; }
+.browser-studio .studio-player > button { background: var(--studio-action-bg); color: var(--studio-accent-text); border-radius: 8px; box-shadow: var(--studio-action-shadow); }
 .browser-studio .studio-player > input { accent-color: var(--studio-accent); }
 .browser-studio .studio-key { color: var(--studio-muted); border-color: var(--studio-line); }
 .browser-studio .studio-local-note { color: var(--studio-muted); background: var(--studio-surface-soft); }
@@ -127,9 +142,9 @@ html[data-theme="dark"] .browser-studio {
 }
 .browser-studio :is(.studio-range-label input, .studio-audio-toggle input, .studio-sound-level > input) { accent-color: var(--studio-accent); }
 .browser-studio .studio-effect-options > button { background: var(--studio-control); color: var(--studio-secondary); border-radius: 9px; }
-.browser-studio .studio-effect-options > button.selected { color: var(--studio-accent); background: var(--studio-selected); border-color: var(--studio-selected-line); }
+.browser-studio .studio-effect-options > button.selected { color: var(--studio-selection-text); background: var(--studio-selection-bg); border-color: var(--studio-selection-line); box-shadow: var(--studio-action-shadow); }
 .browser-studio :is(.studio-control-hint, .studio-focus-coordinates, .studio-export-section > small, .studio-replace > span, .studio-clear-saved) { color: var(--studio-muted); }
-.browser-studio .studio-export-section > .button { background: var(--studio-accent); color: var(--studio-accent-text); border-radius: 9px; }
+.browser-studio .studio-export-section > .button { background: var(--studio-action-bg); color: var(--studio-accent-text); border-radius: 9px; box-shadow: var(--studio-action-shadow); }
 .browser-studio .studio-download-again { color: var(--studio-success); }
 .browser-studio .studio-capture-settings details { color: var(--studio-secondary); }
 .browser-studio .studio-replace button { color: var(--studio-secondary); background: var(--studio-control); border-radius: 8px; }
@@ -140,7 +155,7 @@ html[data-theme="dark"] .browser-studio {
 .browser-studio .studio-recovery-actions > button.discard { color: var(--studio-success); background: none; }
 .browser-studio .studio-footer { border-color: var(--studio-line); }
 .browser-studio .studio-footer > p { color: var(--studio-muted); }
-.browser-studio .studio-footer > a { color: var(--studio-accent); }
+.browser-studio .studio-footer > a { color: var(--studio-link); }
 
 .browser-studio :is(.studio-sound-heading h2, .studio-sound-panel legend, .studio-voice-header h3) { color: var(--studio-text); }
 .browser-studio .studio-sound-heading > span { color: var(--studio-muted); }
@@ -155,7 +170,7 @@ html[data-theme="dark"] .browser-studio {
 /* Keep transitions off the canvas, waveform and timeline during interaction. */
 .browser-studio button:not(:disabled), .browser-studio a { transition: background-color .16s ease, color .16s ease, border-color .16s ease; }
 .browser-studio :is(.studio-inspector-title button, .studio-effect-options > button, .studio-replace button, .studio-voice-actions > button):not(:disabled):hover { background: var(--studio-control-hover); }
-.browser-studio .studio-effect-options > button.selected:hover { background: var(--studio-selected); }
+.browser-studio .studio-effect-options > button.selected:hover { background: var(--studio-selection-bg); }
 .browser-studio :is(button, a, input, select, summary):focus-visible { outline: 2px solid var(--studio-accent); outline-offset: 3px; }
 .browser-studio .studio-export-overlay { backdrop-filter: none; background: #171420f5; }
 

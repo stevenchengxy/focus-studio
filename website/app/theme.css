@@ -2,22 +2,22 @@
    animated backdrop effects. Each palette keeps the same editorial layout. */
 :root {
   color-scheme: light;
-  --paper: #f8f7fb;
-  --ink: #292735;
-  --muted: #706b80;
-  --purple: #7856d4;
-  --line: #dfdce9;
+  --paper: #f5f8fd;
+  --ink: #1c293d;
+  --muted: #45576e;
+  --purple: #075ec4;
+  --line: #cad6e5;
   --surface: #ffffffa8;
-  --surface-raised: #fdfcff;
-  --surface-soft: #eeebf7;
-  --glass-border: #d8d3e5b8;
-  --glass-highlight: #ffffffed;
-  --control-bg: #ffffff82;
-  --control-hover: #eae5f6;
-  --action-bg: #2b2739;
+  --surface-raised: #ffffff;
+  --surface-soft: #edf3fc;
+  --glass-border: #ffffffd6;
+  --glass-highlight: #ffffff;
+  --control-bg: #ffffffb8;
+  --control-hover: #e2efff;
+  --action-bg: #086bd2;
   --action-fg: #fff;
-  --action-hover: #49405e;
-  --accent: #eae3f9;
+  --action-hover: #075ab7;
+  --accent: #dcecff;
   --accent-foreground: var(--ink);
   --secondary: var(--surface-soft);
   --secondary-foreground: var(--ink);
@@ -29,14 +29,15 @@
   --primary-foreground: var(--action-fg);
   --border: var(--line);
   --input: var(--line);
-  --shadow-color: #34304b16;
+  --shadow-color: #354e8226;
   --success: #347b63;
   --danger: #9b3d51;
   --danger-surface: #fff0f3;
   --danger-border: #f2ced8;
-  --atmosphere-lilac: #dcd3f164;
-  --atmosphere-blue: #d6e4f875;
-  --atmosphere-mint: #d9ead946;
+  --atmosphere-lilac: #b7a7f78c;
+  --atmosphere-blue: #9fdcf4a6;
+  --atmosphere-mint: #c5eee87a;
+  --atmosphere-blush: #f7dfeb;
 }
 
 html[data-theme="dark"] {
@@ -156,6 +157,53 @@ html[data-theme="dark"] .focus-site .zoom-art { background: #36323c; }
 html[data-theme="dark"] .focus-site .timeline-art { background: #302a3b; }
 html[data-theme="dark"] .focus-site .feature-art::after { border-color: #ffffff0c; }
 html[data-theme="dark"] .focus-site .editor-proof figure { border-color: var(--glass-border); box-shadow: 0 20px 60px #0004; }
+
+/* Iced glass: the colour belongs to the atmosphere, with white surfaces and a
+   clear blue action colour. These static gradients never affect video pixels. */
+html[data-theme="light"] .focus-site {
+  background:
+    radial-gradient(ellipse 68% 650px at 4% 190px, #beb1f5b3, transparent 76%),
+    radial-gradient(ellipse 62% 680px at 100% 280px, #9ed7eca6, transparent 78%),
+    radial-gradient(ellipse 60% 430px at 52% 560px, #fae6eee0, transparent 80%),
+    var(--paper);
+}
+html[data-theme="light"] .site-header {
+  background: linear-gradient(110deg, #ffffffd9, #eff8ffbf);
+  border-bottom-color: #ffffffeb;
+  box-shadow: 0 1px 0 #7290bb12;
+}
+html[data-theme="light"] :is(.button-dark,.skip-link) {
+  background: linear-gradient(145deg, #0874da, #075ccb);
+  border: 1px solid #ffffff66;
+  box-shadow: inset 0 1px 1px #ffffff80, 0 8px 20px #146cca26;
+}
+html[data-theme="light"] .button-dark:hover { background: linear-gradient(145deg,#0873d7,#064faf); }
+html[data-theme="light"] :is(.brand-mark,.best-light svg) { color: #1579da; }
+html[data-theme="light"] .best-light svg { stroke: #3e8df0; }
+html[data-theme="light"] .button-outline { border-color: #fff; box-shadow: inset 0 1px 0 #fff, 0 4px 10px #4064910d; }
+html[data-theme="light"] .focus-site .fs-motion-showcase {
+  border: 1px solid #fffffff2;
+  border-radius: 22px;
+  background: #ffffffb8;
+  box-shadow: inset 0 1px 1px #fff, 0 2px 3px #4b6e9110, 0 24px 65px -28px #3d589e55;
+}
+html[data-theme="light"] :is(.fs-motion-top,.fs-motion-controls) { background: linear-gradient(115deg,#ffffffed,#f3f8ffde); border-color: #ffffffed; }
+html[data-theme="light"] .fs-motion-controls>button.selected { color: #fff; background: linear-gradient(145deg,#0b74d5,#0962c7); border-color: #ffffffa6; box-shadow: inset 0 1px 0 #ffffff55, 0 3px 8px #347ace24; }
+html[data-theme="light"] .fs-scene { background: radial-gradient(ellipse at 12% 5%,#b4adf7b3,transparent 65%),radial-gradient(ellipse at 95% 85%,#95d8edc9,transparent 68%),linear-gradient(125deg,#d9d8f6,#f6eff5 54%,#d2e9f1); }
+html[data-theme="light"] .fs-scene-light-violet { background: radial-gradient(ellipse,#d4c5ff99,transparent 66%); }
+html[data-theme="light"] .fs-scene-light-mint { background: radial-gradient(ellipse,#b9eaff99,transparent 65%); }
+html[data-theme="light"] .fs-scene-pointer>span { background: #086bd2; }
+html[data-theme="light"] .fs-scene-bottom, html[data-theme="light"] .fs-scene-bottom>span { color: #445976; }
+html[data-theme="light"] .fs-scene-progress>i { background: #438ade; }
+html[data-theme="light"] .focus-site .zoom-art { background: radial-gradient(ellipse at top right,#a9dff29c,transparent 68%),linear-gradient(135deg,#d8d2f3,#edf4fc); }
+html[data-theme="light"] .focus-site .timeline-art { background: radial-gradient(ellipse at bottom right,#f8e1e99c,transparent 68%),linear-gradient(125deg,#d8e7f7,#d6d1ef); }
+html[data-theme="light"] .focus-site .ai-section { background: radial-gradient(ellipse at 9% 20%,#c4b9f480,transparent 60%),radial-gradient(ellipse at 88% 80%,#a8dbee85,transparent 65%),#e9eef9; }
+html[data-theme="light"] .conversation { border-color: #fff; border-radius: 24px; background: linear-gradient(135deg,#fffffff0,#f9fcffb3); box-shadow: inset 0 2px 1px #fff, 0 20px 44px -22px #3a528a50; }
+html[data-theme="light"] .conversation-user { background: linear-gradient(120deg,#e5ecff,#dcf1fc); border-color: #fff; }
+html[data-theme="light"] .focus-site .pricing-section { background: radial-gradient(ellipse at 80% 12%,#b8e5f085,transparent 70%),radial-gradient(ellipse at 12% 92%,#d3c7f285,transparent 65%),#eff3fb; }
+html[data-theme="light"] .pro-plan { background: linear-gradient(135deg,#fff,#edf7ff 60%,#e4ddfa); border-radius: 24px; border-color: #fff; box-shadow: inset 0 2px 0 #fff, 0 20px 36px -24px #5274a861; }
+html[data-theme="light"] .free-plan { border-radius: 24px; }
+html[data-theme="light"] .dialog-surface { background: radial-gradient(ellipse at 95% 8%,#d4eaff85,transparent 65%),linear-gradient(135deg,#fff,#f5f3fc); border-color: #fff; }
 
 @media(max-width:1100px) { .nav-actions { gap: 15px; } .main-nav { margin-right: 0; gap: 20px; } }
 @media(max-width:600px) { .nav-actions { gap: 11px; } .document-nav { margin-bottom: 47px; } }
