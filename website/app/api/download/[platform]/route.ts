@@ -15,9 +15,12 @@ export async function GET(request: Request, context: { params: Promise<{ platfor
         const pinned = new URL(latest.pinnedURL);
         pinned.protocol = url.protocol;
         pinned.host = url.host;
-        // A generic URL can resolve to a different release after publication.
-        // Never append its bytes to an older partial download without identity.
-        if (request.headers.has('range')) return new Response('Resume using the original versioned download link, or restart this download.', {
+        // Initial byte probes and fresh downloads start at zero and can safely
+        // resolve to an exact asset. Other ranges may append to an older file;
+        // require pinned identity before forwarding those resume requests.
+        const range = request.headers.get('range');
+        const startsAtBeginning = range !== null && /^bytes=0-\d*$/.test(range);
+        if (range !== null && !startsAtBeginning) return new Response('Resume using the original versioned download link, or restart this download.', {
           status: 409, headers: { 'Cache-Control': 'no-store', 'Location': pinned.href },
         });
         return new Response(null, { status: 307, headers: { 'Location': pinned.href, 'Cache-Control': 'no-store' } });

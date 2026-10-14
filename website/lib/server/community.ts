@@ -1,10 +1,11 @@
 import {APIError, nowSeconds} from './primitives';
+import {communityDisplayName,getCommunityProfile} from './community-profile';
 
 export const COMMUNITY_MAX_BYTES = 100 * 1024 * 1024;
 export const COMMUNITY_ACCOUNT_BYTES = 500 * 1024 * 1024;
 export const COMMUNITY_ACCOUNT_POSTS = 20;
 export type CommunityCategory = 'demo' | 'ai-video';
-export type CommunityViewer = {id: string; name?: string};
+export type CommunityViewer = {id: string; name?: string; displayName?:string|null};
 export interface CommunityPost {
   id: string; owner_id: string; title: string; description: string; caption: string; product_url: string | null;
   category: CommunityCategory; author_name: string; status: 'draft' | 'published'; license: string | null;
@@ -29,9 +30,7 @@ export function communityMetadata(body: Record<string, unknown>) {
   const title = text(body.title,'title',100,true);
   const description = text(body.description ?? '', 'description',2000);
   const caption = text(body.caption ?? '', 'caption',1000);
-  const authorName = text(body.authorName, 'display name',64,true);
-  // Email is not a public profile name, including the auth helper's fallback.
-  if (/\S+@\S+\.\S+/.test(authorName)) throw new APIError(400,'community_public_name_required','Choose a public display name instead of an email address.');
+  const authorName = communityDisplayName(body.authorName);
   if (body.category !== 'demo' && body.category !== 'ai-video') throw new APIError(400,'community_invalid_category','Choose a clip category.');
   let productUrl: string | null = null;
   if (body.productUrl !== undefined && body.productUrl !== null && body.productUrl !== '') {
@@ -72,13 +71,14 @@ export async function getCommunityPost(db: D1Database, id: string, viewerId?: st
   return post;
 }
 export async function createCommunityPost(db: D1Database, viewer: CommunityViewer, body: Record<string,unknown>, now = nowSeconds()) {
-  const metadata = communityMetadata(body), file = communityFile(body), id = crypto.randomUUID();
+  const profile=await getCommunityProfile(db,viewer.id);
+  const metadata = communityMetadata({...body,authorName:profile.displayName??body.authorName}), file = communityFile(body), id = crypto.randomUUID();
   // A single conditional INSERT makes quota reservation atomic across tabs.
   const result = await db.prepare(`INSERT INTO community_posts(id,owner_id,title,description,caption,product_url,category,author_name,filename,mime_type,size_bytes,created_at,updated_at)
-    SELECT ?,?,?,?,?,?,?,?,?,?,?,?,? WHERE
+    SELECT ?,?,?,?,?,?,?,COALESCE((SELECT display_name FROM community_profiles WHERE owner_id=?),?),?,?,?,?,? WHERE
     (SELECT COUNT(*) FROM community_posts WHERE owner_id=? AND (deleted_at IS NULL OR object_key IS NOT NULL OR poster_key IS NOT NULL))<? AND
     (SELECT COALESCE(SUM(size_bytes),0) FROM community_posts WHERE owner_id=? AND (deleted_at IS NULL OR object_key IS NOT NULL OR poster_key IS NOT NULL))+?<=?`)
-    .bind(id,viewer.id,metadata.title,metadata.description,metadata.caption,metadata.productUrl,metadata.category,metadata.authorName,file.filename,file.mimeType,file.sizeBytes,now,now,
+    .bind(id,viewer.id,metadata.title,metadata.description,metadata.caption,metadata.productUrl,metadata.category,viewer.id,metadata.authorName,file.filename,file.mimeType,file.sizeBytes,now,now,
       viewer.id,COMMUNITY_ACCOUNT_POSTS,viewer.id,file.sizeBytes,COMMUNITY_ACCOUNT_BYTES).run();
   if (result.meta.changes !== 1) throw new APIError(429,'community_quota_exceeded','Your library is full. Delete a clip before uploading another.');
   return getCommunityPost(db,id,viewer.id,true);
@@ -87,9 +87,10 @@ export async function editCommunityPost(db: D1Database, id: string, viewer: Comm
   const post = await getCommunityPost(db,id,viewer.id,true);
   const allowed = ['title','description','caption','productUrl','category','authorName'];
   if (Object.keys(body).some(key => !allowed.includes(key))) throw new APIError(400,'community_invalid_metadata','Only clip details can be edited.');
-  const metadata = communityMetadata({title:post.title,description:post.description,caption:post.caption,productUrl:post.product_url,category:post.category,authorName:post.author_name,...body});
-  await db.prepare(`UPDATE community_posts SET title=?,description=?,caption=?,product_url=?,category=?,author_name=?,updated_at=? WHERE id=? AND owner_id=? AND deleted_at IS NULL`)
-    .bind(metadata.title,metadata.description,metadata.caption,metadata.productUrl,metadata.category,metadata.authorName,now,id,viewer.id).run();
+  const profile=await getCommunityProfile(db,viewer.id);
+  const metadata = communityMetadata({title:post.title,description:post.description,caption:post.caption,productUrl:post.product_url,category:post.category,...body,authorName:profile.displayName??body.authorName??post.author_name});
+  await db.prepare(`UPDATE community_posts SET title=?,description=?,caption=?,product_url=?,category=?,author_name=COALESCE((SELECT display_name FROM community_profiles WHERE owner_id=?),?),updated_at=? WHERE id=? AND owner_id=? AND deleted_at IS NULL`)
+    .bind(metadata.title,metadata.description,metadata.caption,metadata.productUrl,metadata.category,viewer.id,metadata.authorName,now,id,viewer.id).run();
   return getCommunityPost(db,id,viewer.id,true);
 }
 export async function publishCommunityPost(db: D1Database, id: string, viewer: CommunityViewer, body: Record<string,unknown>, now = nowSeconds()) {

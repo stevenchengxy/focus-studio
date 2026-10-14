@@ -1,16 +1,18 @@
 import {env} from 'cloudflare:workers';
 import {getChatGPTUser} from '@/app/chatgpt-auth';
 import {APIError} from './primitives';
-import {mutationGuard, rateLimit} from './runtime';
+import {database,mutationGuard, rateLimit} from './runtime';
 import type {CommunityViewer} from './community';
+import {getCommunityProfile} from './community-profile';
 
 // Sites identity is authoritative here; API tokens and billing identities do
 // not grant access to community drafts or another user's uploads.
 export async function communityViewer(): Promise<CommunityViewer|null> {
   const user=await getChatGPTUser();
   if(!user)return null;
-  const name=user.fullName?.trim();
-  return {id:user.userId,...(name && name.length<=64 && !/\S+@\S+\.\S+/.test(name) ? {name} : {})};
+  const {displayName}=await getCommunityProfile(database(),user.userId);
+  const name=displayName??user.fullName?.trim();
+  return {id:user.userId,displayName,...(name && name.length<=64 && !/[^\s@]+@[^\s@]+/.test(name) ? {name} : {})};
 }
 export async function communityWriter(request: Request,action: string,limit=60) {
   mutationGuard(request,false);

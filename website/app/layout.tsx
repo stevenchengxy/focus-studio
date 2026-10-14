@@ -6,7 +6,6 @@ import { ThemeProvider } from "@/components/theme/theme-provider";
 import { themeInitScript } from "@/components/theme/theme-settings";
 
 export const metadata: Metadata = {
-  manifest: "/manifest.webmanifest",
   title: "Focus Studio — Your product, in its best light",
   description:
     "Record a product demo. Shape the story with precise zooms, local emphasis and an AI editing assistant. Download for Mac, Windows or Linux. Create freely and share your work.",

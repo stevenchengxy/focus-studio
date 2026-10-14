@@ -47,6 +47,10 @@ export const webSessions = sqliteTable('web_sessions', {
 });
 
 // Community assets stay private in R2; every read checks publication/ownership.
+export const communityProfiles = sqliteTable('community_profiles', {
+  ownerId: text('owner_id').primaryKey(), displayName: text('display_name').notNull(),
+  createdAt: integer('created_at').notNull(), updatedAt: integer('updated_at').notNull(),
+});
 export const communityPosts = sqliteTable('community_posts', {
   id: text('id').primaryKey(), ownerId: text('owner_id').notNull(),
   title: text('title').notNull(), description: text('description').notNull().default(''),

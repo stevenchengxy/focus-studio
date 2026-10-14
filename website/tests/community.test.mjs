@@ -7,21 +7,22 @@ import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import ts from 'typescript';
 const temp=await mkdtemp(join(tmpdir(),'focus-community-'));
-for(const name of ['primitives','community','community-media','community-runtime','community-routes']) {
+for(const name of ['primitives','community-profile','community','community-media','community-runtime','community-routes']) {
  const source=await readFile(new URL(`../lib/server/${name}.ts`,import.meta.url),'utf8');
  let js=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText;
- for(const dependency of ['primitives','community','community-media','community-runtime','runtime'])js=js.replaceAll(`'./${dependency}'`,`'./${dependency}.mjs'`);
+ for(const dependency of ['primitives','community-profile','community','community-media','community-runtime','runtime'])js=js.replaceAll(`'./${dependency}'`,`'./${dependency}.mjs'`);
  js=js.replaceAll("'cloudflare:workers'","'./fixtures.mjs'").replaceAll("'@/app/chatgpt-auth'","'./fixtures.mjs'");
  await writeFile(join(temp,`${name}.mjs`),js);
 }
 await writeFile(join(temp,'fixtures.mjs'),`export const env={get BUCKET(){return globalThis.__communityFixture.bucket},get COMMUNITY_MODERATOR_IDS(){return globalThis.__communityFixture.moderatorIDs}};export async function getChatGPTUser(){return globalThis.__communityFixture.user;}`);
 await writeFile(join(temp,'runtime.mjs'),`import {APIError,checkOrigin} from './primitives.mjs';export const database=()=>globalThis.__communityFixture.db;export const mutationGuard=(request,allowNative)=>checkOrigin(request,'https://studio.test',allowNative);export async function rateLimit(key,limit){const map=globalThis.__communityFixture.rates;const count=(map.get(key)||0)+1;map.set(key,count);if(count>limit)throw new APIError(429,'too_many_requests','Too many requests.');}export async function api(work){try{return await work()}catch(error){return Response.json({error:{code:error.code||'service_error'}},{status:error.status||503})}}`);
 const core=await import(pathToFileURL(join(temp,'community.mjs')));
+const profiles=await import(pathToFileURL(join(temp,'community-profile.mjs')));
 const media=await import(pathToFileURL(join(temp,'community-media.mjs')));
 const routes=await import(pathToFileURL(join(temp,'community-routes.mjs')));
 const sqlDir=new URL('../drizzle/',import.meta.url);
 const sql=(await Promise.all((await readdir(sqlDir)).filter(n=>n.endsWith('.sql')).sort().map(n=>readFile(new URL(n,sqlDir),'utf8')))).join('\n');
-function database(){const raw=new DatabaseSync(':memory:');raw.exec('PRAGMA foreign_keys=ON');raw.exec(sql);function prepare(sql,args=[]){return{bind(...values){return prepare(sql,values)},async first(){return raw.prepare(sql).get(...args)??null},async all(){return{results:raw.prepare(sql).all(...args)}},async run(){return{meta:{changes:Number(raw.prepare(sql).run(...args).changes)}}}}}return{raw,prepare}}
+function database(){const raw=new DatabaseSync(':memory:');raw.exec('PRAGMA foreign_keys=ON');raw.exec(sql);function prepare(sql,args=[]){const run=()=>({meta:{changes:Number(raw.prepare(sql).run(...args).changes)}});return{bind(...values){return prepare(sql,values)},async first(){return raw.prepare(sql).get(...args)??null},async all(){return{results:raw.prepare(sql).all(...args)}},async run(){return run()},_run:run}}return{raw,prepare,async batch(statements){raw.exec('BEGIN IMMEDIATE');try{const results=statements.map(statement=>statement._run());raw.exec('COMMIT');return results}catch(error){raw.exec('ROLLBACK');throw error}}}}
 class Bucket {
  objects=new Map();beforeStore=null;failDelete=false;
  async put(key,input){const bytes=new Uint8Array(await new Response(input).arrayBuffer());if(this.beforeStore)await this.beforeStore(key);this.objects.set(key,bytes);return{size:bytes.length,httpEtag:'"fixture-etag"'}}
@@ -138,6 +139,48 @@ test('HTTP adapters require Sites identity and same-origin writes, never disclos
 });
 test('HTTP adapters apply per-author creation rate before reserving more storage',async()=>{
  fixture();for(let i=0;i<10;i++)assert.equal((await routes.createCommunity(jsonRequest(metadata))).status,201);const blocked=await routes.createCommunity(jsonRequest(metadata));assert.equal(blocked.status,429);assert.equal((await blocked.json()).error.code,'too_many_requests');
+});
+test('persistent profile is private, validates names and overrides old per-work form values',async()=>{
+ const f=fixture();assert.deepEqual(await profiles.getCommunityProfile(f.db,owner.id),{displayName:null});
+ assert.deepEqual(await (await routes.readCommunityProfile()).json(),{displayName:null});
+ let response=await routes.updateCommunityProfile(jsonRequest({displayName:'  星河 Studio  '},'PATCH'));assert.equal(response.status,200);assert.deepEqual(await response.json(),{displayName:'星河 Studio'});
+ let me=await (await routes.communityMe()).json();assert.equal(me.displayName,'星河 Studio');assert.equal(me.viewerName,'星河 Studio');assert.equal(me.viewerId,owner.id);assert.ok(!JSON.stringify(me).includes('private@example.invalid'));
+ const post=await create(f.db,{authorName:'Stale form name'});assert.equal(post.author_name,'星河 Studio');
+ assert.equal((await core.editCommunityPost(f.db,post.id,owner,{title:'Updated title',authorName:'Another alias'})).author_name,'星河 Studio');
+ assert.equal((await create(f.db,{authorName:undefined})).author_name,'星河 Studio');
+ for(const displayName of ['', '   ', 'a'.repeat(65), 'a\nb', 'a\u0000b'])await assert.rejects(profiles.saveCommunityProfile(f.db,owner.id,{displayName}),bad('community_invalid_profile'));
+ for(const displayName of ['person@example.invalid','person@localhost'])await assert.rejects(profiles.saveCommunityProfile(f.db,owner.id,{displayName}),bad('community_public_name_required'));
+ await assert.rejects(profiles.saveCommunityProfile(f.db,owner.id,{displayName:'Good',ownerId:other.id}),bad('community_invalid_profile'));
+ assert.deepEqual(await profiles.getCommunityProfile(f.db,other.id),{displayName:null});
+ f.user=null;assert.equal((await routes.readCommunityProfile()).status,401);assert.equal((await routes.updateCommunityProfile(jsonRequest({displayName:'No identity'},'PATCH'))).status,401);
+ assert.equal((await (await routes.communityMe()).json()).displayName,null);
+});
+test('profile rename atomically synchronizes only owner author names without changing project data or state',async()=>{
+ const db=database(),bucket=new Bucket();const publishedPost=await published(db,bucket),draft=await create(db),otherPost=await create(db,{},other);
+ await core.moderateCommunityPost(db,publishedPost.id,{id:'moderator'},{action:'hide',reason:'Review'},150);
+ const before=db.raw.prepare('SELECT * FROM community_posts ORDER BY id').all();
+ await profiles.saveCommunityProfile(db,owner.id,{displayName:'New name'},200);
+ const after=db.raw.prepare('SELECT * FROM community_posts ORDER BY id').all();
+ assert.deepEqual(after.map(row=>({...row})),before.map(row=>({...row,author_name:row.owner_id===owner.id?'New name':row.author_name})));
+ assert.equal((await core.getCommunityPost(db,draft.id,owner.id)).status,'draft');assert.equal((await core.getCommunityPost(db,otherPost.id,other.id)).author_name,metadata.authorName);
+ await profiles.saveCommunityProfile(db,owner.id,{displayName:'Final name'},300);const profile=db.raw.prepare('SELECT * FROM community_profiles WHERE owner_id=?').get(owner.id);assert.equal(profile.created_at,200);assert.equal(profile.updated_at,300);assert.equal(profile.display_name,'Final name');
+});
+test('failed attribution sync rolls back profile change and concurrent create/edit keep canonical name',async()=>{
+ const db=database(),post=await create(db);await profiles.saveCommunityProfile(db,owner.id,{displayName:'Original'},100);
+ db.raw.exec("CREATE TRIGGER reject_rename BEFORE UPDATE OF author_name ON community_posts BEGIN SELECT RAISE(ABORT,'fixture rejection'); END");
+ await assert.rejects(profiles.saveCommunityProfile(db,owner.id,{displayName:'Should roll back'},200));assert.equal((await profiles.getCommunityProfile(db,owner.id)).displayName,'Original');assert.equal((await core.getCommunityPost(db,post.id,owner.id)).author_name,'Original');
+ db.raw.exec('DROP TRIGGER reject_rename');
+ await Promise.all([create(db,{authorName:'Old form'}),core.editCommunityPost(db,post.id,owner,{authorName:'Old form',description:'Changed content'}),profiles.saveCommunityProfile(db,owner.id,{displayName:'Concurrent final'},300)]);
+ assert.ok(db.raw.prepare('SELECT author_name FROM community_posts WHERE owner_id=?').all(owner.id).every(row=>row.author_name==='Concurrent final'));
+ assert.equal((await core.getCommunityPost(db,post.id,owner.id)).description,'Changed content');
+});
+test('profile API rejects cross-origin changes, isolates accounts and rate limits repeated renames',async()=>{
+ const f=fixture();assert.equal((await routes.updateCommunityProfile(jsonRequest({displayName:'Bad origin'},'PATCH','https://attacker.test'))).status,403);
+ for(let i=0;i<20;i++)assert.equal((await routes.updateCommunityProfile(jsonRequest({displayName:`Creator ${i}`},'PATCH'))).status,200);
+ assert.equal((await routes.updateCommunityProfile(jsonRequest({displayName:'Rate limited'},'PATCH'))).status,429);
+ f.user={userId:other.id,email:'other@example.invalid',fullName:'Other',displayName:'Other'};assert.deepEqual(await (await routes.readCommunityProfile()).json(),{displayName:null});
+ assert.equal((await routes.updateCommunityProfile(jsonRequest({displayName:'Different creator'},'PATCH'))).status,200);assert.equal((await profiles.getCommunityProfile(f.db,owner.id)).displayName,'Creator 19');
+ assert.equal((await (await routes.communityMe()).json()).viewerName,'Different creator');
 });
 test('moderation defaults deny, uses trusted identity, hides all public access and prevents owner republish',async()=>{
  const f=fixture(),post=await published(f.db,f.bucket);await core.reportCommunityPost(f.db,post.id,other,{reason:'privacy',details:'Contains personal information'});

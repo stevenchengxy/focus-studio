@@ -3,6 +3,7 @@ import {APIError,readBody} from './primitives';
 import {communityBucket,communityJSON,communityReadLimit,communityViewer,communityWriter,isCommunityModerator,requireCommunityModerator} from './community-runtime';
 import {COMMUNITY_ACCOUNT_BYTES,COMMUNITY_ACCOUNT_POSTS,COMMUNITY_MAX_BYTES,communityItem,createCommunityPost,editCommunityPost,getCommunityPost,listCommunityPosts,publishCommunityPost,reportCommunityPost,unpublishCommunityPost,listCommunityReports,moderateCommunityPost,moderationPost} from './community';
 import {communityMediaResponse,deleteCommunityPost,uploadCommunityPoster,uploadCommunityVideo} from './community-media';
+import {saveCommunityProfile} from './community-profile';
 
 export const listCommunity=(request: Request,mine=false)=>api(async()=>{
   const viewer=await communityViewer();
@@ -11,7 +12,16 @@ export const listCommunity=(request: Request,mine=false)=>api(async()=>{
 });
 export const communityMe=()=>api(async()=>{
   const viewer=await communityViewer();
-  return communityJSON({authenticated:!!viewer,...(viewer?{viewerId:viewer.id}:{}),isModerator:isCommunityModerator(viewer),...(viewer?.name?{viewerName:viewer.name}:{}),maxUploadBytes:COMMUNITY_MAX_BYTES,maxLibraryBytes:COMMUNITY_ACCOUNT_BYTES,maxLibraryPosts:COMMUNITY_ACCOUNT_POSTS});
+  return communityJSON({authenticated:!!viewer,...(viewer?{viewerId:viewer.id}:{}),displayName:viewer?.displayName??null,isModerator:isCommunityModerator(viewer),...(viewer?.name?{viewerName:viewer.name}:{}),maxUploadBytes:COMMUNITY_MAX_BYTES,maxLibraryBytes:COMMUNITY_ACCOUNT_BYTES,maxLibraryPosts:COMMUNITY_ACCOUNT_POSTS});
+});
+export const readCommunityProfile=()=>api(async()=>{
+  const viewer=await communityViewer();
+  if(!viewer)throw new APIError(401,'community_sign_in_required','Sign in to manage your public name.');
+  return communityJSON({displayName:viewer.displayName??null});
+});
+export const updateCommunityProfile=(request:Request)=>api(async()=>{
+  const viewer=await communityWriter(request,'profile',20);
+  return communityJSON(await saveCommunityProfile(database(),viewer.id,await readBody(request,2048)));
 });
 export const createCommunity=(request: Request)=>api(async()=>{
   const viewer=await communityWriter(request,'create',10);

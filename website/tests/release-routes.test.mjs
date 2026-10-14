@@ -51,6 +51,56 @@ test('generic download redirects to exact identity and rejects unsafe resumes',a
   assert.equal(complete.status,200);assert.equal(installerFetches,1);
 });
 
+test('versioned update URLs permit fresh byte probes on every platform while unsafe unpinned ranges stay blocked',async t=>{
+  const {GET}=await freshRoute();const upstream=[];
+  t.mock.method(globalThis,'fetch',async(url,options)=>{
+    if(String(url).startsWith('https://raw.githubusercontent.com/'))return Response.json(fixture);
+    upstream.push({url:String(url),range:options.headers.get('range')});
+    return new Response(new Uint8Array(16),{status:206,headers:{'Content-Type':'application/octet-stream','Content-Range':'bytes 0-15/128','Content-Length':'16'}});
+  });
+  for(const [platform,version] of [['mac','1.14.2'],['windows','0.1.0'],['linux','0.1.0']]) {
+    const params={params:Promise.resolve({platform})};
+    const original=`https://studio.test/api/download/${platform}?channel=preview&version=${version}`;
+    for(const range of ['bytes=0-15','bytes=0-']) {
+      const before=upstream.length;
+      const response=await GET(new Request(original,{headers:{Range:range}}),params);
+      assert.equal(response.status,307,`${platform}: ${range}`);
+      assert.equal(response.headers.get('Cache-Control'),'no-store');
+      assert.equal(upstream.length,before,'resolve identity before fetching installer bytes');
+      const pinned=new URL(response.headers.get('Location'));
+      assert.equal(pinned.searchParams.get('version'),version);
+      assert.ok(pinned.searchParams.get('release'));assert.ok(pinned.searchParams.get('asset'));
+      const download=await GET(new Request(pinned,{headers:{Range:range}}),params);
+      assert.equal(download.status,206);assert.equal(download.headers.get('Content-Range'),'bytes 0-15/128');
+      assert.equal((await download.arrayBuffer()).byteLength,16);
+      assert.equal(upstream.at(-1).range,range,'redirect keeps initial Range intact');
+    }
+    for(const range of ['bytes=16-','bytes=-16','bytes=0-15,32-47','bytes=bad','']) {
+      const before=upstream.length;
+      const response=await GET(new Request(original,{headers:{Range:range}}),params);
+      assert.equal(response.status,409,`${platform}: ${range}`);
+      assert.ok(new URL(response.headers.get('Location')).searchParams.get('asset'));
+      assert.equal(upstream.length,before);
+    }
+  }
+});
+
+test('pinned nonzero resume and suffix ranges still reach the original installer unchanged',async t=>{
+  const {GET}=await freshRoute();const seen=[];
+  t.mock.method(globalThis,'fetch',async(url,options)=>{
+    if(String(url).startsWith('https://raw.githubusercontent.com/'))return Response.json(fixture);
+    seen.push({url:String(url),range:options.headers.get('range'),ifRange:options.headers.get('if-range')});
+    return new Response(new Uint8Array(16),{status:206,headers:{'Content-Type':'application/octet-stream','Content-Range':'bytes 112-127/128'}});
+  });
+  const params={params:Promise.resolve({platform:'mac'})};
+  const initial=await GET(new Request('https://studio.test/api/download/mac'),params);
+  for(const range of ['bytes=112-','bytes=-16']) {
+    const response=await GET(new Request(initial.headers.get('Location'),{headers:{Range:range,'If-Range':'"original-etag"'}}),params);
+    assert.equal(response.status,206);assert.equal(seen.at(-1).range,range);assert.equal(seen.at(-1).ifRange,'"original-etag"');
+    assert.match(seen.at(-1).url,/\/v1\.14\.2-preview\.1\/Focus-Studio-1\.14\.2-universal-local\.dmg$/);
+  }
+});
+
 test('public release feed avoids the shared anonymous GitHub API quota',async()=>{
   const {releaseCatalog,selectRelease}=await freshReleases();const calls=[];
   const catalog=await releaseCatalog(async(url,options)=>{

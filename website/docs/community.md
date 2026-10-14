@@ -2,6 +2,14 @@
 
 The public website offers optional sharing. Creation and export happen in installed Focus Studio; local projects are never uploaded automatically. ChatGPT sign-in uses Sites-provided identity headers. Private drafts are only accessible to their owner, except authorized moderation review of previously reported/held content.
 
+## Pages and profiles
+
+- `/community` and `/community/ai` show static cover cards. Selecting a card opens its own `/community/[id]` page; lists never autoplay or load video players.
+- The detail page contains the video, creator name, download and optional product introduction/link. A standalone video needs no product introduction.
+- `/community/mine` manages private drafts and published work; `/community/new` uploads a new work. The official sample lives separately at `/community/showcase` and is explicitly labeled.
+- `/community/profile` saves a public creator name for the signed-in account. GET/PATCH `/api/community/profile` returns `{displayName}`. The D1 `community_profiles` table binds names to trusted Sites owner IDs. Updating a name atomically updates existing work attribution without changing content, publication state or ordering. New work and metadata edits use the saved name. Email addresses are rejected as public names.
+- Apply migration `0004_bouncy_gauntlet.sql` before serving this version. Both language and theme controls are shared across community pages.
+
 ## Storage and ownership
 
 - Logical bindings: D1 `DB`, R2 `BUCKET` in `.openai/hosting.json`.
