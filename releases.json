@@ -2,6 +2,23 @@
   {
     "assets": [
       {
+        "browser_download_url": "https://github.com/stevenchengxy/focus-studio/releases/download/v1.14.5-preview.1/Focus-Studio-1.14.5-universal-local.dmg",
+        "digest": "sha256:03fcaae9d118b2d59002b7ff5503bafb4431d82bf36a0b3e4f08e5bc49817149",
+        "name": "Focus-Studio-1.14.5-universal-local.dmg",
+        "size": 71480276,
+        "state": "uploaded"
+      }
+    ],
+    "draft": false,
+    "html_url": "https://github.com/stevenchengxy/focus-studio/releases/tag/v1.14.5-preview.1",
+    "name": "Focus Studio 1.14.5-preview.1",
+    "prerelease": true,
+    "published_at": "2026-10-14T18:55:43Z",
+    "tag_name": "v1.14.5-preview.1"
+  },
+  {
+    "assets": [
+      {
         "browser_download_url": "https://github.com/stevenchengxy/focus-studio/releases/download/v1.14.4-preview.1/Focus-Studio-1.14.4-universal-local.dmg",
         "digest": "sha256:8f422e4ce9ade0d80e013d54abe684727e2874b59b15cceed1817c5360a142a6",
         "name": "Focus-Studio-1.14.4-universal-local.dmg",
