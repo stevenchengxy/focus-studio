@@ -89,3 +89,11 @@
   .refinedSite :global(.main-nav.is-open) { top: 68px; }
   .refinedSite :global(.hero-note span) { display: block; border: 0; margin: 7px 0 0; padding: 0; }
 }
+
+/* Real assistant window, kept level and free of decorative UI replicas. */
+.assistantProof { margin: 0; overflow: hidden; border: 1px solid #c9b7e526; border-radius: 18px; box-shadow: 0 25px 70px -25px #100c1f80; background: #151619; }
+.assistantProof img { display: block; width: 100%; height: auto; }
+.refinedSite :global(.ai-inner) { grid-template-columns: .85fr 1.3fr; gap: 70px; }
+.refinedSite :global(.ai-copy > .text-link) { margin-top: 24px; }
+@media(max-width:850px) { .refinedSite :global(.ai-inner) { gap: 40px; } }
+@media(max-width:600px) { .assistantProof { border-radius: 12px; } }

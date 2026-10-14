@@ -111,7 +111,7 @@ export async function uploadCommunityPoster(db: D1Database,bucket: R2Bucket,id: 
 export async function deleteCommunityPost(db: D1Database,bucket: R2Bucket,id: string,viewer: CommunityViewer,now=nowSeconds()) {
   // Repeated deletes after a storage failure can finish cleanup, but other
   // users never learn whether a private or deleted record exists.
-  const post=await db.prepare("UPDATE community_posts SET status='draft',deleted_at=?,updated_at=? WHERE id=? AND owner_id=? RETURNING *").bind(now,now,communityID(id),viewer.id).first<CommunityPost>();
+  const post=await db.prepare("UPDATE community_posts SET status='draft',deleted_at=?,moderation_deleted_at=NULL,updated_at=? WHERE id=? AND owner_id=? RETURNING *").bind(now,now,communityID(id),viewer.id).first<CommunityPost>();
   if(!post)return;
   const keys=[post.object_key,post.poster_key].filter((key):key is string=>!!key);
   if(keys.length)await bucket.delete(keys);
@@ -128,7 +128,11 @@ export function mediaRange(value: string | null,size: number) {
   return {offset:start,length:end-start+1};
 }
 export async function communityMediaResponse(db: D1Database,bucket: R2Bucket,id: string,viewerId: string|undefined,request: Request,poster=false) {
-  const post=await getCommunityPost(db,id,viewerId);
+  return communityMediaResponseForPost(bucket,await getCommunityPost(db,id,viewerId),request,poster);
+}
+// Call only with a post authorized by getCommunityPost or moderationPost.
+export async function communityMediaResponseForPost(bucket:R2Bucket,post:CommunityPost,request:Request,poster=false) {
+  const id=post.id;
   const key=poster?post.poster_key:post.media_state==='ready'?post.object_key:null;
   if(!key)throw new APIError(404,'community_media_not_found','Media not found.');
   const head=await bucket.head(key);

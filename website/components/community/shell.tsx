@@ -17,13 +17,14 @@ export function CommunityShell({children, active='explore', search}:{children:Re
     {id:'explore',href:'/community',label:t('Discover','发现作品'),Icon:Compass},
     {id:'ai',href:'/community/ai',label:t('AI footage','AI 素材'),Icon:Sparkles},
     {id:'mine',href:'/community/mine',label:t('My work','我的作品'),Icon:FolderOpen},
+    ...(identity?.isModerator?[{id:'moderation',href:'/community/moderation',label:t('Admin','管理'),Icon:ShieldCheck}]:[]),
   ];
-  const returnTo=active==='new'?'/community/new':active==='ai'?'/community/ai':active==='mine'?'/community/mine':active==='profile'?'/community/profile':'/community';
+  const returnTo=active==='new'?'/community/new':active==='ai'?'/community/ai':active==='mine'?'/community/mine':active==='profile'?'/community/profile':active==='moderation'?'/community/moderation':'/community';
   return <div className={styles.shell}>
     <a href="#community-main" className="skip-link">{t('Skip to content','跳转到内容')}</a>
     <header className={styles.header}>
       <a className={styles.brand} href="/" aria-label={t('Focus Studio home','Focus Studio 官网')}><img src="/icons/icon-192.png" alt="" width="30" height="30"/><span>Focus Studio<small>{t('Community','创作社区')}</small></span></a>
-      <form className={styles.headerSearch} role="search" action={active==='ai'?'/community/ai':active==='mine'?'/community/mine':'/community'} onSubmit={search?event=>event.preventDefault():undefined}>
+      <form className={styles.headerSearch} role="search" action={active==='ai'?'/community/ai':active==='mine'?'/community/mine':active==='moderation'?'/community/moderation':'/community'} onSubmit={search?event=>event.preventDefault():undefined}>
         <Search size={17} aria-hidden="true"/><input name="q" type="search" maxLength={120} placeholder={search?.placeholder||t('Search creations','搜索作品')} aria-label={t('Search creations','搜索作品')} {...(search?{value:search.value,onChange:(event:React.ChangeEvent<HTMLInputElement>)=>search.onChange(event.target.value)}:{})}/>
       </form>
       <div className={styles.headerActions}><a className={styles.mobileAccount} href={identity?.authenticated?'/community/profile':signInPath(returnTo)} target={identity?.authenticated?undefined:'_top'} aria-label={identity?.authenticated?t('Profile','个人资料'):t('Sign in','登录')}><UserRound size={17}/></a><LocaleToggle/><ThemeToggle/><a className={styles.headerPublish} href="/community/new" aria-label={t('Publish a creation','发布作品')}><Plus size={17}/><span>{t('Publish','发布作品')}</span></a></div>
@@ -33,7 +34,7 @@ export function CommunityShell({children, active='explore', search}:{children:Re
       <div className={styles.sidebarBottom}>
         <a className={styles.accountLink} aria-current={active==='profile'?'page':undefined} href={identity?.authenticated?'/community/profile':signInPath(returnTo)} target={identity?.authenticated?undefined:'_top'}><UserRound size={18}/><span>{identity?.authenticated?t('Profile','个人资料'):t('Sign in','登录')}</span><ArrowUpRight size={13}/></a>
         <a className={styles.appLink} href="/?download=1"><ArrowDown size={17}/><span>{t('Get Focus Studio','下载 Focus Studio')}</span></a>
-        <div className={styles.sidebarLinks}>{identity?.authenticated&&<a href="/account">{t('Account','账户')}</a>}{identity?.isModerator&&<a href="/community/moderation" aria-current={active==='moderation'?'page':undefined}><ShieldCheck size={13}/>{t('Moderation','社区审核')}</a>}<a href="/community/guidelines">{t('Guidelines','分享规则')}</a><a href="/privacy">{t('Privacy','隐私')}</a><a href="/help">{t('Help','帮助')}</a></div>
+        <div className={styles.sidebarLinks}>{identity?.authenticated&&<a href="/account">{t('Account','账户')}</a>}<a href="/community/guidelines">{t('Guidelines','分享规则')}</a><a href="/privacy">{t('Privacy','隐私')}</a><a href="/help">{t('Help','帮助')}</a></div>
         <a className={styles.homeLink} href="/"><ArrowLeft size={13}/>{t('Back to website','返回官网')}</a>
       </div>
     </aside>

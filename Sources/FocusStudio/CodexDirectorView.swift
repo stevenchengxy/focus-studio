@@ -33,14 +33,6 @@ struct AssistantWorkspaceView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider().overlay(StudioTheme.line)
-            HStack(spacing: 8) {
-                Image(systemName: "viewfinder").foregroundStyle(StudioTheme.purple)
-                Text("Send a website and a goal. Review one task, then Codex operates and records it.")
-                    .font(.system(size: 12)).foregroundStyle(StudioTheme.secondaryText)
-                Spacer(minLength: 0)
-            }.padding(.horizontal, 22).padding(.vertical, 12)
             if let error = coordinator.error {
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: "exclamationmark.circle").foregroundStyle(StudioTheme.warning)
@@ -57,11 +49,11 @@ struct AssistantWorkspaceView: View {
                 }.padding(14).background(StudioTheme.yellow.opacity(0.07))
             }
             AIAssistantPanel(session: session, gateway: model.aiGateway, modelLabel: model.assistantModelLabel,
-                             openSettings: openSettings, showsPlan: false,
-                             showsHeader: false,
+                             onClose: onClose, openSettings: openSettings, showsPlan: false,
                              onSubmit: { text, attachments in await coordinator.send(text, attachments: attachments) },
                              openDemoVideo: coordinator.openVideo,
-                             hasEditableProject: model.activeProject != nil)
+                             hasEditableProject: model.activeProject != nil,
+                             headerAccessory: AnyView(connectionControls))
         }
         .background(StudioTheme.window).foregroundStyle(StudioTheme.text)
         .sheet(isPresented: $showsConnectionSettings) {
@@ -69,39 +61,42 @@ struct AssistantWorkspaceView: View {
         }
     }
 
-    private var header: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "sparkles").font(.system(size: 18, weight: .medium))
-                .foregroundStyle(StudioTheme.purple)
-                .frame(width: 38, height: 38).background(StudioTheme.purple.opacity(0.12), in: RoundedRectangle(cornerRadius: 11))
-            VStack(alignment: .leading, spacing: 4) {
-                Text("AI Assistant").font(.system(size: 15, weight: .semibold))
-                Text("One conversation, from walkthrough to finished video.")
-                    .font(.caption).foregroundStyle(StudioTheme.secondaryText)
-            }
-            Spacer(minLength: 8)
+    private var connectionControls: some View {
+        HStack(spacing: 4) {
             if coordinator.isConnecting {
-                ProgressView().controlSize(.small)
-                Text("Connecting…").font(.caption).foregroundStyle(StudioTheme.secondaryText)
+                ProgressView().controlSize(.mini)
+                    .help("Connecting…")
+                    .accessibilityLabel("Connecting…")
             } else if coordinator.isConnected {
-                Label("Codex connected", systemImage: "checkmark.circle.fill")
-                    .font(.caption).foregroundStyle(.green)
-                    .help("Connection is ready. Page visibility and operation are checked before recording.")
+                Button { showsConnectionSettings = true } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                        Text(verbatim: "Codex").foregroundStyle(StudioTheme.secondaryText)
+                    }
+                    .font(.system(size: 11, weight: .medium))
                     .accessibilityIdentifier("assistant.connectionStatus")
+                }
+                .buttonStyle(AssistantControlButtonStyle())
+                .disabled(session.isRunning)
+                .help("Codex connected · Connection settings")
+                .accessibilityLabel("Codex connected · Connection settings")
+                .accessibilityIdentifier("assistant.connection")
             } else {
                 Button { Task { _ = await coordinator.connect() } } label: { Text("Connect Codex") }
-                    .buttonStyle(.bordered).disabled(session.isRunning)
+                    .font(.system(size: 11, weight: .medium))
+                    .buttonStyle(AssistantControlButtonStyle())
+                    .disabled(session.isRunning)
                     .accessibilityIdentifier("assistant.connectCodex")
+                Button { showsConnectionSettings = true } label: {
+                    Label("Connection settings", systemImage: "gearshape").labelStyle(.iconOnly)
+                }
+                .buttonStyle(AssistantControlButtonStyle())
+                .help("Connection settings")
+                .disabled(session.isRunning)
+                .accessibilityIdentifier("assistant.connection")
             }
-            StudioAppearanceMenu()
-            Button { showsConnectionSettings = true } label: { Label("Connection settings", systemImage: "gearshape").labelStyle(.iconOnly) }
-                .buttonStyle(IconButtonStyle()).help("Connection settings")
-                .disabled(session.isRunning || coordinator.isConnecting).accessibilityIdentifier("assistant.connection")
-            if let onClose {
-                Button(action: onClose) { Label("Close", systemImage: "xmark").labelStyle(.iconOnly) }
-                    .buttonStyle(IconButtonStyle()).help("Close").accessibilityIdentifier("assistant.close")
-            }
-        }.padding(.horizontal, 22).padding(.vertical, 16).background(StudioTheme.panel)
+        }
     }
 }
 

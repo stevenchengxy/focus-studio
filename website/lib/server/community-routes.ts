@@ -1,8 +1,8 @@
 import {api,database} from './runtime';
 import {APIError,readBody} from './primitives';
 import {communityBucket,communityJSON,communityReadLimit,communityViewer,communityWriter,isCommunityModerator,requireCommunityModerator} from './community-runtime';
-import {COMMUNITY_ACCOUNT_BYTES,COMMUNITY_ACCOUNT_POSTS,COMMUNITY_MAX_BYTES,communityItem,createCommunityPost,editCommunityPost,getCommunityPost,listCommunityPosts,publishCommunityPost,reportCommunityPost,unpublishCommunityPost,listCommunityReports,moderateCommunityPost,moderationPost} from './community';
-import {communityMediaResponse,deleteCommunityPost,uploadCommunityPoster,uploadCommunityVideo} from './community-media';
+import {COMMUNITY_ACCOUNT_BYTES,COMMUNITY_ACCOUNT_POSTS,COMMUNITY_MAX_BYTES,communityItem,createCommunityPost,editCommunityPost,getCommunityPost,listCommunityPosts,publishCommunityPost,reportCommunityPost,unpublishCommunityPost,listCommunityModeration,communityModerationDetail,moderateCommunityPost,moderationPost} from './community';
+import {communityMediaResponse,communityMediaResponseForPost,deleteCommunityPost,uploadCommunityPoster,uploadCommunityVideo} from './community-media';
 import {saveCommunityProfile} from './community-profile';
 
 export const listCommunity=(request: Request,mine=false)=>api(async()=>{
@@ -59,7 +59,12 @@ export const reportCommunity=(request: Request,id: string)=>api(async()=>{
 export const reviewCommunity=(request:Request)=>api(async()=>{
   requireCommunityModerator(await communityViewer());
   await communityReadLimit(request);
-  return communityJSON(await listCommunityReports(database()));
+  return communityJSON(await listCommunityModeration(database(),new URL(request.url)));
+});
+export const reviewCommunityItem=(request:Request,id:string)=>api(async()=>{
+  requireCommunityModerator(await communityViewer());
+  await communityReadLimit(request);
+  return communityJSON(await communityModerationDetail(database(),id));
 });
 export const moderateCommunity=(request:Request,id:string)=>api(async()=>{
   const viewer=requireCommunityModerator(await communityWriter(request,'moderate',120));
@@ -80,6 +85,6 @@ export const readCommunityMedia=(request: Request,id: string,poster=false)=>api(
   catch(error){
     if(!(error instanceof APIError)||error.status!==404||!isCommunityModerator(viewer))throw error;
     const reported=await moderationPost(database(),id);
-    return communityMediaResponse(database(),communityBucket(),id,reported.owner_id,request,poster);
+    return communityMediaResponseForPost(communityBucket(),reported,request,poster);
   }
 });

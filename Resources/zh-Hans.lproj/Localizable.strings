@@ -1539,3 +1539,14 @@
 "AI providers may charge separately. Generation always asks for confirmation." = "AI 服务商可能单独收费，生成前会请你确认。";
 "Visit the community" = "访问社区";
 "Save a previously rendered video to your Mac." = "将之前已渲染的视频保存到这台 Mac。";
+
+/* Compact assistant workspace */
+"Record a website" = "录制网页";
+"Plan a demo" = "规划演示";
+"Polish a recording" = "优化录屏";
+"Create a video clip" = "生成视频";
+"Tools" = "工具";
+"Models, voice replies and drafting tools" = "模型、语音回复与起草工具";
+"Set up video model" = "设置视频模型";
+"Describe your video, or paste a link…" = "描述你想做的视频，或粘贴链接…";
+"Codex connected · Connection settings" = "Codex 已连接 · 连接设置";

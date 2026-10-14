@@ -6,7 +6,7 @@ import styles from "./product-video.module.css";
 import { useLocale } from "@/components/locale/locale-provider";
 
 /** Native renderer output, presented level. Decode only while on screen. */
-export function ProductVideo({ motion, compact = false }: { motion: boolean; compact?: boolean }) {
+export function ProductVideo({ motion, compact = false, src = "/media/focus-studio-demo-flat.mp4", poster = "/media/focus-studio-demo-flat.jpg" }: { motion: boolean; compact?: boolean; src?: string; poster?: string }) {
   const { t } = useLocale();
   const videoRef = useRef<HTMLVideoElement>(null);
   const [paused, setPaused] = useState(false);
@@ -33,7 +33,7 @@ export function ProductVideo({ motion, compact = false }: { motion: boolean; com
       document.removeEventListener("visibilitychange", sync);
       video.pause();
     };
-  }, [motion, paused, requestedPlay]);
+  }, [motion, paused, requestedPlay, src]);
 
   const toggle = () => {
     if (playing) setPaused(true);
@@ -41,11 +41,11 @@ export function ProductVideo({ motion, compact = false }: { motion: boolean; com
   };
 
   return <div className={`${styles.stage}${compact ? ` ${styles.compact}` : ""}`} data-reveal={compact ? undefined : true}>
-    <video ref={videoRef} src="/media/focus-studio-demo-flat.mp4"
-      poster="/media/focus-studio-demo-flat.jpg" muted loop playsInline preload="metadata"
+    <video ref={videoRef} src={src}
+      poster={poster} muted loop playsInline preload="metadata"
       aria-label={t("Focus Studio exported effects on a sample dashboard", "Focus Studio 在示例页面上的实际导出效果")}
       onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}>
-      <a href="/media/focus-studio-demo-flat.mp4">{t("Watch the Focus Studio demo", "观看 Focus Studio 演示")}</a>
+      <a href={src}>{t("Watch the Focus Studio demo", "观看 Focus Studio 演示")}</a>
     </video>
     <button className={styles.playback} onClick={toggle} aria-label={playing ? t("Pause demo", "暂停演示") : t("Play demo", "播放演示")}>
       {playing ? <Pause size={16}/> : <Play size={16}/>}

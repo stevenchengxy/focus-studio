@@ -4,8 +4,8 @@ import SwiftUI
 enum AssistantWindow {
     static let id = "assistant"
     @MainActor static let presenter = MainWindowPresenter()
-    static let minimumSize = CGSize(width: 720, height: 660)
-    static let defaultSize = CGSize(width: 980, height: 800)
+    static let minimumSize = CGSize(width: 680, height: 560)
+    static let defaultSize = CGSize(width: 900, height: 720)
 }
 
 /// A draft handoff from an editor selection to the app-wide assistant. It

@@ -36,6 +36,13 @@
       "when": 1791993915187,
       "tag": "0004_bouncy_gauntlet",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1791999251343,
+      "tag": "0005_silent_prodigy",
+      "breakpoints": true
     }
   ]
 }

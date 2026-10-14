@@ -2,9 +2,9 @@ export type InstallerPlatform = 'mac' | 'windows' | 'linux';
 
 // Verified release assets. Never fall back to GitHub's source-code archives.
 export const INSTALLERS = {
-  mac: { label: 'macOS', format: 'DMG', suffix: '.dmg', mime: 'application/x-apple-diskimage', url: 'https://github.com/stevenchengxy/focus-studio/releases/download/v1.14.2-preview.1/Focus-Studio-1.14.2-universal-local.dmg' },
-  windows: { label: 'Windows', format: 'EXE installer', suffix: '.exe', mime: 'application/vnd.microsoft.portable-executable', url: 'https://github.com/stevenchengxy/focus-studio/releases/download/v1.14.0-preview.1/Focus-Studio-Desktop-0.1.0-windows-x64.exe' },
-  linux: { label: 'Linux', format: 'AppImage', suffix: '.AppImage', mime: 'application/octet-stream', url: 'https://github.com/stevenchengxy/focus-studio/releases/download/v1.14.0-preview.1/Focus-Studio-Desktop-0.1.0-linux-x86_64.AppImage' },
+  mac: { label: 'macOS', format: 'DMG', suffix: '.dmg', mime: 'application/x-apple-diskimage', url: 'https://github.com/stevenchengxy/focus-studio/releases/download/v1.14.5-preview.1/Focus-Studio-1.14.5-universal-local.dmg' },
+  windows: { label: 'Windows', format: 'EXE installer', suffix: '.exe', mime: 'application/vnd.microsoft.portable-executable', url: 'https://github.com/stevenchengxy/focus-studio/releases/download/v1.14.4-preview.1/Focus-Studio-Desktop-0.1.2-windows-x64.exe' },
+  linux: { label: 'Linux', format: 'AppImage', suffix: '.AppImage', mime: 'application/octet-stream', url: 'https://github.com/stevenchengxy/focus-studio/releases/download/v1.14.4-preview.1/Focus-Studio-Desktop-0.1.2-linux-x86_64.AppImage' },
 } as const;
 
 export function installerFor(platform: string, configured?: string) {

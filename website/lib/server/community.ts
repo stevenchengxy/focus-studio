@@ -14,6 +14,7 @@ export interface CommunityPost {
   poster_key: string | null; poster_bytes: number | null; poster_token: string | null; poster_expires_at: number | null;
   upload_token: string | null; upload_expires_at: number | null; created_at: number; updated_at: number;
   uploaded_at: number | null; published_at: number | null; license_accepted_at: number | null; deleted_at: number | null;
+  moderation_deleted_at: number | null; moderation_revision: number;
   moderation_hold: number; moderation_reason: string | null; moderated_at: number | null; moderated_by: string | null;
 }
 export function communityID(id: string) {
@@ -63,7 +64,8 @@ export function communityItem(post: CommunityPost, viewerId?: string, moderator=
     license:post.license,licenseUrl:post.license === 'CC-BY-4.0' ? 'https://creativecommons.org/licenses/by/4.0/' : null,
     attribution:post.license ? `${post.title} — ${post.author_name} (CC BY 4.0)` : null,
     publishedAt:post.published_at,createdAt:post.created_at,updatedAt:post.updated_at,isOwner:post.owner_id === viewerId,
-    moderationHold:!!post.moderation_hold,moderationReason:post.owner_id === viewerId || moderator ? post.moderation_reason : undefined};
+    moderationHold:!!post.moderation_hold,moderationReason:post.owner_id === viewerId || moderator ? post.moderation_reason : undefined,
+    ...(moderator?{deletedAt:post.moderation_deleted_at,moderatedAt:post.moderated_at,moderatedBy:post.moderated_by,moderationRevision:post.moderation_revision}:{} )};
 }
 export async function getCommunityPost(db: D1Database, id: string, viewerId?: string, ownerOnly = false) {
   const post = await db.prepare('SELECT * FROM community_posts WHERE id=? AND deleted_at IS NULL').bind(communityID(id)).first<CommunityPost>();
@@ -152,26 +154,78 @@ export async function listCommunityPosts(db: D1Database, url: URL, viewer?: Comm
   return {items:rows.map(post=>communityItem(post,viewer?.id)),nextCursor,authenticated:!!viewer,...(viewer?.name ? {viewerName:viewer.name} : {})};
 }
 
+// An author deleting their own upload is intentionally outside moderator trash.
+// A past report/hold grants review access only to that work, never all drafts.
+const reviewable = "((p.status='published' AND p.media_state='ready') OR p.moderation_hold=1 OR EXISTS(SELECT 1 FROM community_reports r WHERE r.post_id=p.id))";
+const moderationVisible = `((p.deleted_at IS NULL AND ${reviewable}) OR (p.deleted_at IS NOT NULL AND p.moderation_deleted_at IS NOT NULL))`;
 export async function moderationPost(db:D1Database,id:string) {
-  // Review permission does not expose unrelated private drafts.
-  const post=await db.prepare(`SELECT * FROM community_posts WHERE id=? AND deleted_at IS NULL AND (moderation_hold=1 OR EXISTS(SELECT 1 FROM community_reports WHERE post_id=community_posts.id))`).bind(communityID(id)).first<CommunityPost>();
-  if(!post)throw new APIError(404,'community_not_found','Reported clip not found.');
+  const post=await db.prepare(`SELECT p.* FROM community_posts p WHERE p.id=? AND ${moderationVisible}`).bind(communityID(id)).first<CommunityPost>();
+  if(!post)throw new APIError(404,'community_not_found','Clip not found.');
   return post;
 }
 export async function moderateCommunityPost(db:D1Database,id:string,moderator:CommunityViewer,body:Record<string,unknown>,now=nowSeconds()) {
-  if(body.action!=='hide'&&body.action!=='restore')throw new APIError(400,'community_invalid_moderation','Choose hide or restore.');
-  const reason=text(body.reason??'','moderation reason',1000);
-  // Moderators may act on public work or previously reported/held work only.
-  const post=await db.prepare(`SELECT * FROM community_posts WHERE id=? AND deleted_at IS NULL AND ((status='published' AND media_state='ready') OR moderation_hold=1 OR EXISTS(SELECT 1 FROM community_reports WHERE post_id=community_posts.id))`).bind(communityID(id)).first<CommunityPost>();
-  if(!post)throw new APIError(404,'community_not_found','Clip not found.');
-  await db.prepare('UPDATE community_posts SET moderation_hold=?,moderation_reason=?,moderated_at=?,moderated_by=?,updated_at=? WHERE id=? AND deleted_at IS NULL')
-    .bind(body.action==='hide'?1:0,reason||null,now,moderator.id,now,id).run();
-  // Restore never changes the author's publication choice.
-  const updated=await db.prepare('SELECT * FROM community_posts WHERE id=? AND deleted_at IS NULL').bind(id).first<CommunityPost>();
+  const action=body.action;
+  if(Object.keys(body).some(key=>!['action','reason','expectedRevision'].includes(key)) || !['hide','reinstate','delete','restore'].includes(String(action)))throw new APIError(400,'community_invalid_moderation','Choose a moderation action.');
+  let reason:string;
+  try{reason=text(body.reason??'','moderation reason',500,true);}catch{throw new APIError(400,'community_review_reason','Enter a review reason, up to 500 characters.');}
+  if(body.expectedRevision!==undefined && (typeof body.expectedRevision!=='number'||!Number.isSafeInteger(body.expectedRevision)||body.expectedRevision<0))throw new APIError(400,'community_invalid_moderation','Invalid review revision.');
+  const post=await moderationPost(db,id);
+  if(body.expectedRevision!==undefined && body.expectedRevision!==post.moderation_revision)throw new APIError(409,'community_review_changed','Another moderator changed this work. Refresh before acting.');
+  const trashed=post.moderation_deleted_at!==null;
+  if((action==='restore'&&!trashed)||(action!=='restore'&&trashed)||(action==='hide'&&post.moderation_hold)||(action==='reinstate'&&!post.moderation_hold))throw new APIError(409,'community_invalid_moderation_state','This action is unavailable in the current state.');
+  const revision=post.moderation_revision+1,auditId=crypto.randomUUID();
+  const hold=action==='hide'?1:action==='reinstate'?0:post.moderation_hold;
+  const deletedAt=action==='delete'?now:null;
+  // D1 batch is transactional. Inserting the uniquely numbered audit event and
+  // changing visibility either both happen or both roll back. Recheck the scope
+  // inside the write to handle a simultaneous author unpublish/delete.
+  const results=await db.batch([
+    db.prepare(`INSERT INTO community_moderation_audit(id,post_id,revision,action,reason,actor_id,actor_name,created_at)
+      SELECT ?,p.id,?,?,?,?,?,? FROM community_posts p WHERE p.id=? AND p.moderation_revision=? AND ${moderationVisible}`)
+      .bind(auditId,revision,action,reason,moderator.id,moderator.name||'Moderator',now,id,post.moderation_revision),
+    db.prepare(`UPDATE community_posts SET moderation_hold=?,deleted_at=?,moderation_deleted_at=?,moderation_reason=?,moderated_at=?,moderated_by=?,moderation_revision=?,updated_at=?,
+      upload_token=NULL,upload_expires_at=NULL,poster_token=NULL,poster_expires_at=NULL WHERE id=? AND moderation_revision=? AND EXISTS(SELECT 1 FROM community_moderation_audit WHERE id=?)`)
+      .bind(hold,deletedAt,deletedAt,reason,now,moderator.id,revision,now,id,post.moderation_revision,auditId),
+  ]);
+  if(results[0].meta.changes!==1||results[1].meta.changes!==1)throw new APIError(409,'community_review_changed','The work changed. Refresh before acting.');
+  const updated=await db.prepare('SELECT * FROM community_posts WHERE id=?').bind(id).first<CommunityPost>();
   if(!updated)throw new APIError(404,'community_not_found','Clip not found.');
   return updated;
 }
-export async function listCommunityReports(db:D1Database) {
-  const rows=await db.prepare(`SELECT r.id AS report_id,r.reason AS report_reason,r.details AS report_details,r.created_at AS report_created_at,p.* FROM community_reports r JOIN community_posts p ON p.id=r.post_id WHERE p.deleted_at IS NULL ORDER BY r.created_at DESC,r.id DESC LIMIT 100`).all<CommunityPost&{report_id:string;report_reason:string;report_details:string;report_created_at:number}>();
-  return {reports:rows.results.map(row=>({id:row.report_id,reason:row.report_reason,details:row.report_details,createdAt:row.report_created_at,item:communityItem(row,undefined,true)})),nextCursor:null};
+export async function listCommunityModeration(db:D1Database,url:URL) {
+  const scope=url.searchParams.get('scope')??'all';
+  if(!['all','published','reported','held','deleted'].includes(scope))throw new APIError(400,'community_invalid_scope','Choose a review filter.');
+  const category=url.searchParams.get('category');
+  if(category&&category!=='demo'&&category!=='ai-video')throw new APIError(400,'community_invalid_category','Unknown category.');
+  const query=(url.searchParams.get('q')??'').trim();
+  if(query.length>120)throw new APIError(400,'community_invalid_search','Search using up to 120 characters.');
+  const limit=Number(url.searchParams.get('limit')??'24');
+  if(!Number.isSafeInteger(limit)||limit<1||limit>50)throw new APIError(400,'community_invalid_page','Choose a page size from 1 to 50.');
+  const page=cursor(url.searchParams.get('cursor')),conditions=[moderationVisible],values:(string|number)[]=[];
+  if(scope==='deleted')conditions.push('p.deleted_at IS NOT NULL AND p.moderation_deleted_at IS NOT NULL');
+  else {
+    conditions.push('p.deleted_at IS NULL');
+    if(scope==='published')conditions.push("p.status='published' AND p.media_state='ready' AND p.moderation_hold=0");
+    if(scope==='reported')conditions.push('EXISTS(SELECT 1 FROM community_reports r WHERE r.post_id=p.id)');
+    if(scope==='held')conditions.push('p.moderation_hold=1');
+  }
+  if(category){conditions.push('p.category=?');values.push(category);}
+  if(query){
+    const pattern=`%${query.replace(/[\\%_]/g,char=>`\\${char}`)}%`;
+    conditions.push("(p.title LIKE ? ESCAPE '\\' OR p.description LIKE ? ESCAPE '\\' OR p.author_name LIKE ? ESCAPE '\\')");values.push(pattern,pattern,pattern);
+  }
+  if(page){conditions.push('(p.updated_at<? OR (p.updated_at=? AND p.id<?))');values.push(page.time,page.time,page.id);}
+  const result=await db.prepare(`SELECT p.*,(SELECT COUNT(*) FROM community_reports r WHERE r.post_id=p.id) AS report_count,(SELECT MAX(created_at) FROM community_reports r WHERE r.post_id=p.id) AS last_report_at
+    FROM community_posts p WHERE ${conditions.join(' AND ')} ORDER BY p.updated_at DESC,p.id DESC LIMIT ?`).bind(...values,limit+1).all<CommunityPost&{report_count:number;last_report_at:number|null}>();
+  const rows=result.results.slice(0,limit),last=rows.at(-1);
+  const nextCursor=result.results.length>limit&&last?btoa(JSON.stringify([last.updated_at,last.id])).replaceAll('+','-').replaceAll('/','_').replace(/=+$/,''):null;
+  return {items:rows.map(post=>({...communityItem(post,undefined,true),reportCount:post.report_count,lastReportAt:post.last_report_at})),nextCursor,scope};
+}
+export async function communityModerationDetail(db:D1Database,id:string) {
+  const post=await moderationPost(db,id);
+  const [reports,audit]=await Promise.all([
+    db.prepare('SELECT id,reason,details,created_at AS createdAt FROM community_reports WHERE post_id=? ORDER BY created_at DESC,id DESC LIMIT 100').bind(id).all<{id:string;reason:string;details:string;createdAt:number}>(),
+    db.prepare('SELECT id,revision,action,reason,actor_id AS actorId,actor_name AS actorName,created_at AS createdAt FROM community_moderation_audit WHERE post_id=? ORDER BY revision DESC LIMIT 100').bind(id).all<{id:string;revision:number;action:string;reason:string;actorId:string;actorName:string;createdAt:number}>(),
+  ]);
+  return {item:communityItem(post,undefined,true),reports:reports.results,audit:audit.results};
 }

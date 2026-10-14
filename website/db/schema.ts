@@ -66,6 +66,7 @@ export const communityPosts = sqliteTable('community_posts', {
   licenseAcceptedAt: integer('license_accepted_at'), deletedAt: integer('deleted_at'),
   moderationHold: integer('moderation_hold').notNull().default(0), moderationReason: text('moderation_reason'),
   moderatedAt: integer('moderated_at'), moderatedBy: text('moderated_by'),
+  moderationDeletedAt: integer('moderation_deleted_at'), moderationRevision: integer('moderation_revision').notNull().default(0),
 }, t => [
   index('community_public_feed').on(t.status, t.publishedAt, t.id),
   index('community_owner_items').on(t.ownerId, t.updatedAt),
@@ -75,3 +76,8 @@ export const communityReports = sqliteTable('community_reports', {
   reporterId: text('reporter_id').notNull(), reason: text('reason').notNull(),
   details: text('details').notNull().default(''), createdAt: integer('created_at').notNull(),
 }, t => [uniqueIndex('community_one_report_per_user').on(t.postId, t.reporterId)]);
+export const communityModerationAudit = sqliteTable('community_moderation_audit', {
+  id: text('id').primaryKey(), postId: text('post_id').notNull().references(() => communityPosts.id, {onDelete: 'cascade'}),
+  revision: integer('revision').notNull(), action: text('action').notNull(), reason: text('reason').notNull(),
+  actorId: text('actor_id').notNull(), actorName: text('actor_name').notNull(), createdAt: integer('created_at').notNull(),
+}, t => [uniqueIndex('community_moderation_revision').on(t.postId, t.revision)]);

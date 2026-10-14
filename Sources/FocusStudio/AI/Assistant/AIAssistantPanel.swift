@@ -23,6 +23,7 @@ struct AIAssistantPanel: View {
     let onSubmit: ((String, [URL]) async -> Bool)?
     let openDemoVideo: ((UUID) -> Void)?
     let hasEditableProject: Bool
+    let headerAccessory: AnyView?
 
     @State private var draft = ""
     @State private var pendingAttachments: [URL] = []
@@ -35,6 +36,7 @@ struct AIAssistantPanel: View {
     @State private var queuedClipDraft: String?
     @State private var videoModelSelectionError: String?
     @State private var transcriptFollowRequest = UUID()
+    @State private var showsComposerOptions = false
     @FocusState private var composerFocused: Bool
     /// What was typed before the mic started; partial transcripts append to it.
     @State private var draftBeforeRecording = ""
@@ -44,13 +46,17 @@ struct AIAssistantPanel: View {
     @StateObject private var speechOutput = SpeechOutputController()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// Localizable keys; shown as chips and sent verbatim (translated) on click.
+    /// The compact labels are separate from these full requests. A request is
+    /// submitted only when the user deliberately chooses its action.
     static let exampleRequests = [
         "Record a walkthrough of my website. Ask me for the URL and the steps to demonstrate.",
         "Help me plan a short product walkthrough before recording.",
         "Create an edited copy of my current recording: shorten empty waits, tune each zoom, preview the cuts and export a 1080p demo. Keep meaningful page changes and reading time.",
         "Create a short, text-free product B-roll clip. Ask about the desired look first, then save it to my shared media library.",
     ]
+
+    private static let exampleLabels = ["Record a website", "Plan a demo", "Polish a recording", "Create a video clip"]
+    private static let exampleIcons = ["record.circle", "list.bullet.rectangle", "scissors", "film"]
 
     private static let promoShotPlanningRequest = "Help me plan 2–3 product-led promo shots for my demo. Separate real product UI from AI-generated effects. For each shot, give me a keyframe prompt, a motion prompt, and how it fits my selected video model. Ask for my product URL or screenshots if needed. Do not generate paid media yet."
 
@@ -66,7 +72,8 @@ struct AIAssistantPanel: View {
         isActive: Bool = true,
         onSubmit: ((String, [URL]) async -> Bool)? = nil,
         openDemoVideo: ((UUID) -> Void)? = nil,
-        hasEditableProject: Bool = false
+        hasEditableProject: Bool = false,
+        headerAccessory: AnyView? = nil
     ) {
         self.session = session
         self.gateway = gateway
@@ -80,6 +87,7 @@ struct AIAssistantPanel: View {
         self.onSubmit = onSubmit
         self.openDemoVideo = openDemoVideo
         self.hasEditableProject = hasEditableProject
+        self.headerAccessory = headerAccessory
     }
 
     private var canSubmit: Bool {
@@ -101,6 +109,11 @@ struct AIAssistantPanel: View {
         return task
     }
 
+    private var showsWelcome: Bool {
+        session.messages.isEmpty && !session.isRunning && !isSubmitting
+            && session.pendingConfirmation == nil && session.demoTask == nil
+    }
+
     private var rowTransition: AnyTransition {
         reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity)
     }
@@ -114,11 +127,20 @@ struct AIAssistantPanel: View {
             if showsHeader {
                 header
                 Divider().overlay(StudioTheme.line)
-                if !session.hasModel { modelNotice }
+                if !session.hasModel, onSubmit == nil { modelNotice }
             } else {
                 conversationBar
             }
-            transcript
+            if showsWelcome {
+                Spacer(minLength: 24)
+                emptyState
+                    .frame(maxWidth: 620)
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 20)
+                    .transition(.opacity)
+            } else {
+                transcript
+            }
             if let warning = session.historyWarning {
                 Text(verbatim: warning).font(.caption).foregroundStyle(StudioTheme.warning).padding(10)
             }
@@ -150,15 +172,18 @@ struct AIAssistantPanel: View {
                 SpeechPermissionNotice(issue: issue) { speechInput.issue = nil }
                     .transition(.opacity)
             }
-            Divider().overlay(StudioTheme.line)
             composer
+                .frame(maxWidth: showsWelcome ? 652 : .infinity)
+            if showsWelcome { Spacer(minLength: 24) }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(StudioTheme.panel)
         .foregroundStyle(StudioTheme.text)
         .disabled(!isActive)
         .animation(reduceMotion ? nil : StudioMotion.selection, value: session.pendingConfirmation?.id)
         .animation(reduceMotion ? nil : StudioMotion.selection, value: session.suggestions)
         .animation(reduceMotion ? nil : StudioMotion.fade, value: speechInput.issue)
+        .animation(reduceMotion ? nil : StudioMotion.fade, value: showsWelcome)
         .onAppear {
             lastSpokenTimestamp = Date()
         }
@@ -199,6 +224,7 @@ struct AIAssistantPanel: View {
             transcriptFollowRequest = UUID()
             showsConversationHistory = false
             historySearch = ""
+            showsComposerOptions = false
             composerFocused = isActive
         }
         .confirmationDialog("Delete conversation?", isPresented: Binding(
@@ -271,9 +297,8 @@ struct AIAssistantPanel: View {
             }
             .frame(minWidth: compact ? 32 : 0, minHeight: 30)
             .padding(.horizontal, compact ? 0 : 8)
-            .background(StudioTheme.controlFill, in: RoundedRectangle(cornerRadius: 8))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(AssistantControlButtonStyle())
         .font(.system(size: 12, weight: .medium))
         .help("Start a new chat; previous chats stay in history.")
         .disabled(session.isRunning || isSubmitting)
@@ -289,9 +314,8 @@ struct AIAssistantPanel: View {
             }
             .frame(minWidth: compact ? 32 : 0, minHeight: 30)
             .padding(.horizontal, compact ? 0 : 8)
-            .background(StudioTheme.controlFill, in: RoundedRectangle(cornerRadius: 8))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(AssistantControlButtonStyle())
         .font(.system(size: 12, weight: .medium))
         .help("Conversation history")
         .accessibilityLabel("Conversation history")
@@ -388,47 +412,29 @@ struct AIAssistantPanel: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Text(LocalizedStringKey(title))
-                    .font(.system(size: 13, weight: .semibold))
-                Spacer(minLength: 4)
-                conversationHistoryButton(compact: true)
-                newConversationButton(compact: true)
-                if let openSettings {
-                    Button(action: openSettings) {
-                        Label("Model settings", systemImage: "slider.horizontal.3").labelStyle(.iconOnly)
-                    }
-                    .buttonStyle(IconButtonStyle())
-                    .help("Model settings")
+        HStack(spacing: 6) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(StudioTheme.purple)
+                .accessibilityHidden(true)
+            Text(verbatim: session.messages.isEmpty ? L10n.tr(title) : currentConversationTitle)
+                .font(.system(size: 13, weight: .semibold))
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            conversationHistoryButton(compact: true)
+            newConversationButton(compact: true)
+            if let headerAccessory { headerAccessory }
+            if let onClose {
+                Button(action: onClose) {
+                    Label("Close", systemImage: "xmark").labelStyle(.iconOnly)
                 }
-                Toggle(isOn: $speechOutput.isEnabled) {
-                    Label("Voice replies", systemImage: speechOutput.isEnabled ? "speaker.wave.2.fill" : "speaker.slash")
-                }
-                .toggleStyle(IconToggleStyle())
-                .help("Voice replies")
-                .accessibilityIdentifier("assistant.voiceReplies")
-                if let onClose {
-                    Button(action: onClose) {
-                        Label("Close", systemImage: "xmark")
-                            .labelStyle(.iconOnly)
-                    }
-                    .buttonStyle(IconButtonStyle())
-                    .help("Close")
-                    .accessibilityIdentifier("assistant.close")
-                }
-            }
-            .animation(reduceMotion ? nil : StudioMotion.fade, value: session.isRunning)
-            if !modelLabel.isEmpty || !session.conversationSummaries.isEmpty {
-                let currentTitle = session.conversationSummaries.first(where: { $0.id == session.conversationID })?.title
-                Text(verbatim: [currentTitle, modelLabel.isEmpty ? nil : modelLabel].compactMap { $0 }.joined(separator: " · "))
-                    .font(.system(size: 11))
-                    .foregroundStyle(StudioTheme.secondaryText)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                .buttonStyle(AssistantControlButtonStyle())
+                .help("Close")
+                .accessibilityIdentifier("assistant.close")
             }
         }
-        .padding(12)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
     }
 
     private var modelNotice: some View {
@@ -455,14 +461,11 @@ struct AIAssistantPanel: View {
     private var transcript: some View {
         AssistantTranscriptScrollView(followRequest: transcriptFollowRequest) {
             LazyVStack(alignment: .leading, spacing: 10) {
-                if session.messages.isEmpty {
-                    emptyState
-                }
                 ForEach(session.messages) { message in
                     row(for: message)
                         .id(message.id)
                 }
-                if session.isRunning, session.pendingConfirmation == nil, session.messages.last?.role != .status {
+                if session.isRunning || isSubmitting, session.pendingConfirmation == nil, session.messages.last?.role != .status {
                     typingRow(text: nil)
                         .id("assistant.typing")
                 }
@@ -474,49 +477,36 @@ struct AIAssistantPanel: View {
     }
 
     private var emptyState: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 9) {
-                Image(systemName: "sparkles.rectangle.stack")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(StudioTheme.purple)
-                    .frame(width: 32, height: 32)
-                    .background(StudioTheme.purple.opacity(0.14), in: RoundedRectangle(cornerRadius: 9))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("What would you like to make?")
-                        .font(.system(size: 13, weight: .semibold))
-                    Text("Ask, record, generate media or edit your demo in one conversation.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(StudioTheme.secondaryText)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .padding(.bottom, 2)
-            ForEach(Array(Self.exampleRequests.enumerated()), id: \.element) { index, request in
-                Button {
-                    submit(L10n.tr(request), attachments: [])
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "arrow.turn.down.right")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(StudioTheme.secondaryText)
-                        Text(LocalizedStringKey(request))
-                            .font(.system(size: 12))
-                            .multilineTextAlignment(.leading)
-                        Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 20) {
+            Text("What would you like to make?")
+                .font(.system(size: 23, weight: .semibold))
+                .fixedSize(horizontal: false, vertical: true)
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                ForEach(Array(Self.exampleRequests.enumerated()), id: \.offset) { index, request in
+                    Button {
+                        submit(L10n.tr(request), attachments: [])
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: Self.exampleIcons[index])
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(StudioTheme.purple)
+                                .frame(width: 18)
+                            Text(LocalizedStringKey(Self.exampleLabels[index]))
+                                .font(.system(size: 12, weight: .medium))
+                                .multilineTextAlignment(.leading)
+                            Spacer(minLength: 0)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(StudioTheme.panelRaised)
-                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                    .contentShape(Rectangle())
+                    .buttonStyle(AssistantActionButtonStyle())
+                    .disabled(!canSubmit)
+                    .help(LocalizedStringKey(request))
+                    .accessibilityIdentifier("assistant.example.\(index)")
+                    .staggeredAppearance(index: index)
                 }
-                .buttonStyle(.plain)
-                .disabled(!canSubmit)
-                .staggeredAppearance(index: index)
             }
         }
-        .padding(.top, 4)
+        .accessibilityIdentifier("assistant.welcome")
     }
 
     @ViewBuilder
@@ -587,7 +577,7 @@ struct AIAssistantPanel: View {
         }
     }
 
-    /// Three bouncing dots and an explicit state, including before the first
+    /// A quiet activity indicator and an explicit state, including before the first
     /// remote model response has arrived.
     private func typingRow(text: String?) -> some View {
         HStack(spacing: 8) {
@@ -728,7 +718,7 @@ struct AIAssistantPanel: View {
         .padding(12)
         .background(StudioTheme.panelRaised)
         .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-        .pulsingBorder(StudioTheme.purple, cornerRadius: 11)
+        .confirmationHighlight(StudioTheme.purple, cornerRadius: 11)
         .padding(.horizontal, 12)
         .padding(.bottom, 10)
     }
@@ -813,7 +803,8 @@ struct AIAssistantPanel: View {
             .font(.system(size: 11, weight: .medium))
         }
         .menuStyle(.borderlessButton)
-        .fixedSize(horizontal: true, vertical: false)
+        .frame(maxWidth: 230, alignment: .trailing)
+        .help(gateway.videoModelDisplayName(selectedID))
         .accessibilityIdentifier("assistant.videoModelPicker")
     }
 
@@ -849,6 +840,8 @@ struct AIAssistantPanel: View {
                 }
                 Text(LocalizedStringKey(Self.demoStageTitle(task.stage)))
                     .font(.system(size: 13, weight: .semibold))
+                    .contentTransition(.opacity)
+                    .animation(reduceMotion ? nil : StudioMotion.fade, value: task.stage)
                 Spacer(minLength: 4)
                 if !task.stage.isTerminal {
                     Button {
@@ -984,34 +977,6 @@ struct AIAssistantPanel: View {
                 .background(StudioTheme.purple.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
                 .accessibilityIdentifier("assistant.queuedClipDraft")
             }
-            if !session.isRunning, session.pendingConfirmation == nil, draft.isEmpty {
-                HStack(spacing: 12) {
-                    Button {
-                        draft = L10n.tr(Self.promoShotPlanningRequest)
-                        composerFocused = true
-                    } label: {
-                        Label("Plan promo shots", systemImage: "sparkles.tv")
-                            .font(.system(size: 12, weight: .medium))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(StudioTheme.purple)
-                    .help("Draft shot concepts and prompts first; no paid generation starts.")
-                    .accessibilityIdentifier("assistant.planPromoShots")
-                    if hasEditableProject {
-                        Button {
-                            draft = L10n.tr(Self.exampleRequests[2])
-                            composerFocused = true
-                        } label: {
-                            Label("Polish current video", systemImage: "scissors")
-                                .font(.system(size: 12, weight: .medium))
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(StudioTheme.purple)
-                        .help("Prepare a request to shorten waits and adjust zooms in an editable copy.")
-                        .accessibilityIdentifier("assistant.polishVideo")
-                    }
-                }
-            }
             if !pendingAttachments.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
@@ -1041,131 +1006,192 @@ struct AIAssistantPanel: View {
                     }
                 }
             }
-            HStack(spacing: 7) {
-                Image(systemName: "film")
-                    .foregroundStyle(StudioTheme.purple)
-                Text("AI video")
+            VStack(spacing: 4) {
+                composerField
+                composerToolbar
+            }
+            .padding(8)
+            .background(StudioTheme.panelRaised, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(speechInput.isRecording ? StudioTheme.red.opacity(0.55)
+                            : (composerFocused ? StudioTheme.purple.opacity(0.65) : StudioTheme.line), lineWidth: 1)
+            }
+            .animation(reduceMotion ? nil : StudioMotion.hover, value: composerFocused)
+            .animation(reduceMotion ? nil : StudioMotion.fade, value: speechInput.isRecording)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 6)
+        .padding(.bottom, 16)
+    }
+
+    private var composerToolbar: some View {
+        HStack(spacing: 4) {
+            Button(action: attachFiles) {
+                Label("Attach files", systemImage: "paperclip").labelStyle(.iconOnly)
+            }
+            .buttonStyle(AssistantControlButtonStyle())
+            .help("Attach files")
+            .disabled(!isActive || isSubmitting)
+            .accessibilityIdentifier("assistant.attach")
+
+            let microphoneHelp: LocalizedStringKey = speechInput.isRecording ? "Stop recording (Esc)" : "Voice input"
+            MicrophoneButton(isRecording: speechInput.isRecording, isPreparing: speechInput.isPreparing) {
+                toggleRecording()
+            }
+            .keyboardShortcut(isActive && speechInput.isRecording ? KeyboardShortcut(.escape, modifiers: []) : nil)
+            .help(microphoneHelp)
+            .accessibilityLabel(microphoneHelp)
+            .disabled(!canRecord)
+            .accessibilityIdentifier("assistant.mic")
+
+            Button { showsComposerOptions.toggle() } label: {
+                Label("Tools", systemImage: "slider.horizontal.3")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(StudioTheme.secondaryText)
+            }
+            .buttonStyle(AssistantControlButtonStyle())
+            .help("Models, voice replies and drafting tools")
+            .accessibilityIdentifier("assistant.tools")
+            .popover(isPresented: $showsComposerOptions, arrowEdge: .top) { composerOptions }
+            if speechOutput.isEnabled {
+                Image(systemName: "speaker.wave.2")
+                    .font(.system(size: 11))
+                    .foregroundStyle(StudioTheme.purple)
+                    .help("Voice replies")
+            }
+            Spacer(minLength: 4)
+            if speechInput.isRecording {
+                AudioLevelMeterView(level: speechInput.audioLevel)
+                    .transition(.opacity)
+            }
+            if session.isRunning, activeDemo == nil {
+                Button {
+                    speechOutput.stop()
+                    session.stop()
+                } label: {
+                    Label("Stop assistant", systemImage: "stop.fill")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(StudioTheme.red)
+                }
+                .buttonStyle(AssistantControlButtonStyle())
+                .accessibilityIdentifier("assistant.stop")
+            } else if activeDemo == nil {
+                Button(action: sendDraft) {
+                    Group {
+                        if isSubmitting { ProgressView().controlSize(.mini).tint(.white) }
+                        else { Image(systemName: "arrow.up").font(.system(size: 13, weight: .semibold)) }
+                    }
+                    .foregroundStyle(.white)
+                    .frame(width: 30, height: 30)
+                    .background(canSend ? StudioTheme.purple : StudioTheme.purple.opacity(0.35), in: Circle())
+                }
+                .buttonStyle(AssistantSendButtonStyle())
+                .keyboardShortcut(isActive ? KeyboardShortcut(.return, modifiers: .command) : nil)
+                .disabled(!canSend)
+                .help("Send (⌘↩)")
+                .accessibilityLabel(isSubmitting ? "Connecting…" : "Send")
+                .accessibilityIdentifier("assistant.send")
+            }
+        }
+        .animation(reduceMotion ? nil : StudioMotion.fade, value: canSend)
+        .animation(reduceMotion ? nil : StudioMotion.fade, value: session.isRunning)
+    }
+
+    private var composerOptions: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Text("Video model").font(.system(size: 12, weight: .medium))
+                Spacer(minLength: 8)
                 videoModelMenu(selectedID: gateway.preferredVideoModelID) { id in
                     gateway.preferredVideoModelID = id
                 }
-                Spacer(minLength: 0)
-                if !gateway.isVideoModelListed(gateway.preferredVideoModelID) {
-                    Button("Set up") { openSettings?() }
-                        .buttonStyle(.link)
-                        .font(.system(size: 10))
-                        .help("Configure and test a video model in Settings.")
-                }
             }
             .accessibilityIdentifier("assistant.videoModelPreference")
-            composerField
-            HStack(spacing: 8) {
-                Button(action: attachFiles) {
-                    Label("Attach files", systemImage: "paperclip")
-                        .labelStyle(.iconOnly)
+            if !gateway.isVideoModelListed(gateway.preferredVideoModelID) {
+                Button("Set up video model") {
+                    showsComposerOptions = false
+                    openSettings?()
                 }
-                .buttonStyle(IconButtonStyle())
-                .help("Attach files")
-                .disabled(!isActive || isSubmitting)
-                .accessibilityIdentifier("assistant.attach")
-
-                let microphoneHelp: LocalizedStringKey = speechInput.isRecording ? "Stop recording (Esc)" : "Voice input"
-                MicrophoneButton(isRecording: speechInput.isRecording, isPreparing: speechInput.isPreparing) {
-                    toggleRecording()
-                }
-                .keyboardShortcut(isActive && speechInput.isRecording ? KeyboardShortcut(.escape, modifiers: []) : nil)
-                .help(microphoneHelp)
-                .disabled(!canRecord)
-                .accessibilityIdentifier("assistant.mic")
-
-                if !showsHeader {
-                    Toggle(isOn: $speechOutput.isEnabled) {
-                        Label("Voice replies", systemImage: speechOutput.isEnabled ? "speaker.wave.2.fill" : "speaker.slash")
+                .buttonStyle(.link)
+                .font(.system(size: 11))
+            }
+            if let openSettings {
+                Button {
+                    showsComposerOptions = false
+                    openSettings()
+                } label: {
+                    HStack {
+                        Text("Model settings")
+                        Spacer(minLength: 8)
+                        Text(verbatim: modelLabel)
+                            .foregroundStyle(StudioTheme.secondaryText)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Image(systemName: "arrow.up.right")
+                            .foregroundStyle(StudioTheme.secondaryText)
                     }
-                    .toggleStyle(IconToggleStyle())
-                    .help("Voice replies")
-                    .accessibilityIdentifier("assistant.voiceReplies")
                 }
-                Spacer(minLength: 4)
-                if session.isRunning, activeDemo == nil {
+                .buttonStyle(.plain)
+                .font(.system(size: 12))
+                .accessibilityIdentifier("assistant.openSettings")
+            }
+            Toggle(isOn: $speechOutput.isEnabled) {
+                Label("Voice replies", systemImage: "speaker.wave.2")
+            }
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .font(.system(size: 12))
+            .accessibilityIdentifier("assistant.voiceReplies")
+            if draft.isEmpty {
+                Divider()
+                Button {
+                    draft = L10n.tr(Self.promoShotPlanningRequest)
+                    showsComposerOptions = false
+                    composerFocused = true
+                } label: { Label("Plan promo shots", systemImage: "sparkles.tv") }
+                    .buttonStyle(.plain)
+                    .disabled(!canSubmit)
+                    .help("Draft shot concepts and prompts first; no paid generation starts.")
+                    .accessibilityIdentifier("assistant.planPromoShots")
+                if hasEditableProject {
                     Button {
-                        speechOutput.stop()
-                        session.stop()
-                    } label: {
-                        Label("Stop assistant", systemImage: "stop.fill")
-                            .font(.system(size: 12, weight: .semibold))
-                            .padding(.horizontal, 10)
-                            .frame(height: 30)
-                            .background(StudioTheme.red.opacity(0.12))
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(StudioTheme.red)
-                    .accessibilityIdentifier("assistant.stop")
-                } else if activeDemo == nil {
-                    Button(action: sendDraft) {
-                        HStack(spacing: 6) {
-                            if isSubmitting { ProgressView().controlSize(.mini).tint(.white) }
-                            Text(isSubmitting ? "Connecting…" : "Send")
-                            if !isSubmitting { Image(systemName: "arrow.up") }
-                        }
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 12)
-                            .frame(height: 30)
-                            .background(canSend ? StudioTheme.purple : StudioTheme.purple.opacity(0.35))
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
-                    .keyboardShortcut(isActive ? KeyboardShortcut(.return, modifiers: .command) : nil)
-                    .disabled(!canSend)
-                    .help("Send (⌘↩)")
-                    .accessibilityIdentifier("assistant.send")
+                        draft = L10n.tr(Self.exampleRequests[2])
+                        showsComposerOptions = false
+                        composerFocused = true
+                    } label: { Label("Polish current video", systemImage: "scissors") }
+                        .buttonStyle(.plain)
+                        .disabled(!canSubmit)
+                        .help("Prepare a request to shorten waits and adjust zooms in an editable copy.")
+                        .accessibilityIdentifier("assistant.polishVideo")
                 }
             }
-            Text("↩ New line · ⌘↩ Send")
-                .font(.system(size: 10))
-                .foregroundStyle(StudioTheme.secondaryText)
         }
-        .padding(10)
+        .font(.system(size: 12))
+        .padding(16)
+        .frame(width: 350)
     }
 
     private var composerField: some View {
-        let placeholder: LocalizedStringKey = speechInput.isRecording && draft.isEmpty ? "Listening…" : "Paste a product URL and describe what to show, or ask for an edit…"
+        let placeholder: LocalizedStringKey = speechInput.isRecording && draft.isEmpty ? "Listening…" : "Describe your video, or paste a link…"
         return TextEditor(text: $draft)
             .scrollContentBackground(.hidden)
             .font(.system(size: 14))
             .focused($composerFocused)
-            .frame(height: 72)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 8)
-            .background(StudioTheme.panelRaised)
+            .frame(height: 62)
+            .padding(.horizontal, 3)
+            .padding(.top, 4)
             .overlay(alignment: .topLeading) {
                 if draft.isEmpty {
                     Text(placeholder)
                         .font(.system(size: 14))
                         .foregroundStyle(StudioTheme.secondaryText)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 9)
+                        .padding(.horizontal, 8)
+                        .padding(.top, 5)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .stroke(speechInput.isRecording ? StudioTheme.red.opacity(0.55) : (composerFocused ? StudioTheme.purple.opacity(0.7) : StudioTheme.line), lineWidth: 1)
-            )
-            .overlay(alignment: .bottomTrailing) {
-                if speechInput.isRecording {
-                    AudioLevelMeterView(level: speechInput.audioLevel)
-                        .padding(.trailing, 10)
-                        .padding(.bottom, 8)
-                        .transition(.opacity)
-                }
-            }
-            .animation(reduceMotion ? nil : StudioMotion.fade, value: speechInput.isRecording)
+            .help("↩ New line · ⌘↩ Send")
             .accessibilityLabel("Message to the assistant")
             .accessibilityIdentifier("assistant.composer")
     }

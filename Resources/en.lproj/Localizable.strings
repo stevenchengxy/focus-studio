@@ -1540,3 +1540,14 @@
 "AI providers may charge separately. Generation always asks for confirmation." = "AI providers may charge separately. Generation always asks for confirmation.";
 "Visit the community" = "Visit the community";
 "Save a previously rendered video to your Mac." = "Save a previously rendered video to your Mac.";
+
+/* Compact assistant workspace */
+"Record a website" = "Record a website";
+"Plan a demo" = "Plan a demo";
+"Polish a recording" = "Polish a recording";
+"Create a video clip" = "Create a video clip";
+"Tools" = "Tools";
+"Models, voice replies and drafting tools" = "Models, voice replies and drafting tools";
+"Set up video model" = "Set up video model";
+"Describe your video, or paste a link…" = "Describe your video, or paste a link…";
+"Codex connected · Connection settings" = "Codex connected · Connection settings";

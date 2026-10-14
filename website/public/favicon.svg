@@ -1,1 +1,66 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><rect width="64" height="64" rx="18" fill="#8665ff"/><path d="M17 25v-7a1 1 0 0 1 1-1h7m14 0h7a1 1 0 0 1 1 1v7m0 14v7a1 1 0 0 1-1 1h-7m-14 0h-7a1 1 0 0 1-1-1v-7" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round"/><path d="m27 24 13 8-13 8z" fill="#fff"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+  <title>Focus Studio</title>
+  <desc>A softly beveled lavender glass frame around a dark viewfinder and a pearl play symbol.</desc>
+  <defs>
+    <linearGradient id="depth" x1="146" y1="108" x2="848" y2="942" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#C4B6DA"/>
+      <stop offset=".52" stop-color="#9E89BC"/>
+      <stop offset="1" stop-color="#77648F"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="160" y1="84" x2="850" y2="904" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F2EFF7"/>
+      <stop offset=".24" stop-color="#D7CCE8"/>
+      <stop offset=".58" stop-color="#BAA6D5"/>
+      <stop offset="1" stop-color="#AA93C6"/>
+    </linearGradient>
+    <linearGradient id="outer-rim" x1="173" y1="91" x2="850" y2="908" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF" stop-opacity=".98"/>
+      <stop offset=".4" stop-color="#F1EAFB" stop-opacity=".72"/>
+      <stop offset=".7" stop-color="#9F86BC" stop-opacity=".35"/>
+      <stop offset="1" stop-color="#E6D8F7" stop-opacity=".88"/>
+    </linearGradient>
+    <linearGradient id="inner-bevel" x1="307" y1="254" x2="722" y2="759" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#BAABD0"/>
+      <stop offset=".42" stop-color="#A690C0"/>
+      <stop offset="1" stop-color="#E1D4EF"/>
+    </linearGradient>
+    <linearGradient id="aperture" x1="337" y1="264" x2="693" y2="736" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#353044"/>
+      <stop offset="1" stop-color="#211E2D"/>
+    </linearGradient>
+    <linearGradient id="inner-rim" x1="280" y1="272" x2="733" y2="733" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8D799F" stop-opacity=".7"/>
+      <stop offset=".47" stop-color="#AA94C2" stop-opacity=".22"/>
+      <stop offset="1" stop-color="#F5EFFF" stop-opacity=".88"/>
+    </linearGradient>
+    <linearGradient id="play" x1="454" y1="413" x2="594" y2="583" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FCFAFF"/>
+      <stop offset="1" stop-color="#C9B7E8"/>
+    </linearGradient>
+    <linearGradient id="glaze" x1="512" y1="82" x2="512" y2="343" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF" stop-opacity=".42"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- The small, downward extrusion keeps the face calm and readable at app-icon sizes. -->
+  <rect x="88" y="104" width="848" height="840" rx="208" fill="url(#depth)"/>
+  <rect x="88" y="76" width="848" height="840" rx="208" fill="url(#glass)"/>
+  <rect x="92" y="80" width="840" height="832" rx="204" stroke="url(#outer-rim)" stroke-width="5"/>
+
+  <!-- The aperture is inset into the glass, with a soft inner bevel rather than an outline. -->
+  <rect x="250" y="234" width="524" height="524" rx="136" fill="url(#inner-bevel)"/>
+  <rect x="252" y="236" width="520" height="520" rx="134" stroke="#F4EBFF" stroke-opacity=".32" stroke-width="3"/>
+  <rect x="276" y="260" width="472" height="472" rx="111" fill="url(#aperture)"/>
+  <rect x="278" y="262" width="468" height="468" rx="109" stroke="url(#inner-rim)" stroke-width="4"/>
+
+  <path d="M296 84H728C836 84 918 164 928 270L774 310C764 261 726 234 674 234H350C298 234 259 265 250 312L96 270C104 164 186 84 296 84Z" fill="url(#glaze)"/>
+  <path d="M289 104H614" stroke="#FFFFFF" stroke-opacity=".62" stroke-width="6" stroke-linecap="round"/>
+  <path d="M113 296V446" stroke="#FFFFFF" stroke-opacity=".55" stroke-width="6" stroke-linecap="round"/>
+  <path d="M726 570V622C726 675 691 711 638 711H568" stroke="#EAE2F5" stroke-opacity=".54" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- Four quiet focus corners frame the single, optically centered playback gesture. -->
+  <path d="M384 322H349C338 322 332 328 332 339V374M640 322H675C686 322 692 328 692 339V374M692 618V653C692 664 686 670 675 670H640M384 670H349C338 670 332 664 332 653V618" stroke="#BCAACF" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M476 407C465 400 451 408 451 421V571C451 584 465 592 476 585L605 510C616 504 616 488 605 482L476 407Z" fill="url(#play)"/>
+  <path d="M476 407C465 400 451 408 451 421V571C451 584 465 592 476 585L605 510C616 504 616 488 605 482L476 407Z" stroke="#FFFFFF" stroke-opacity=".34" stroke-width="2"/>
+</svg>

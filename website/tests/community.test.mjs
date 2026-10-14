@@ -187,7 +187,7 @@ test('moderation defaults deny, uses trusted identity, hides all public access a
  assert.equal((await routes.reviewCommunity(new Request('https://studio.test'))).status,403);assert.equal((await routes.moderateCommunity(jsonRequest({action:'hide'}),post.id)).status,403);
  f.moderatorIDs='moderator-one';f.user={userId:'moderator-one',email:'private-moderator@example.invalid',fullName:'Moderator',displayName:'Moderator'};
  assert.equal((await (await routes.communityMe()).json()).isModerator,true);
- const reports=await (await routes.reviewCommunity(new Request('https://studio.test'))).json();assert.equal(reports.reports.length,1);assert.ok(!JSON.stringify(reports).includes(other.id));assert.ok(!JSON.stringify(reports).includes('private-moderator'));
+ const reports=await (await routes.reviewCommunity(new Request('https://studio.test'))).json();assert.equal(reports.items.length,1);assert.ok(!JSON.stringify(reports).includes(other.id));assert.ok(!JSON.stringify(reports).includes('private-moderator'));
  let response=await routes.moderateCommunity(jsonRequest({action:'hide',reason:'Privacy review'}),post.id);assert.equal(response.status,200);assert.equal((await response.json()).item.moderationHold,true);
  assert.equal((await core.listCommunityPosts(f.db,new URL('https://studio.test'))).items.length,0);await assert.rejects(core.getCommunityPost(f.db,post.id),bad('community_not_found'));
  await assert.rejects(core.publishCommunityPost(f.db,post.id,owner,{license:'CC-BY-4.0',confirmRights:true}),bad('community_moderation_hold'));
@@ -196,7 +196,78 @@ test('moderation defaults deny, uses trusted identity, hides all public access a
  f.user={userId:'moderator-one',email:'private-moderator@example.invalid',fullName:'Moderator',displayName:'Moderator'};
  assert.equal((await routes.readCommunityMedia(new Request('https://studio.test'),post.id)).status,200);
  const unrelated=await ready(f.db,f.bucket);assert.equal((await routes.readCommunityMedia(new Request('https://studio.test'),unrelated.id)).status,404);
- await core.unpublishCommunityPost(f.db,post.id,owner);response=await routes.moderateCommunity(jsonRequest({action:'restore'}),post.id);assert.equal(response.status,200);assert.equal((await response.json()).item.status,'draft');await assert.rejects(core.getCommunityPost(f.db,post.id),bad('community_not_found'));
+ await core.unpublishCommunityPost(f.db,post.id,owner);response=await routes.moderateCommunity(jsonRequest({action:'reinstate',reason:'Review complete'}),post.id);assert.equal(response.status,200);assert.equal((await response.json()).item.status,'draft');await assert.rejects(core.getCommunityPost(f.db,post.id),bad('community_not_found'));
  assert.equal((await core.publishCommunityPost(f.db,post.id,owner,{license:'CC-BY-4.0',confirmRights:true})).status,'published');
+});
+test('moderation lists filter and paginate eligible work while keeping private drafts and identities private',async()=>{
+ const db=database(),bucket=new Bucket(),moderator={id:'admin',name:'Reviewer'};
+ const publicPost=await published(db,bucket,{title:'Public 100% demo'}),held=await published(db,bucket,{title:'Held demo'}),reported=await published(db,bucket,{title:'Reported AI',category:'ai-video'}),trash=await published(db,bucket,{title:'Trash demo'}),draft=await ready(db,bucket,{title:'Unrelated private draft'});
+ await core.moderateCommunityPost(db,held.id,moderator,{action:'hide',reason:'Review privacy'},200);
+ await core.reportCommunityPost(db,reported.id,other,{reason:'copyright',details:'Evidence only visible to moderators'},210);await core.unpublishCommunityPost(db,reported.id,owner,220);
+ await core.moderateCommunityPost(db,trash.id,moderator,{action:'delete',reason:'Removed from the community'},230);
+ const list=(query='')=>core.listCommunityModeration(db,new URL(`https://studio.test/api/community/moderation?${query}`));
+ assert.deepEqual(new Set((await list()).items.map(x=>x.id)),new Set([publicPost.id,held.id,reported.id]));
+ for(const [scope,id] of [['published',publicPost.id],['held',held.id],['reported',reported.id],['deleted',trash.id]])assert.deepEqual((await list(`scope=${scope}`)).items.map(x=>x.id),[id]);
+ assert.deepEqual((await list('category=ai-video')).items.map(x=>x.id),[reported.id]);assert.equal((await list('q=%25')).items.length,1);assert.equal((await list('q=_')).items.length,0);assert.equal((await list('q=private')).items.length,0);
+ const first=await list('limit=2'),second=await list(`limit=2&cursor=${first.nextCursor}`);assert.equal(first.items.length,2);assert.equal(second.items.length,1);assert.equal(new Set([...first.items,...second.items].map(x=>x.id)).size,3);assert.equal(second.nextCursor,null);
+ const serialized=JSON.stringify(await list('scope=reported'));for(const secret of ['owner_id',owner.id,other.id,'object_key','reporter_id','Evidence only visible'])assert.ok(!serialized.includes(secret));
+ const detail=await core.communityModerationDetail(db,reported.id);assert.equal(detail.reports[0].details,'Evidence only visible to moderators');assert.ok(!JSON.stringify(detail).includes(other.id));
+ await assert.rejects(core.moderationPost(db,draft.id),bad('community_not_found'));await assert.rejects(core.communityModerationDetail(db,draft.id),bad('community_not_found'));
+ for(const query of ['scope=drafts','category=private','limit=51','limit=0','cursor=invalid',`q=${'a'.repeat(121)}`])await assert.rejects(list(query));
+});
+test('moderator trash preserves media, history and author publication choices through restore',async()=>{
+ const f=fixture(),moderator={id:'admin',name:'Trusted reviewer'},post=await ready(f.db,f.bucket);await media.uploadCommunityPoster(f.db,f.bucket,post.id,owner,uploadRequest(jpg,'image/jpeg'));await core.publishCommunityPost(f.db,post.id,owner,{license:'CC-BY-4.0',confirmRights:true});
+ await core.reportCommunityPost(f.db,post.id,other,{reason:'privacy'});
+ const hidden=await core.moderateCommunityPost(f.db,post.id,moderator,{action:'hide',reason:'Privacy review',expectedRevision:0},200);assert.equal(hidden.moderation_revision,1);
+ await core.unpublishCommunityPost(f.db,post.id,owner,201);
+ const removed=await core.moderateCommunityPost(f.db,post.id,moderator,{action:'delete',reason:'Pending author correction',expectedRevision:1},202);
+ assert.equal(removed.status,'draft');assert.equal(removed.deleted_at,202);assert.equal(removed.moderation_deleted_at,202);assert.equal(removed.moderation_hold,1);assert.ok(await f.bucket.head(post.object_key));
+ for(const who of [undefined,owner.id,moderator.id])await assert.rejects(core.getCommunityPost(f.db,post.id,who),bad('community_not_found'));
+ assert.ok(!(await core.listCommunityPosts(f.db,new URL('https://studio.test'),owner,true)).items.some(x=>x.id===post.id));
+ f.user={userId:moderator.id,fullName:moderator.name};f.moderatorIDs=moderator.id;
+ assert.equal((await routes.readCommunityMedia(new Request('https://studio.test'),post.id)).status,200);assert.equal((await routes.readCommunityMedia(new Request('https://studio.test'),post.id,true)).status,200);assert.equal((await routes.reviewCommunityItem(new Request('https://studio.test'),post.id)).status,200);
+ f.user={userId:owner.id,fullName:owner.name};assert.equal((await routes.readCommunityMedia(new Request('https://studio.test'),post.id)).status,404);assert.equal((await routes.reviewCommunityItem(new Request('https://studio.test'),post.id)).status,403);
+ const restored=await core.moderateCommunityPost(f.db,post.id,moderator,{action:'restore',reason:'Author may revise',expectedRevision:2},203);assert.equal(restored.deleted_at,null);assert.equal(restored.moderation_deleted_at,null);assert.equal(restored.status,'draft');assert.equal(restored.moderation_hold,1);
+ await assert.rejects(core.publishCommunityPost(f.db,post.id,owner,{license:'CC-BY-4.0',confirmRights:true}),bad('community_moderation_hold'));
+ const reinstated=await core.moderateCommunityPost(f.db,post.id,moderator,{action:'reinstate',reason:'Review complete',expectedRevision:3},204);assert.equal(reinstated.status,'draft');assert.equal(reinstated.moderation_hold,0);await assert.rejects(core.getCommunityPost(f.db,post.id),bad('community_not_found'));
+ const review=await core.communityModerationDetail(f.db,post.id);assert.deepEqual(review.audit.map(x=>x.action),['reinstate','restore','delete','hide']);assert.deepEqual(review.audit.map(x=>x.revision),[4,3,2,1]);assert.ok(review.audit.every(x=>x.actorId===moderator.id&&x.actorName===moderator.name));assert.equal(review.audit[0].createdAt,204);
+ assert.equal(core.communityItem(reinstated).moderatedBy,undefined);assert.equal(core.communityItem(reinstated).moderationRevision,undefined);assert.equal(core.communityItem(reinstated,owner.id).moderationReason,'Review complete');
+});
+test('an author can permanently remove their moderator-trashed upload, and failed owner deletion is never admin-restorable',async()=>{
+ const db=database(),bucket=new Bucket(),post=await published(db,bucket),moderator={id:'admin'};
+ await core.moderateCommunityPost(db,post.id,moderator,{action:'delete',reason:'Community removal'},200);
+ bucket.failDelete=true;await assert.rejects(media.deleteCommunityPost(db,bucket,post.id,owner,201));
+ assert.equal(db.raw.prepare('SELECT moderation_deleted_at FROM community_posts WHERE id=?').get(post.id).moderation_deleted_at,null);
+ await assert.rejects(core.moderationPost(db,post.id),bad('community_not_found'));await assert.rejects(core.moderateCommunityPost(db,post.id,moderator,{action:'restore',reason:'Must not undo author deletion'}),bad('community_not_found'));
+ assert.equal((await core.listCommunityModeration(db,new URL('https://studio.test?scope=deleted'))).items.length,0);
+ bucket.failDelete=false;await media.deleteCommunityPost(db,bucket,post.id,owner,202);assert.equal(await bucket.head(post.object_key),null);assert.equal(db.raw.prepare('SELECT COUNT(*) n FROM community_moderation_audit').get().n,0);
+});
+test('review state changes and audit are atomic and stale or malformed requests cannot change work',async()=>{
+ const db=database(),bucket=new Bucket(),post=await published(db,bucket),moderator={id:'admin'};
+ for(const body of [{action:'hide'},{action:'hide',reason:' '},{action:'hide',reason:'a'.repeat(501)}])await assert.rejects(core.moderateCommunityPost(db,post.id,moderator,body),bad('community_review_reason'));
+ for(const body of [{action:'publish',reason:'No'},{action:'hide',reason:'No',ownerId:'spoof'},{action:'hide',reason:'No',expectedRevision:-1}])await assert.rejects(core.moderateCommunityPost(db,post.id,moderator,body),bad('community_invalid_moderation'));
+ await assert.rejects(core.moderateCommunityPost(db,post.id,moderator,{action:'restore',reason:'Not deleted'}),bad('community_invalid_moderation_state'));
+ db.raw.exec("CREATE TRIGGER fail_review_update BEFORE UPDATE OF moderation_revision ON community_posts BEGIN SELECT RAISE(ABORT,'fixture rejection'); END");
+ await assert.rejects(core.moderateCommunityPost(db,post.id,moderator,{action:'hide',reason:'Should roll back'}));assert.equal(db.raw.prepare('SELECT COUNT(*) n FROM community_moderation_audit').get().n,0);assert.equal((await core.getCommunityPost(db,post.id)).moderation_hold,0);db.raw.exec('DROP TRIGGER fail_review_update');
+ const race=await Promise.allSettled([core.moderateCommunityPost(db,post.id,moderator,{action:'hide',reason:'First',expectedRevision:0}),core.moderateCommunityPost(db,post.id,{id:'another-admin'},{action:'delete',reason:'Second',expectedRevision:0})]);
+ assert.equal(race.filter(x=>x.status==='fulfilled').length,1);assert.equal(race.find(x=>x.status==='rejected').reason.code,'community_review_changed');assert.equal(db.raw.prepare('SELECT COUNT(*) n FROM community_moderation_audit').get().n,1);
+ await assert.rejects(core.moderateCommunityPost(db,post.id,moderator,{action:'delete',reason:'Stale',expectedRevision:0}),bad('community_review_changed'));
+});
+test('moderation rechecks author visibility inside the transaction and role checks reject forged or cross-origin requests',async()=>{
+ const f=fixture(),post=await published(f.db,f.bucket),privatePost=await ready(f.db,f.bucket);f.moderatorIDs='admin';f.user={userId:'admin',fullName:'Reviewer'};
+ assert.equal((await routes.moderateCommunity(jsonRequest({action:'hide',reason:'No CSRF'},'POST','https://attacker.test'),post.id)).status,403);
+ assert.equal((await routes.moderateCommunity(jsonRequest({action:'hide',reason:'No private access'}),privatePost.id)).status,404);assert.equal((await routes.reviewCommunityItem(new Request('https://studio.test'),privatePost.id)).status,404);
+ f.user={userId:'ordinary-user',fullName:'Admin'};assert.equal((await routes.moderateCommunity(jsonRequest({action:'delete',reason:'Spoof',moderatorId:'admin'}),post.id)).status,403);assert.equal((await routes.reviewCommunity(new Request('https://studio.test'))).status,403);
+ f.user=null;assert.equal((await routes.reviewCommunity(new Request('https://studio.test'))).status,401);assert.equal((await routes.reviewCommunityItem(new Request('https://studio.test'),post.id)).status,401);
+ const originalBatch=f.db.batch;f.db.batch=async statements=>{f.db.raw.prepare("UPDATE community_posts SET status='draft' WHERE id=?").run(post.id);return originalBatch(statements);};
+ await assert.rejects(core.moderateCommunityPost(f.db,post.id,{id:'admin'},{action:'delete',reason:'Author unpublished concurrently'}),bad('community_review_changed'));
+ assert.equal(f.db.raw.prepare('SELECT COUNT(*) n FROM community_moderation_audit').get().n,0);assert.equal((await core.getCommunityPost(f.db,post.id,owner.id)).deleted_at,null);
+});
+test('author deletion wins a race after a moderator reads trash and before restoration commits',async()=>{
+ const db=database(),bucket=new Bucket(),post=await published(db,bucket),moderator={id:'admin'};
+ await core.moderateCommunityPost(db,post.id,moderator,{action:'delete',reason:'Admin trash'},200);
+ const batch=db.batch;db.batch=async statements=>{await media.deleteCommunityPost(db,bucket,post.id,owner,201);return batch(statements);};
+ await assert.rejects(core.moderateCommunityPost(db,post.id,moderator,{action:'restore',reason:'Stale restoration',expectedRevision:1},202),bad('community_review_changed'));
+ assert.equal(await bucket.head(post.object_key),null);assert.equal(db.raw.prepare('SELECT COUNT(*) n FROM community_posts WHERE id=?').get(post.id).n,0);assert.equal(db.raw.prepare('SELECT COUNT(*) n FROM community_moderation_audit').get().n,0);
 });
 test.after(async()=>{await rm(temp,{recursive:true,force:true});});
