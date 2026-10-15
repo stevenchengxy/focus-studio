@@ -12,12 +12,19 @@ struct FocusStudioApp: App {
     // library loads and AI tools are served even when no window is open
     // (AppServices also gives it the assistant's saved conversation).
     @StateObject private var model = AppServices.shared.model
+    @ObservedObject private var installation = AppInstallationCoordinator.shared
 
     var body: some Scene {
         WindowGroup(id: MainWindow.id) {
             AppLocalizedView {
                 TextCompletionInjector(store: model.aiGateway) {
-                    StudioRootView()
+                    Group {
+                        if installation.launchState == .ready {
+                            StudioRootView()
+                        } else {
+                            InstallationStartupView(isBusyNow: { model.isInstallationBusy })
+                        }
+                    }
                         .environmentObject(model)
                         .studioAppearance()
                         .frame(minWidth: 1_080, minHeight: 700)
@@ -37,14 +44,23 @@ struct FocusStudioApp: App {
         // (record, open projects, edit, export) while the main window changes pages.
         Window("AI Assistant", id: AssistantWindow.id) {
             AppLocalizedView {
-                AssistantWindowView(model: model, gateway: model.aiGateway, codexDirector: model.codexDirector)
+                if installation.launchState == .ready {
+                    AssistantWindowView(model: model, gateway: model.aiGateway, codexDirector: model.codexDirector)
+                        .disabled(installation.isWorking)
+                } else {
+                    InstallationStartupView(isBusyNow: { model.isInstallationBusy })
+                }
             }
         }
         .defaultSize(width: AssistantWindow.defaultSize.width, height: AssistantWindow.defaultSize.height)
 
         Settings {
             AppLocalizedView {
-                StudioSettingsView(model: model)
+                if installation.launchState == .ready {
+                    StudioSettingsView(model: model)
+                } else {
+                    InstallationStartupView(isBusyNow: { model.isInstallationBusy })
+                }
             }
         }
     }

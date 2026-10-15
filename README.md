@@ -176,9 +176,9 @@ Focus Studio 会通过本机 [`codex app-server`](https://developers.openai.com/
 
 ## 安装到其他 Mac
 
-使用 `dist/releases/` 中的 DMG 或 ZIP。DMG 中将 **Focus Studio.app** 拖入 **Applications**，然后从应用程序启动。支持 macOS 15+ 的 Apple 芯片和 Intel Mac；录屏、编辑、导出不要求安装 Swift、Node.js、Homebrew 或 FFmpeg。
+使用官网或 `dist/releases/` 中的 DMG 或 ZIP。打开 DMG（或解压 ZIP）后，双击 **Focus Studio.app**，在首次启动引导中点击 **安装并打开**；检测到旧版时点击 **更新并打开**。应用会检查系统和个人“应用程序”文件夹中的旧安装，完成验证和替换后打开 `/Applications/Focus Studio.app`，并退出本次下载的副本。旧版备份和项目数据会保留；旧版有未完成工作时，先完成工作再重试。支持 macOS 15+ 的 Apple 芯片和 Intel Mac；录屏、编辑、导出不要求安装 Swift、Node.js、Homebrew 或 FFmpeg。
 
-每台机器分别授予录屏权限；需要外部应用点击跟踪时授予输入监控。完整步骤（包括接入 Claude Code / Codex）见 [安装与首次使用](docs/INSTALL.md)。当前没有 Developer ID 证书，生成的是标记为 `local` 的本地签名包，尚未 Apple 公证；正式签名、公证命令见 [发布指南](docs/RELEASE.md)。
+每台机器分别授予录屏权限；需要外部应用点击跟踪时授予输入监控。安装包内的 `INSTALL-FIRST.txt` 提供简短指引，完整步骤（包括接入 Claude Code / Codex）见 [安装与首次使用](docs/INSTALL.md)。标记为 `local` 的包采用本地签名，尚未 Apple 公证；安装引导不改变 Gatekeeper 的检查结果。正式签名、公证命令见 [发布指南](docs/RELEASE.md)。
 
 ## 构建与运行
 

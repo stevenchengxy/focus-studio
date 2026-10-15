@@ -1550,3 +1550,26 @@
 "Set up video model" = "设置视频模型";
 "Describe your video, or paste a link…" = "描述你想做的视频，或粘贴链接…";
 "Codex connected · Connection settings" = "Codex 已连接 · 连接设置";
+
+// First-launch installation and version handoff
+"Continue with this copy" = "使用此版本继续";
+"Install and open" = "安装并打开";
+"Update and open" = "更新并打开";
+"Closing other copies…" = "正在退出其他版本…";
+"Opening installed copy…" = "正在打开已安装版本…";
+"Set up Focus Studio" = "安装 Focus Studio";
+"Checking installed versions…" = "正在检查已安装版本…";
+"Install Focus Studio in Applications so recordings, permissions, and updates use the same copy." = "将 Focus Studio 安装到“应用程序”，让录制、权限和更新始终使用同一份应用。";
+"Save your work and finish recording in other copies first. Setup will ask them to quit, keep a backup of replaced apps, and open the installed version. Your projects and credentials stay unchanged." = "请先保存其他版本中的工作并结束录制。安装时会请求其他版本正常退出，备份被替换的应用，并打开已安装版本。项目和登录信息会保留。";
+"Show installed app in Finder" = "在访达中查看已安装应用";
+"Older installations in Applications are backed up and replaced. Projects and credentials stay in your user Library." = "“应用程序”中的旧安装会备份后替换。项目和登录信息保留在你的用户资料库中。";
+"After installation, this copy closes and the installed version opens. Replace any old Dock shortcut with the app in Applications." = "安装后，此窗口会关闭并打开已安装版本。请将程序坞中的旧快捷方式换成“应用程序”中的版本。";
+"An open Focus Studio could not quit. Finish your work and quit it, then try again." = "正在运行的 Focus Studio 未能退出。请完成工作并将它退出后重试。";
+"Another Focus Studio opened during installation. Quit it and try again." = "安装过程中又打开了另一份 Focus Studio。请退出它后重试。";
+"The installed app did not open from Applications. Open it in Finder to finish installation." = "应用尚未从“应用程序”中打开。请在访达中打开已安装应用以完成安装。";
+"Open the newer Focus Studio copy to complete this update." = "请打开检测到的新版 Focus Studio，继续完成更新。";
+"Finish recording or exporting before quitting Focus Studio." = "请先结束录制或导出，再退出 Focus Studio。";
+"Quit" = "退出";
+
+"The installed app did not open from Applications. Quit all copies, move the app to another folder and back to Applications using Finder, then open it again." = "应用尚未从“应用程序”中打开。请退出所有副本，在访达中将应用移到另一个文件夹，再移回“应用程序”后重新打开。";
+"The verified app copy could not be prepared for launch. The installed app was not changed." = "无法完成应用副本的启动准备，已安装的应用未被更改。";
