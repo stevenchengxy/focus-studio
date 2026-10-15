@@ -5,6 +5,7 @@ const path = require('node:path');
 const {SITE_ORIGIN, STUDIO_URL, trustedURL, externalURL, trustedIPC, capabilities} = require('./policy.cjs');
 const {AccountClient} = require('./account.cjs');
 const {TokenVault} = require('./vault.cjs');
+const {CommunityClient, CommunityVault} = require('./community.cjs');
 const {CaptureController} = require('./capture.cjs');
 const {UpdateController} = require('./updates.cjs');
 
@@ -47,6 +48,10 @@ async function createDesktop({show = true, checkUpdates = true} = {}) {
   const vault = new TokenVault({directory: app.getPath('userData'), safeStorage});
   const onAccountChanged = () => { if (contents() && !contents().isDestroyed()) contents().send('focus:account-changed'); };
   const account = new AccountClient({vault, openExternal: url => shell.openExternal(url), onChanged: onAccountChanged});
+  const communityVault = new CommunityVault({directory: app.getPath('userData'), safeStorage});
+  const community = new CommunityClient({vault: communityVault, isPackaged: () => app.isPackaged,
+    openExternal: url => shell.openExternal(url),
+    onChanged: () => { if (contents() && !contents().isDestroyed()) contents().send('focus:community-changed'); }});
   const requireTrusted = event => { if (!trustedIPC(event, contents())) throw new Error('This action is only available in Studio.'); };
   ipcMain.handle('focus:capabilities', event => { requireTrusted(event); return {...capabilities(process.platform), version: app.getVersion(), secureTokenStorage: vault.durable()}; });
   ipcMain.handle('focus:request', (event, input) => { requireTrusted(event); return account.request(input); });
@@ -66,6 +71,15 @@ async function createDesktop({show = true, checkUpdates = true} = {}) {
     } finally { pairingPrompt = false; }
   });
   ipcMain.handle('focus:sign-out', event => { requireTrusted(event); return account.signOut(); });
+  // Only these fixed actions reach the community credential. The general account
+  // request bridge always uses AccountClient and cannot select the community vault.
+  for (const [channel, action] of Object.entries({
+    'focus:community-status': () => community.status(),
+    'focus:community-start': () => community.start(),
+    'focus:community-cancel': () => community.cancel(),
+    'focus:community-retry': () => community.retry(),
+    'focus:community-disconnect': () => community.disconnect()
+  })) ipcMain.handle(channel, event => { requireTrusted(event); return action(); });
   ipcMain.handle('focus:activity', (event, value) => {
     requireTrusted(event);
     if (!value || typeof value.recording !== 'boolean' || typeof value.exporting !== 'boolean' ||
@@ -116,7 +130,7 @@ async function createDesktop({show = true, checkUpdates = true} = {}) {
     types: ['screen', 'window'], thumbnailSize: {width: 320, height: 200}, fetchWindowIcons: false}), choose});
   const updates = new UpdateController({directory: app.getPath('userData'), version: app.getVersion(),
     isIdle: () => Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() && mainWindow.isFocused() &&
-      !capture.busy && !chooser && !microphonePrompt && !pairingPrompt &&
+      !capture.busy && !chooser && !microphonePrompt && !pairingPrompt && !community.active() &&
       (contents().getURL() === `${SHELL_ORIGIN}/unavailable.html` || (activity && !activity.recording && !activity.exporting))),
     openExternal: url => shell.openExternal(url),
     present: async notice => {
@@ -202,12 +216,13 @@ async function createDesktop({show = true, checkUpdates = true} = {}) {
   ]));
   mainWindow.once('ready-to-show', () => { if (show) mainWindow?.show(); });
   mainWindow.on('focus', () => { void updates.flush(); });
-  mainWindow.on('closed', () => { pendingChoice?.finish(null); account.dispose(); updates.dispose(); mainWindow = null; });
+  mainWindow.on('closed', () => { pendingChoice?.finish(null); account.dispose(); community.dispose(); updates.dispose(); mainWindow = null; });
+  void community.restore();
   await mainWindow.loadURL(STUDIO_URL).catch(async () => {
     if (mainWindow && !mainWindow.isDestroyed()) await mainWindow.loadURL(`${SHELL_ORIGIN}/unavailable.html`);
   });
   if (checkUpdates) updates.start();
-  return {window: mainWindow, account, capture, vault, updates};
+  return {window: mainWindow, account, capture, vault, updates, community};
 }
 
 if (require.main === module) {
