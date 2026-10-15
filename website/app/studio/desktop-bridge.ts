@@ -1,4 +1,5 @@
 export interface DesktopCapabilities {platform:'win32'|'linux'|'darwin';systemAudio:'loopback'|'unavailable';microphone:true;}
+export type CommunityConnectionState = {state:'idle'|'connecting'|'awaitingApproval'|'confirming'|'confirmed'|'error';userCode?:string;expiresIn?:number;error?:string;requiresReconnect?:boolean};
 interface DesktopBridge {
   version:1;
   getCapabilities():Promise<DesktopCapabilities>;
@@ -6,6 +7,12 @@ interface DesktopBridge {
   startSignIn():Promise<{userCode:string;expiresIn:number}>;
   signOut():Promise<void>;
   onAccountChanged(fn:()=>void):()=>void;
+  communityStatus?():Promise<CommunityConnectionState>;
+  startCommunityConnection?():Promise<CommunityConnectionState>;
+  cancelCommunityConnection?():Promise<CommunityConnectionState>;
+  retryCommunityConfirmation?():Promise<CommunityConnectionState>;
+  disconnectCommunity?():Promise<CommunityConnectionState>;
+  onCommunityChanged?(fn:()=>void):()=>void;
   setActivity?(state:{recording:boolean;exporting:boolean}):void;
 }
 declare global {interface Window {focusDesktop?:DesktopBridge;}}

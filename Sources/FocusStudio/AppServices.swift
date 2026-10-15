@@ -101,6 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard state == .ready else { return }
             let services = AppServices.shared
             Task { await services.model.bootstrap() }
+            Task { await NativeCommunityConnectionStore.shared.refresh() }
             services.controlServer.start()
         }
         Task { await installation.prepareForLaunch() }

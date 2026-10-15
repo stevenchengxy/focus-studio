@@ -1573,3 +1573,23 @@
 
 "The installed app did not open from Applications. Quit all copies, move the app to another folder and back to Applications using Finder, then open it again." = "应用尚未从“应用程序”中打开。请退出所有副本，在访达中将应用移到另一个文件夹，再移回“应用程序”后重新打开。";
 "The verified app copy could not be prepared for launch. The installed app was not changed." = "无法完成应用副本的启动准备，已安装的应用未被更改。";
+
+"Community publishing" = "社区发布";
+"Connect the same ChatGPT account you use on the website, then confirm this installed client once to publish in the community." = "连接与网页相同的 ChatGPT 账户，确认此客户端已安装并启动后，即可在社区发布作品。";
+"This client is confirmed. You can publish on the community website." = "此客户端已确认，可以前往社区网站发布作品。";
+"Disconnect community account" = "断开社区账户连接";
+"Confirming this client…" = "正在确认此客户端…";
+"Waiting for browser approval…" = "等待在浏览器中确认…";
+"Approve this matching code in your browser using the ChatGPT account you use to publish." = "请在浏览器中使用发布作品的 ChatGPT 账户，核对并批准此连接码。";
+"Cancel connection" = "取消连接";
+"Connect ChatGPT for community publishing" = "连接 ChatGPT 以开通社区发布";
+"Retry client confirmation" = "重试客户端确认";
+"Community sign-in is optional. Recording, editing and local exports stay free without an account." = "社区登录为可选功能，不登录也能免费录制、剪辑和导出本地文件。";
+"Connect your ChatGPT account to confirm this client." = "请连接 ChatGPT 账户，以确认此客户端。";
+"Open Focus Studio from Applications to confirm this client." = "请从“应用程序”打开 Focus Studio，再确认此客户端。";
+"Client confirmation was not completed. Please retry." = "客户端确认尚未完成，请重试。";
+"Your community connection expired. Connect your ChatGPT account again." = "社区连接已过期，请重新连接 ChatGPT 账户。";
+"Connect your ChatGPT account again to confirm this client for community publishing." = "请重新连接 ChatGPT 账户，完成客户端确认后开通社区发布。";
+"This connection code expired. Connect again to get a new code." = "连接码已过期，请重新连接以获取新的连接码。";
+"Community connection is temporarily unavailable. Your local recordings and exports are unaffected." = "社区连接暂时不可用，本地录制和导出不受影响。";
+"Your browser could not open. Try connecting again." = "未能打开浏览器，请重新连接。";

@@ -7,15 +7,17 @@ import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import ts from 'typescript';
 const temp=await mkdtemp(join(tmpdir(),'focus-community-'));
-for(const name of ['primitives','community-profile','community','community-media','community-runtime','community-routes']) {
+for(const name of ['primitives','community-client','community-profile','community','community-media','community-runtime','community-routes']) {
  const source=await readFile(new URL(`../lib/server/${name}.ts`,import.meta.url),'utf8');
  let js=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText;
- for(const dependency of ['primitives','community-profile','community','community-media','community-runtime','runtime'])js=js.replaceAll(`'./${dependency}'`,`'./${dependency}.mjs'`);
+ for(const dependency of ['primitives','community-client','community-profile','community','community-media','community-runtime','runtime'])js=js.replaceAll(`'./${dependency}'`,`'./${dependency}.mjs'`);
  js=js.replaceAll("'cloudflare:workers'","'./fixtures.mjs'").replaceAll("'@/app/chatgpt-auth'","'./fixtures.mjs'");
  await writeFile(join(temp,`${name}.mjs`),js);
 }
 await writeFile(join(temp,'fixtures.mjs'),`export const env={get BUCKET(){return globalThis.__communityFixture.bucket},get COMMUNITY_MODERATOR_IDS(){return globalThis.__communityFixture.moderatorIDs}};export async function getChatGPTUser(){return globalThis.__communityFixture.user;}`);
 await writeFile(join(temp,'runtime.mjs'),`import {APIError,checkOrigin} from './primitives.mjs';export const database=()=>globalThis.__communityFixture.db;export const mutationGuard=(request,allowNative)=>checkOrigin(request,'https://studio.test',allowNative);export async function rateLimit(key,limit){const map=globalThis.__communityFixture.rates;const count=(map.get(key)||0)+1;map.set(key,count);if(count>limit)throw new APIError(429,'too_many_requests','Too many requests.');}export async function api(work){try{return await work()}catch(error){return Response.json({error:{code:error.code||'service_error'}},{status:error.status||503})}}`);
+const clients=await import(pathToFileURL(join(temp,'community-client.mjs')));
+const primitive=await import(pathToFileURL(join(temp,'primitives.mjs')));
 const core=await import(pathToFileURL(join(temp,'community.mjs')));
 const profiles=await import(pathToFileURL(join(temp,'community-profile.mjs')));
 const media=await import(pathToFileURL(join(temp,'community-media.mjs')));
@@ -40,7 +42,8 @@ function uploadRequest(data=bytes(),mime='video/mp4'){return new Request('https:
 async function create(db,changes={},viewer=owner){return core.createCommunityPost(db,viewer,{...metadata,...changes},100)}
 async function ready(db,bucket,changes={}){const post=await create(db,changes);return media.uploadCommunityVideo(db,bucket,post.id,owner,uploadRequest(bytes(post.size_bytes),post.mime_type),fixed,101)}
 async function published(db,bucket,changes={}){const post=await ready(db,bucket,changes);return core.publishCommunityPost(db,post.id,owner,{license:'CC-BY-4.0',confirmRights:true},102)}
-function fixture(user={userId:owner.id,email:'private@example.invalid',fullName:owner.name,displayName:owner.name}){const state={db:database(),bucket:new Bucket(),user,rates:new Map()};globalThis.__communityFixture=state;return state}
+function confirmFixture(db,id){db.raw.prepare('INSERT OR IGNORE INTO community_client_activations(owner_id,confirmed_at,device_id) VALUES(?,?,?)').run(id,100,`fixture-${id}`)}
+function fixture(user={userId:owner.id,email:'private@example.invalid',fullName:owner.name,displayName:owner.name},confirmed=true){const state={db:database(),bucket:new Bucket(),user,rates:new Map()};if(confirmed){confirmFixture(state.db,owner.id);confirmFixture(state.db,other.id)}globalThis.__communityFixture=state;return state}
 function jsonRequest(data={},method='POST',origin='https://studio.test'){return new Request('https://studio.test/api/community',{method,headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify(data)})}
 
 test('drafts remain private and owner fields cannot be supplied through metadata',async()=>{
@@ -270,4 +273,57 @@ test('author deletion wins a race after a moderator reads trash and before resto
  await assert.rejects(core.moderateCommunityPost(db,post.id,moderator,{action:'restore',reason:'Stale restoration',expectedRevision:1},202),bad('community_review_changed'));
  assert.equal(await bucket.head(post.object_key),null);assert.equal(db.raw.prepare('SELECT COUNT(*) n FROM community_posts WHERE id=?').get(post.id).n,0);assert.equal(db.raw.prepare('SELECT COUNT(*) n FROM community_moderation_audit').get().n,0);
 });
+
+test('all contribution adapters require a confirmed client before reading or writing content',async()=>{
+ const f=fixture(undefined,false),draft=await create(f.db),publicPost=await published(f.db,f.bucket);
+ const before=f.db.raw.prepare('SELECT * FROM community_posts ORDER BY id').all();
+ const mediaCount=f.bucket.objects.size;
+ const me=await (await routes.communityMe()).json();assert.equal(me.authenticated,true);assert.equal(me.clientConfirmed,false);assert.equal(me.canPublish,false);
+ const attempts=[
+  ()=>routes.createCommunity(jsonRequest({...metadata,clientConfirmed:true,canPublish:true,ownerId:'confirmed-owner'})),
+  ()=>routes.editCommunity(jsonRequest({title:'Bypass',clientConfirmed:true},'PATCH'),publicPost.id),
+  ()=>routes.uploadCommunity(uploadRequest(),draft.id),
+  ()=>routes.uploadCommunity(uploadRequest(jpg,'image/jpeg'),draft.id,true),
+  ()=>routes.uploadCommunity(new Request('https://studio.test/api/community/id/poster',{method:'POST',headers:{Origin:'https://studio.test','Content-Type':'image/jpeg'},body:jpg}),draft.id,true),
+  ()=>routes.publishCommunity(jsonRequest({license:'CC-BY-4.0',confirmRights:true,clientConfirmed:true}),draft.id),
+ ];
+ for(const attempt of attempts){const response=await attempt();assert.equal(response.status,403);assert.equal((await response.json()).error.code,'community_client_required')}
+ assert.deepEqual(f.db.raw.prepare('SELECT * FROM community_posts ORDER BY id').all(),before);assert.equal(f.bucket.objects.size,mediaCount);
+ assert.equal((await routes.detailCommunity(new Request('https://studio.test'),draft.id)).status,200);
+ f.user=null;const anonymous=await (await routes.communityMe()).json();assert.equal(anonymous.clientConfirmed,false);assert.equal(anonymous.canPublish,false);
+ assert.equal((await routes.listCommunity(new Request('https://studio.test/api/community'))).status,200);
+ assert.equal((await routes.detailCommunity(new Request('https://studio.test'),publicPost.id)).status,200);
+ assert.equal((await routes.readCommunityMedia(new Request('https://studio.test'),publicPost.id)).status,200);
+ const forged=new Request('https://studio.test/api/community',{method:'POST',headers:{Origin:'https://studio.test','Content-Type':'application/json',Authorization:`Bearer fs_${'a'.repeat(64)}`,Cookie:'clientConfirmed=true'},body:JSON.stringify(metadata)});
+ assert.equal((await routes.createCommunity(forged)).status,401);
+});
+test('unconfirmed authors retain profile, reporting, unpublish and permanent delete access',async()=>{
+ const f=fixture(undefined,false),post=await published(f.db,f.bucket);
+ assert.equal((await routes.updateCommunityProfile(jsonRequest({displayName:'Still my profile'},'PATCH'))).status,200);
+ assert.equal((await routes.unpublishCommunity(jsonRequest({}),post.id)).status,200);
+ assert.equal((await core.getCommunityPost(f.db,post.id,owner.id)).status,'draft');
+ assert.equal((await routes.deleteCommunity(jsonRequest({},'DELETE'),post.id)).status,200);assert.equal(f.bucket.objects.size,0);
+ const reported=await published(f.db,f.bucket);f.user={userId:other.id,email:'other@example.invalid',fullName:'Other'};
+ assert.equal((await routes.reportCommunity(jsonRequest({reason:'privacy',details:'Needs review'}),reported.id)).status,200);
+ f.moderatorIDs='unconfirmed-moderator';f.user={userId:'unconfirmed-moderator',email:'reviewer@example.invalid',fullName:'Reviewer'};
+ assert.equal((await routes.moderateCommunity(jsonRequest({action:'hide',reason:'Protect privacy'}),reported.id)).status,200);
+});
+test('a server-confirmed community client unlocks create edit media poster and publish for only its owner',async()=>{
+ const f=fixture(undefined,false),token=`fs_${'c'.repeat(64)}`;
+ f.db.raw.prepare('INSERT INTO accounts(id,email,created_at) VALUES(?,?,?)').run(owner.id,'private@example.invalid',100);
+ f.db.raw.prepare('INSERT INTO device_tokens(id,hash,account_id,name,purpose,expires_at,created_at) VALUES(?,?,?,?,?,?,?)').run('community-device',await primitive.sha256(token),owner.id,'Focus Studio','community',300,100);
+ assert.deepEqual(await clients.activateCommunityClient(f.db,`Bearer ${token}`,101),{confirmed:true});
+ const me=await (await routes.communityMe()).json();assert.equal(me.clientConfirmed,true);assert.equal(me.canPublish,true);
+ let response=await routes.createCommunity(jsonRequest(metadata));assert.equal(response.status,201);const id=(await response.json()).item.id;
+ assert.equal((await routes.editCommunity(jsonRequest({title:'Confirmed update'},'PATCH'),id)).status,200);
+ const prior=globalThis.FixedLengthStream;globalThis.FixedLengthStream=class extends TransformStream{constructor(){super()}};
+ try{response=await routes.uploadCommunity(uploadRequest(),id);assert.equal(response.status,200,JSON.stringify(await response.json()))}finally{if(prior===undefined)delete globalThis.FixedLengthStream;else globalThis.FixedLengthStream=prior}
+ assert.equal((await routes.uploadCommunity(uploadRequest(jpg,'image/jpeg'),id,true)).status,200);
+ assert.equal((await routes.publishCommunity(jsonRequest({license:'CC-BY-4.0',confirmRights:true}),id)).status,200);
+ f.user={userId:other.id,email:'other@example.invalid',fullName:'Other'};
+ assert.equal((await (await routes.communityMe()).json()).canPublish,false);
+ assert.equal((await routes.createCommunity(jsonRequest(metadata))).status,403);
+ f.user=null;assert.equal((await routes.detailCommunity(new Request('https://studio.test'),id)).status,200);
+});
+
 test.after(async()=>{await rm(temp,{recursive:true,force:true});});

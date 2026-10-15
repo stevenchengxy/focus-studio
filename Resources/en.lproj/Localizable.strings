@@ -1574,3 +1574,23 @@
 
 "The installed app did not open from Applications. Quit all copies, move the app to another folder and back to Applications using Finder, then open it again." = "The installed app did not open from Applications. Quit all copies, move the app to another folder and back to Applications using Finder, then open it again.";
 "The verified app copy could not be prepared for launch. The installed app was not changed." = "The verified app copy could not be prepared for launch. The installed app was not changed.";
+
+"Community publishing" = "Community publishing";
+"Connect the same ChatGPT account you use on the website, then confirm this installed client once to publish in the community." = "Connect the same ChatGPT account you use on the website, then confirm this installed client once to publish in the community.";
+"This client is confirmed. You can publish on the community website." = "This client is confirmed. You can publish on the community website.";
+"Disconnect community account" = "Disconnect community account";
+"Confirming this client…" = "Confirming this client…";
+"Waiting for browser approval…" = "Waiting for browser approval…";
+"Approve this matching code in your browser using the ChatGPT account you use to publish." = "Approve this matching code in your browser using the ChatGPT account you use to publish.";
+"Cancel connection" = "Cancel connection";
+"Connect ChatGPT for community publishing" = "Connect ChatGPT for community publishing";
+"Retry client confirmation" = "Retry client confirmation";
+"Community sign-in is optional. Recording, editing and local exports stay free without an account." = "Community sign-in is optional. Recording, editing and local exports stay free without an account.";
+"Connect your ChatGPT account to confirm this client." = "Connect your ChatGPT account to confirm this client.";
+"Open Focus Studio from Applications to confirm this client." = "Open Focus Studio from Applications to confirm this client.";
+"Client confirmation was not completed. Please retry." = "Client confirmation was not completed. Please retry.";
+"Your community connection expired. Connect your ChatGPT account again." = "Your community connection expired. Connect your ChatGPT account again.";
+"Connect your ChatGPT account again to confirm this client for community publishing." = "Connect your ChatGPT account again to confirm this client for community publishing.";
+"This connection code expired. Connect again to get a new code." = "This connection code expired. Connect again to get a new code.";
+"Community connection is temporarily unavailable. Your local recordings and exports are unaffected." = "Community connection is temporarily unavailable. Your local recordings and exports are unaffected.";
+"Your browser could not open. Try connecting again." = "Your browser could not open. Try connecting again.";

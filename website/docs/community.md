@@ -1,6 +1,16 @@
 # Community operations
 
-The public website offers optional sharing. Creation and export happen in installed Focus Studio; local projects are never uploaded automatically. ChatGPT sign-in uses Sites-provided identity headers. Private drafts are only accessible to their owner, except authorized moderation review of previously reported/held content.
+The public website offers optional sharing. Browsing remains public. Uploading, saving an uploaded draft, editing post content and publishing require ChatGPT sign-in and one completed client confirmation for that same Sites user ID. Creation and export happen in installed Focus Studio; local projects are never uploaded automatically. ChatGPT sign-in uses Sites-provided identity headers. Private drafts are only accessible to their owner, except authorized moderation review of previously reported/held content.
+
+## Client confirmation
+
+The user installs and opens Focus Studio, chooses **Community publishing → Connect ChatGPT**, and approves the displayed code in their browser with the same ChatGPT account they use on the community. The client exchanges the grant and calls the bearer-only activation endpoint. Only a successful activation grants the persistent account-level publishing capability; clicking Download, approving a code without the client callback, browser storage, user-agent strings and ordinary account tokens do not grant it.
+
+Community device grants and tokens have a separate purpose, token storage and API scope. They do not enable billing or gate free local recording, editing or exports. The approval endpoint uses the grant's stored purpose to select ChatGPT identity, so a legacy Google cookie cannot silently bind community confirmation to the wrong account. Token expiry or disconnection does not remove an already completed one-time confirmation.
+
+This verifies completion of device pairing and a client callback. It is not hardware attestation of an official binary: a determined user could implement the public device protocol. No fixed secret is embedded in the client and no claim of tamper-proof installation detection is made.
+
+`/api/community/me` returns `canPublish` and `clientConfirmed`. Server checks apply independently to create, metadata edit, video upload, poster upload and publish routes. Authors can still delete or unpublish their content; reporting, profiles, moderation and public reads retain their existing access rules. Missing confirmation returns `403 community_client_required` before media storage is touched.
 
 ## Pages and profiles
 
@@ -8,7 +18,7 @@ The public website offers optional sharing. Creation and export happen in instal
 - The detail page contains the video, creator name, download and optional product introduction/link. A standalone video needs no product introduction.
 - `/community/mine` manages private drafts and published work; `/community/new` uploads a new work. The official sample lives separately at `/community/showcase` and is explicitly labeled.
 - `/community/profile` saves a public creator name for the signed-in account. GET/PATCH `/api/community/profile` returns `{displayName}`. The D1 `community_profiles` table binds names to trusted Sites owner IDs. Updating a name atomically updates existing work attribution without changing content, publication state or ordering. New work and metadata edits use the saved name. Email addresses are rejected as public names.
-- Apply migrations through `0005_silent_prodigy.sql` before serving this version. Both language and theme controls are shared across community pages.
+- Apply migrations through `0006_slimy_thunderball.sql` before serving this version. Both language and theme controls are shared across community pages.
 
 ## Storage and ownership
 
@@ -36,7 +46,7 @@ Every successful decision and its actor/reason/time are committed in one transac
 
 ## Release checks
 
-Run `node --test tests/*.test.mjs` from website, TypeScript, and the Sites build helper. With local dev running and migrations applied, run `node scripts/verify-community-local.mjs`. That test refuses non-loopback hosts and uses only the starter's mock local identity. It verifies draft privacy, upload, publish, literal search, media ranges, details edits, unpublish and cleanup against real local HTTP routes. No production sample posts or private recordings are seeded.
+Run `node --test tests/*.test.mjs` from website, TypeScript, and the Sites build helper. With local dev running and migrations applied, run `node scripts/verify-community-local.mjs`. That test refuses non-loopback hosts and uses random synthetic Sites identities against the built local Worker, including the complete community device confirmation flow. It verifies draft privacy, upload, publish, literal search, media ranges, details edits, unpublish and cleanup against real local HTTP routes. No production sample posts or private recordings are seeded.
 
 For the built Worker moderation HTTP check, run a separate loopback Wrangler preview with a temporary `--var COMMUNITY_MODERATOR_IDS:focus-local-reviewer-<UUID>` (no saved environment change). Set `COMMUNITY_MODERATION_TEST_ORIGIN` to that loopback URL and `COMMUNITY_MODERATION_TEST_ADMIN` to the same synthetic ID, then run `node scripts/verify-community-moderation-local.mjs`. This script emulates trusted Sites headers only against the local built Worker, creates random synthetic owners and uploads, and cleans up its own fixtures. It refuses non-loopback destinations and non-fixture administrator IDs. The ordinary dev preview strips incoming identity headers and continues to use its single mock sign-in account.
 
