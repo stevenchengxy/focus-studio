@@ -4,6 +4,7 @@ import {APIError} from './primitives';
 import {database,mutationGuard, rateLimit} from './runtime';
 import type {CommunityViewer} from './community';
 import {getCommunityProfile} from './community-profile';
+import {hasCommunityClientActivation} from './community-client';
 
 // Sites identity is authoritative here; API tokens and billing identities do
 // not grant access to community drafts or another user's uploads.
@@ -19,6 +20,15 @@ export async function communityWriter(request: Request,action: string,limit=60) 
   const viewer=await communityViewer();
   if(!viewer)throw new APIError(401,'community_sign_in_required','Sign in to manage your clips.');
   await rateLimit(`community:${action}:${viewer.id}`,limit,3600);
+  return viewer;
+}
+/** Content creation and publication require one completed client callback.
+ * Cleanup, reports and profile changes retain the ordinary signed-in guard. */
+export async function communityContributor(request: Request, action: string, limit=60) {
+  const viewer=await communityWriter(request,action,limit);
+  if(!await hasCommunityClientActivation(database(),viewer.id)) {
+    throw new APIError(403,'community_client_required','Install and open Focus Studio, then confirm your ChatGPT account in the app before publishing.');
+  }
   return viewer;
 }
 export function isCommunityModerator(viewer:CommunityViewer|null|undefined) {

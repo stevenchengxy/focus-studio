@@ -10,20 +10,30 @@ enum InstallAppCommand {
                   arguments.dropFirst().allSatisfy({ $0 == "--yes" || $0 == "--check" }) else {
                 throw AppInstallationError(key: "Usage: install-app.sh '/absolute/path/Focus Studio.app' [--check | --yes]")
             }
-            let installer = AppInstaller(isRunning: { destination in
+            let isRunning: @Sendable (URL) -> Bool = { destination in
                 NSRunningApplication.runningApplications(withBundleIdentifier: "com.local.focusstudio").contains {
-                    $0.bundleURL?.standardizedFileURL.path == destination.standardizedFileURL.path
+                    !$0.isTerminated && $0.bundleURL?.standardizedFileURL.resolvingSymlinksInPath().path ==
+                        destination.standardizedFileURL.resolvingSymlinksInPath().path
                 }
-            })
+            }
+            let installer = AppInstaller(isRunning: isRunning)
             let source = try installer.inspect(URL(fileURLWithPath: path))
             print("Source: \(source.url.path) — \(source.release.version) (\(source.release.build))")
             print("Canonical destination: \(AppInstaller.canonicalURL.path)")
-            if FileManager.default.fileExists(atPath: AppInstaller.canonicalURL.path) {
-                let installed = try installer.inspect(AppInstaller.canonicalURL)
-                print("Installed: \(installed.release.version) (\(installed.release.build))")
-                guard source.release >= installed.release else {
-                    throw AppInstallationError(key: "A newer version is already installed. Downgrades are not allowed.")
-                }
+            let copies = try installer.discoverInstalledApps(excluding: source.url)
+            print("Detected installations (excluding the source): \(copies.count)")
+            for copy in copies {
+                print("Installed: \(copy.url.path) — \(copy.release.version) (\(copy.release.build))\(isRunning(copy.url) ? " [running]" : "")")
+            }
+            let newerCopies = copies.filter { $0.release > source.release }
+            guard newerCopies.isEmpty else {
+                throw AppInstallationError(key: "A newer version is already installed. Downgrades are not allowed.",
+                                           detail: newerCopies.map { $0.url.path }.joined(separator: "\n"))
+            }
+            let conflictingCopies = copies.filter { $0.release == source.release && $0.fingerprint != source.fingerprint }
+            guard conflictingCopies.isEmpty else {
+                throw AppInstallationError(key: "This version and build are already installed with different contents. Use a newer build to update.",
+                                           detail: conflictingCopies.map { $0.url.path }.joined(separator: "\n"))
             }
             guard arguments.contains("--yes"), !arguments.contains("--check") else {
                 print("Read-only check complete. Add --yes to explicitly install; no app was changed or stopped.")
@@ -31,7 +41,10 @@ enum InstallAppCommand {
             }
             let result = try installer.install(from: source.url)
             print(result.didInstall ? "Installation verified." : "This exact build is already installed.")
-            if let backup = result.backupURL { print("Previous app recovery folder: \(backup.path)") }
+            for (previous, backup) in zip(result.replacedApps, result.backupURLs) {
+                print("Archived: \(previous.url.path) — \(previous.release.version) (\(previous.release.build))")
+                print("Recovery bundle: \(backup.path)")
+            }
             print("Open exactly: \(result.app.url.path). No running app was stopped; projects and credentials were not changed.")
         } catch {
             FileHandle.standardError.write(Data((error.localizedDescription + "\n").utf8))

@@ -9,6 +9,7 @@ import type { PendingExport } from "./local-export-store";
 import { defaultSound, envelopeGain, waveformPeaks, type SoundEdit } from './audio-model';
 import { AudioPanel } from './audio-panel';
 import { type DesktopCapabilities } from './desktop-bridge';
+import { DesktopCommunityConnection } from './community-connection';
 import { decodeVoice, mixCapture, PreviewSound, scheduleVoice } from './audio-engine';
 
 type Effect = "none" | "zoom" | "spotlight";
@@ -394,7 +395,7 @@ export function BrowserStudio() {
   }
 
   const isRecording=phase==="recording"||phase==="paused",isEditing=phase==="editing"||phase==="exporting";
-  return <div className="browser-studio"><header className="studio-header"><Brand/><span className="studio-beta">Desktop Studio <b>Preview</b></span><div className="studio-header-actions"><ThemeToggle/><a href="/community" target="_blank" rel="noreferrer" className="studio-account">Community<ArrowUpRight size={14}/></a></div></header><main className="studio-workspace"><div className="studio-title"><div><a href="/" className="studio-back"><ArrowLeft size={12}/> Focus Studio</a><h1>A little studio.<br/><span>On your desktop.</span></h1></div><p>Record or import. Trim. Find your focus.<br/>Everything you record stays on this device.</p></div>
+  return <div className="browser-studio"><header className="studio-header"><Brand/><span className="studio-beta">Desktop Studio <b>Preview</b></span><div className="studio-header-actions"><ThemeToggle/><DesktopCommunityConnection/><a href="/community" target="_blank" rel="noreferrer" className="studio-account">Community<ArrowUpRight size={14}/></a></div></header><main className="studio-workspace"><div className="studio-title"><div><a href="/" className="studio-back"><ArrowLeft size={12}/> Focus Studio</a><h1>A little studio.<br/><span>On your desktop.</span></h1></div><p>Record or import. Trim. Find your focus.<br/>Everything you record stays on this device.</p></div>
     {pendingExport&&<div className="studio-recovery"><div><Check size={16}/><span>A rendered video is saved on this device.</span></div><div className="studio-recovery-actions"><button disabled={phase==="exporting"||isRecording||startingCapture||voiceBusy||voiceRecording} onClick={recoverSavedExport}>Save rendered video <Download size={14}/></button><button className="discard" disabled={phase==="exporting"||isRecording||startingCapture||voiceBusy||voiceRecording} onClick={discardSavedRender}>Discard saved render</button></div></div>}
 
     {message&&<div className="studio-message" role="status"><Info size={16}/><p>{message}</p><button aria-label="Dismiss message" onClick={()=>setMessage("")}><X size={16}/></button></div>}

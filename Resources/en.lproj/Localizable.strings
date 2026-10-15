@@ -1551,3 +1551,46 @@
 "Set up video model" = "Set up video model";
 "Describe your video, or paste a link…" = "Describe your video, or paste a link…";
 "Codex connected · Connection settings" = "Codex connected · Connection settings";
+
+// First-launch installation and version handoff
+"Continue with this copy" = "Continue with this copy";
+"Install and open" = "Install and open";
+"Update and open" = "Update and open";
+"Closing other copies…" = "Closing other copies…";
+"Opening installed copy…" = "Opening installed copy…";
+"Set up Focus Studio" = "Set up Focus Studio";
+"Checking installed versions…" = "Checking installed versions…";
+"Install Focus Studio in Applications so recordings, permissions, and updates use the same copy." = "Install Focus Studio in Applications so recordings, permissions, and updates use the same copy.";
+"Save your work and finish recording in other copies first. Setup will ask them to quit, keep a backup of replaced apps, and open the installed version. Your projects and credentials stay unchanged." = "Save your work and finish recording in other copies first. Setup will ask them to quit, keep a backup of replaced apps, and open the installed version. Your projects and credentials stay unchanged.";
+"Show installed app in Finder" = "Show installed app in Finder";
+"Older installations in Applications are backed up and replaced. Projects and credentials stay in your user Library." = "Older installations in Applications are backed up and replaced. Projects and credentials stay in your user Library.";
+"After installation, this copy closes and the installed version opens. Replace any old Dock shortcut with the app in Applications." = "After installation, this copy closes and the installed version opens. Replace any old Dock shortcut with the app in Applications.";
+"An open Focus Studio could not quit. Finish your work and quit it, then try again." = "An open Focus Studio could not quit. Finish your work and quit it, then try again.";
+"Another Focus Studio opened during installation. Quit it and try again." = "Another Focus Studio opened during installation. Quit it and try again.";
+"The installed app did not open from Applications. Open it in Finder to finish installation." = "The installed app did not open from Applications. Open it in Finder to finish installation.";
+"Open the newer Focus Studio copy to complete this update." = "Open the newer Focus Studio copy to complete this update.";
+"Finish recording or exporting before quitting Focus Studio." = "Finish recording or exporting before quitting Focus Studio.";
+"Quit" = "Quit";
+
+"The installed app did not open from Applications. Quit all copies, move the app to another folder and back to Applications using Finder, then open it again." = "The installed app did not open from Applications. Quit all copies, move the app to another folder and back to Applications using Finder, then open it again.";
+"The verified app copy could not be prepared for launch. The installed app was not changed." = "The verified app copy could not be prepared for launch. The installed app was not changed.";
+
+"Community publishing" = "Community publishing";
+"Connect the same ChatGPT account you use on the website, then confirm this installed client once to publish in the community." = "Connect the same ChatGPT account you use on the website, then confirm this installed client once to publish in the community.";
+"This client is confirmed. You can publish on the community website." = "This client is confirmed. You can publish on the community website.";
+"Disconnect community account" = "Disconnect community account";
+"Confirming this client…" = "Confirming this client…";
+"Waiting for browser approval…" = "Waiting for browser approval…";
+"Approve this matching code in your browser using the ChatGPT account you use to publish." = "Approve this matching code in your browser using the ChatGPT account you use to publish.";
+"Cancel connection" = "Cancel connection";
+"Connect ChatGPT for community publishing" = "Connect ChatGPT for community publishing";
+"Retry client confirmation" = "Retry client confirmation";
+"Community sign-in is optional. Recording, editing and local exports stay free without an account." = "Community sign-in is optional. Recording, editing and local exports stay free without an account.";
+"Connect your ChatGPT account to confirm this client." = "Connect your ChatGPT account to confirm this client.";
+"Open Focus Studio from Applications to confirm this client." = "Open Focus Studio from Applications to confirm this client.";
+"Client confirmation was not completed. Please retry." = "Client confirmation was not completed. Please retry.";
+"Your community connection expired. Connect your ChatGPT account again." = "Your community connection expired. Connect your ChatGPT account again.";
+"Connect your ChatGPT account again to confirm this client for community publishing." = "Connect your ChatGPT account again to confirm this client for community publishing.";
+"This connection code expired. Connect again to get a new code." = "This connection code expired. Connect again to get a new code.";
+"Community connection is temporarily unavailable. Your local recordings and exports are unaffected." = "Community connection is temporarily unavailable. Your local recordings and exports are unaffected.";
+"Your browser could not open. Try connecting again." = "Your browser could not open. Try connecting again.";

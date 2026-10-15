@@ -40,6 +40,25 @@ app.whenReady().then(async () => {
   assert.equal(badRequest, true);
   const anonymous = await wc.executeJavaScript(`window.focusDesktop.request({path:'/api/account',method:'GET'})`);
   assert.equal(anonymous.status, 401); assert.equal(anonymous.body.authenticated, false);
+  const community = await wc.executeJavaScript(`(async () => {
+    const api = window.focusDesktop;
+    let changed = 0;
+    const stop = api.onCommunityChanged(() => { changed++; });
+    const initial = await api.communityStatus();
+    const start = await api.startCommunityConnection({isPackaged:true});
+    const retry = await api.retryCommunityConfirmation();
+    stop();
+    const cancelled = await api.cancelCommunityConnection();
+    const disconnected = await api.disconnectCommunity();
+    return {initial,start,retry,cancelled,disconnected,changed,token:typeof api.communityToken};
+  })()`);
+  assert.equal(community.initial.state, 'idle');
+  assert.equal(community.start.state, 'error'); assert.match(community.start.error, /installed Focus Studio/);
+  assert.equal(community.retry.state, 'error'); assert.equal(community.cancelled.state, 'idle');
+  assert.equal(community.disconnected.state, 'idle'); assert.equal(community.token, 'undefined');
+  assert.ok(community.changed > 0, 'community changes reach only the subscribed renderer callback');
+  assert.equal((await wc.executeJavaScript(`window.focusDesktop.request({path:'/api/account',method:'GET'})`)).status, 401,
+    'community actions do not attach a credential to the billing/account bridge');
   // Invoke the installed camera permission policy without asking the OS for a
   // camera device. CI and local tests never need real microphone/camera access.
   const cameraAllowed = await new Promise(resolve => permissionHandler(wc, 'media', resolve,
@@ -61,8 +80,11 @@ app.whenReady().then(async () => {
   await wc.loadURL('focus-desktop://shell/unavailable.html');
   assert.equal(await wc.executeJavaScript(`window.focusDesktop.getCapabilities().then(()=>false,()=>true)`), true);
   assert.equal(await wc.executeJavaScript(`window.focusDesktop.setActivity({recording:false,exporting:false}).then(()=>false,()=>true)`), true);
+  for (const method of ['communityStatus', 'startCommunityConnection', 'cancelCommunityConnection', 'retryCommunityConfirmation', 'disconnectCommunity']) {
+    assert.equal(await wc.executeJavaScript(`window.focusDesktop.${method}().then(()=>false,()=>true)`), true);
+  }
   desktop.window.destroy(); clearTimeout(watchdog);
-  console.log('PASS: real Electron sandbox, account bridge, origin rejection, camera denial, chooser isolation, and offline privilege rejection.');
+  console.log('PASS: real Electron sandbox, isolated account/community bridges, unpackaged community rejection, origin rejection, camera denial, chooser isolation, and offline privilege rejection.');
   app.exit(0);
 }).catch(error => { clearTimeout(watchdog); console.error(error); app.exit(1); });
 // The OS temporary directory is intentionally left for its normal cleanup;

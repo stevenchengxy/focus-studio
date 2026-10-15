@@ -59,6 +59,7 @@ PAYLOAD="$PACKAGE_STAGE/Focus Studio"
 mkdir -p "$PAYLOAD"
 ditto "$APP_DIR" "$PAYLOAD/Focus Studio.app"
 cp "$PROJECT_DIR/docs/INSTALL.md" "$PAYLOAD/INSTALL.md"
+cp "$PROJECT_DIR/docs/INSTALL-FIRST.txt" "$PAYLOAD/INSTALL-FIRST.txt"
 cp "$APP_DIR/Contents/Resources/ThirdPartyNotices.txt" "$PAYLOAD/ThirdPartyNotices.txt"
 ln -s /Applications "$PAYLOAD/Applications"
 

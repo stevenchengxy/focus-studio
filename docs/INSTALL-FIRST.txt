@@ -1,0 +1,50 @@
+Focus Studio — 安装与更新 / Install and update
+
+中文
+
+1. 双击此处的 Focus Studio.app。
+2. 在安装引导中点击“安装并打开”；已检测到旧版时，点击“更新并打开”。
+3. 按提示完成旧版中的工作。安装完成后，会打开“应用程序”里的新版并退出本次下载的副本。
+4. 退出磁盘映像。以后从“应用程序”打开 Focus Studio。
+
+应用会检查“应用程序”和你个人的“应用程序”文件夹里的 Focus Studio，
+把旧安装归并到 /Applications/Focus Studio.app，并保留可恢复的备份。
+录制项目、素材、设置与账号保存在应用之外，更新应用不会删除它们。
+不会强制结束正在录制、导出或保存的旧版；请完成工作后重试。
+
+如果没有出现安装引导，可打开“设置 → 安装”。如果安装后没有正常切换，
+点击“在访达中查看已安装应用”。如果仍进入临时路径，请退出各副本，
+在访达中把应用移到另一文件夹，再移回“应用程序”后打开。Finder 手动拖入 Applications
+仍可作为备用方法，但不会执行应用内的旧版归并、防降级与回滚检查。
+
+local 安装包采用本地签名，尚未通过 Apple 公证。首次打开时 macOS 可能拦截；
+确认来源可信后，按“系统设置 → 隐私与安全性”中的“仍要打开”提示操作。
+请勿关闭系统安全保护。安装引导不改变安装包的签名或公证状态。
+完整说明见 INSTALL.md，签名状态见 Release-Status.plist。
+
+English
+
+1. Double-click Focus Studio.app here.
+2. Choose “Install and open”, or “Update and open” when an older installation is found.
+3. Finish any work in the old app when prompted. After installation, the app in
+   Applications opens and this downloaded copy quits.
+4. Eject the disk image. Open Focus Studio from Applications next time.
+
+The app checks the system and your personal Applications folders for Focus Studio,
+consolidates old installations at /Applications/Focus Studio.app, and keeps recoverable
+backups. Your projects, media, settings and accounts are stored outside the application.
+The installer does not force-quit an app that is recording, exporting or saving work.
+Finish that work before retrying.
+
+If the setup screen does not appear, open Settings → Installation. If switching apps
+fails, choose “Show installed app in Finder”. If it still opens from a temporary path,
+quit all copies, move it to another folder and back to Applications using Finder,
+then open it again. Dragging the app into
+Applications with Finder remains a fallback, but skips the in-app consolidation,
+downgrade protection and rollback checks.
+
+Packages named “local” use a local signature and are not Apple-notarized. macOS may
+block first launch. Only for a build you trust, follow macOS Privacy & Security’s
+“Open Anyway” instructions. Do not disable system security. The setup flow does not
+change the package’s signing or notarization status.
+See INSTALL.md for details and Release-Status.plist for this package’s signing status.

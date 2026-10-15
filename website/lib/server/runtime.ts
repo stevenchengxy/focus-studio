@@ -27,7 +27,7 @@ export async function authenticate(request: Request, browserOnly = false): Promi
   const db = database(); const auth = request.headers.get('authorization');
   if (auth) {
     if (browserOnly || !/^Bearer fs_[a-f0-9]{64}$/.test(auth)) throw new APIError(401, 'sign_in_required', 'Please sign in.');
-    const account = await db.prepare(`SELECT a.* FROM accounts a JOIN device_tokens t ON a.id=t.account_id WHERE t.hash=? AND t.revoked_at IS NULL AND t.expires_at>?`).bind(await sha256(auth.slice(7)), nowSeconds()).first<Account>();
+    const account = await db.prepare(`SELECT a.* FROM accounts a JOIN device_tokens t ON a.id=t.account_id WHERE t.hash=? AND t.purpose='account' AND t.revoked_at IS NULL AND t.expires_at>?`).bind(await sha256(auth.slice(7)), nowSeconds()).first<Account>();
     if (!account) throw new APIError(401, 'device_expired', 'Reconnect this device to your account.');
     return account;
   }
@@ -35,6 +35,11 @@ export async function authenticate(request: Request, browserOnly = false): Promi
   if (webAccount) return webAccount;
   const user = await getChatGPTUser();
   if (!user) throw new APIError(401, 'sign_in_required', 'Sign in to continue.');
+  return upsertChatGPTAccount(user);
+}
+/** Explicit Sites identity path for community pairing; Google cookies cannot override it. */
+export async function upsertChatGPTAccount(user: {userId:string;email:string}): Promise<Account> {
+  const db = database();
   await db.prepare(`INSERT INTO accounts(id,email,created_at) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET email=excluded.email`).bind(user.userId, user.email, nowSeconds()).run();
   return (await db.prepare('SELECT * FROM accounts WHERE id=?').bind(user.userId).first<Account>())!;
 }

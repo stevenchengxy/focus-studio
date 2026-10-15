@@ -96,10 +96,18 @@ final class AppServices {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let services = AppServices.shared
-        Task { await services.model.bootstrap() }
-        services.controlServer.start()
+        let installation = AppInstallationCoordinator.shared
+        launchObserver = installation.$launchState.sink { state in
+            guard state == .ready else { return }
+            let services = AppServices.shared
+            Task { await services.model.bootstrap() }
+            Task { await NativeCommunityConnectionStore.shared.refresh() }
+            services.controlServer.start()
+        }
+        Task { await installation.prepareForLaunch() }
     }
+
+    private var launchObserver: AnyCancellable?
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
@@ -111,17 +119,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// ``terminationGrace`` later, so a cancelled export removes its partial
     /// files from the client's folder instead of leaving them behind.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Do not leave a half-finished rename transaction or stale lock when
+        // Cmd-Q arrives while the installation worker is still active.
+        guard !AppInstallationCoordinator.shared.isWorking else { return .terminateCancel }
         let services = AppServices.shared
+        // A normal Quit request from an updater must never discard a live
+        // recording or interrupt the editor's export. Older releases did not
+        // have this guard, so setup also tells users to finish work first.
+        if services.model.isCaptureLive || services.model.captureEngine.isRecording
+            || services.model.isFinishingRecording || services.model.isExportingFromEditor {
+            services.model.errorMessage = L10n.tr("Finish recording or exporting before quitting Focus Studio.")
+            services.model.isShowingError = true
+            MainWindowPresenter.shared.present(activate: true)
+            return .terminateCancel
+        }
         let pending = services.controlServer.stop() + services.bridge.jobs.cancelRunning()
-        guard !pending.isEmpty else { return .terminateNow }
         terminationReplyPending = true
         // Main-actor tasks keep running while AppKit waits for the reply.
         Task { @MainActor in
             for task in pending { await task.value }
+            await services.model.flushProjectEdits()
             self.replyToTermination(sender)
         }
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(Self.terminationGrace))
+            // The grace limit bounds cancelled AI work, not project saving.
+            await services.model.flushProjectEdits()
             self.replyToTermination(sender)
         }
         return .terminateLater
