@@ -20,9 +20,9 @@
 
 | 验证 | 结果 | 范围 |
 | --- | --- | --- |
-| 网站服务端测试 | 83/83 PASS | 包含社区权限、设备purpose隔离、ChatGPT/Google身份分离、token过期/撤销、浏览器Origin、幂等确认及永久资格 |
+| 网站完整测试 | 83/83 PASS | 包含社区权限、设备purpose隔离、ChatGPT/Google身份分离、token过期/撤销、浏览器Origin、幂等确认及永久资格 |
 | TypeScript | PASS | 最终UI及账户身份显示 |
-| 下载与release路由 | 19/19 PASS | 最新包fallback及受限下载代理 |
+| 下载与release路由再次验证 | 19/19 PASS | 上述完整套件的子集；更新最新版fallback后再次通过 |
 | 普通社区完整Worker HTTP | 71/71 PASS | 直接连接最终构建Worker；包括配对、回连、上传、发布、范围预览、编辑、撤回、删除和确认持久化 |
 | moderation HTTP | 91 checks PASS | 本地构建Worker、合成身份、完整配对与回连；测试内容已删除 |
 | 原生客户端回归 | PASS | 真实app源编译，模拟transport和内存vault验证状态、取消、回连回执与独立凭据 |
@@ -32,10 +32,16 @@
 | Windows/Linux真实Electron及安装包CI | PASS | [run 38701067753](https://github.com/stevenchengxy/focus-studio/actions/runs/38701067753)，提交dc01c894；此后提交未改变desktop源 |
 | 网页人工观察 | PASS | 未登录只显示ChatGPT入口；本地模拟已登录但未确认时显示连接步骤，隐藏上传表单；刷新仍维持正确门禁 |
 
-页面截图：`.artifacts/installation-validation/community-client-required-zh.png`。界面验证使用本地预览及模拟身份，没有创建生产帖子，也没有操作用户的真实ChatGPT登录。
+本地门禁截图：`.artifacts/installation-validation/community-client-required-zh.png`。界面验证使用本地预览及模拟身份，没有创建生产帖子，也没有操作用户的真实ChatGPT登录。
 
 ## 验证边界
 
 最初通过本地Wrangler ProxyWorker的串行脚本遇到503或超时。诊断发现代理层对非根路径异常错误比较href，误报“worker restarted mid-request”；GET进入等待队列导致挂起。绕过该代理直连最终构建Worker后，同一原脚本、同一全部断言71/71通过，无重试、无应用源码或依赖修改。原始失败与独立socket诊断日志仍保留（`community-http.log`、`community-http-native.log`）；成功日志为 `.artifacts/installation-validation/community-http-direct-worker.log`。临时身份、草稿及配对均为本地测试，测试内容已删除，运行器已关闭。
 
 没有替换用户当前正在运行的旧版，也没有完成真实账户的浏览器登录到各平台客户端回连的人工验收。Mac包本地签名，未经过Apple公证。最终安装验证见同目录 `2026-10-15-installation-1.14.6.md`。
+
+## 线上发布
+
+2026-10-15 16:17（北京时间），[官网](https://focus-studio.stevenchengxy19.chatgpt.site) Sites v15 发布成功，新增迁移随发布应用。配套 [v1.14.6-preview.1 安装包](https://github.com/stevenchengxy/focus-studio/releases/tag/v1.14.6-preview.1) 已公开（Mac 1.14.6，Windows/Linux 0.1.3）。
+
+线上检查7项通过：匿名身份无发布资格、伪造身份请求头被边缘层拒绝、公开社区浏览200、匿名创建上传被401拒绝、三平台下载入口均指向新资源。浏览器已实际观察公开发布页的ChatGPT登录入口和一次客户端确认说明，截图 `.artifacts/installation-validation/community-production-zh.jpg`。未使用真实用户登录或创建生产帖子。

@@ -1,6 +1,6 @@
 # 1.14.6（build 68）· 首次安装与旧版替换验证
 
-本次针对网页下载后从 `AppTranslocation` 临时目录运行，以及新旧副本同时存在造成冲突的问题，补充首次安装引导、旧安装归并和安装后的应用切换。安装专项、切换协调、翻译、应用回归及最终 Universal 2 打包检查已通过；最终候选的中文首次启动界面已观察。新版尚未发布，干净 Mac 上的完整安装链路仍待验收。
+本次针对网页下载后从 `AppTranslocation` 临时目录运行，以及新旧副本同时存在造成冲突的问题，补充首次安装引导、旧安装归并和安装后的应用切换。安装专项、切换协调、翻译、应用回归及最终 Universal 2 打包检查已通过；最终候选的中文首次启动界面已观察。新版已发布为 `v1.14.6-preview.1`，官网已部署 Sites v15；干净 Mac 上的完整安装链路仍待验收。
 
 ## 代码与行为
 
@@ -11,7 +11,7 @@
 - `AppInstallationHandoff.swift` 协调其它副本正常退出，并等待退出结果；拒绝退出、超时、取消或等待期间出现新副本时停止安装。文件替换前再次检查运行状态，不强制结束用户进程。启动目标后验证其实际路径，再退出下载副本。
 - 启动准备只适用于用户主动执行安装时、与 `Bundle.main.bundleURL` 相同的当前运行源。安装器在暂存副本通过签名及内容校验后，移除该副本范围内的 `com.apple.quarantine`；不遍历符号链接，不改原始下载、不改链接目标，不更改 Gatekeeper 全局设置。默认安装器和外部 CLI 来源不执行此处理。同版同内容的暂存重装用于修复已复制但仍保留隔离标记的目标；不能以此绕过版本或内容冲突检查。
 - 处理器架构改用 Foundation 的 `Bundle.executableArchitectures` 检查，安装时不再调用依赖开发工具的 `lipo`。发布构建本身仍可使用开发工具。
-- DMG/ZIP 增加 `INSTALL-FIRST.txt`，安装文档及网站帮助同步说明新流程、备份和失败恢复。网站下载链接及 release feed 尚未切到 1.14.6。
+- DMG/ZIP 增加 `INSTALL-FIRST.txt`，安装文档及网站帮助同步说明新流程、备份和失败恢复。网站下载链接及 release feed 已切到 1.14.6，配套 Windows/Linux 版本为 0.1.3。
 
 ## 已完成检查
 
@@ -45,7 +45,7 @@
 | DMG/ZIP 最终路径、大小、SHA-256 | 见下表；校验文件在 `dist/releases/Focus-Studio-1.14.6-universal-local.sha256` |
 | DMG 完整性、ZIP 解包后的 app 验证、`INSTALL-FIRST.txt` | **PASS**；`hdiutil verify` 为 VALID，解包后重新通过完整 app 检查，说明文件已包含 |
 | 最终 app 的安装器只读检查 | **PASS**；`scripts/install-app.sh "$PWD/dist/Focus Studio.app" --check` 验证真实签名与 Foundation 架构读取，日志 `real-bundle-check.log`；未安装、未停止应用 |
-| GitHub release / 官网下载切换 | **未执行** |
+| GitHub release / 官网下载切换 | **PASS**；`v1.14.6-preview.1` 已公开，4 个安装包和 SHA256SUMS 已验证；官网 v15 发布成功，3 个下载入口均解析到新版本 |
 
 | 文件（均位于 `dist/releases/`） | 字节数 | SHA-256 |
 | --- | ---: | --- |
@@ -58,4 +58,10 @@
 
 本次没有在干净 Mac/新用户环境里，从真实网页下载最终 DMG/ZIP，再完成 Gatekeeper 首次启动、安装替换、旧版退出、canonical 路径重启和录屏权限检查。隔离标记专项验证的是临时文件的处理边界；中文截图验证的是界面；进程替身验证的是协调逻辑，三者不能合并宣称这条完整链路已验收。
 
-尚待独立验收的场景包括：干净 Mac 首装、真实浏览器下载的 AppTranslocation 启动、实际旧版运行及拒绝退出、多个真实安装副本、安装后重启路径与用户数据读取、Gatekeeper 行为、Intel 实机。网站帮助仅更新了源文件，尚未作为网站部署或新版下载已上线的证据。
+尚待独立验收的场景包括：干净 Mac 首装、真实浏览器下载的 AppTranslocation 启动、实际旧版运行及拒绝退出、多个真实安装副本、安装后重启路径与用户数据读取、Gatekeeper 行为、Intel 实机。网站帮助已随 v15 上线；上线后的匿名浏览、发布拦截、伪造身份请求头拒绝及三平台下载入口已验证。
+
+## 发布记录
+
+- [预览版本 v1.14.6-preview.1](https://github.com/stevenchengxy/focus-studio/releases/tag/v1.14.6-preview.1)，标签固定源码 `f45b425a9a6777c6a2255f65dac0e9a5dc3838d8`。公开资源的服务端 SHA-256 与本地产物一致。
+- [官网](https://focus-studio.stevenchengxy19.chatgpt.site)：Sites v15，源提交 `1641e54b2862ba6cf5fa6085bd7a3b5c2a167a19`，2026-10-15 16:17（北京时间）部署成功，原 public 访问范围保持不变。
+- 线上检查记录：`.artifacts/installation-validation/production-smoke.json`；发布日志：`publish-installers.log`。已在实际公开页面观察到“使用 ChatGPT 登录”及客户端确认说明，截图 `community-production-zh.jpg`。
