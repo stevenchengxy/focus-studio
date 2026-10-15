@@ -2,7 +2,7 @@ export type InstallerPlatform = 'mac' | 'windows' | 'linux';
 
 // Verified release assets. Never fall back to GitHub's source-code archives.
 export const INSTALLERS = {
-  mac: { label: 'macOS', format: 'DMG', suffix: '.dmg', mime: 'application/x-apple-diskimage', url: 'https://github.com/stevenchengxy/focus-studio/releases/download/v1.14.7-preview.1/Focus-Studio-1.14.7-universal-local.dmg' },
+  mac: { label: 'macOS', format: 'DMG', suffix: '.dmg', mime: 'application/x-apple-diskimage', url: 'https://github.com/stevenchengxy/focus-studio/releases/download/v1.14.6-preview.1/Focus-Studio-1.14.6-universal-local.dmg' },
   windows: { label: 'Windows', format: 'EXE installer', suffix: '.exe', mime: 'application/vnd.microsoft.portable-executable', url: 'https://github.com/stevenchengxy/focus-studio/releases/download/v1.14.6-preview.1/Focus-Studio-Desktop-0.1.3-windows-x64.exe' },
   linux: { label: 'Linux', format: 'AppImage', suffix: '.AppImage', mime: 'application/octet-stream', url: 'https://github.com/stevenchengxy/focus-studio/releases/download/v1.14.6-preview.1/Focus-Studio-Desktop-0.1.3-linux-x86_64.AppImage' },
 } as const;
