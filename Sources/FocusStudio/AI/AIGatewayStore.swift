@@ -1,6 +1,10 @@
 import Combine
+import CoreFoundation
 import Foundation
 import Security
+#if canImport(FocusStudioAutomation)
+import FocusStudioAutomation
+#endif
 
 /// Secret storage. The app keeps keys in a 0600 file under Application Support
 /// (see `FileSecretStore`); tests keep values in memory. `SecurityKeychainStore`
@@ -190,20 +194,27 @@ struct AIGatewayPreferences: Codable, Equatable {
     /// a cheaper model when the selected one is unavailable.
     var preferredVideoModelID = AIGatewayStore.recommendedVideoModelID
     var preferredImageModelID = AIGatewayStore.recommendedImageModelID
+    var preferredSpeechProvider: SpeechProviderKind = .minimax
+    var speechProviders: [AISpeechProviderConfiguration] = []
 
     private enum CodingKeys: String, CodingKey {
         case providers, defaultTextModel, preferredVideoProvider, preferredVideoModelID, preferredImageModelID
+        case preferredSpeechProvider, speechProviders
     }
 
     init(providers: [AIProviderConfiguration] = [], defaultTextModel: AITextModelSelection? = nil,
          preferredVideoProvider: AIVideoProvider = .ark,
          preferredVideoModelID: String = AIGatewayStore.recommendedVideoModelID,
-         preferredImageModelID: String = AIGatewayStore.recommendedImageModelID) {
+         preferredImageModelID: String = AIGatewayStore.recommendedImageModelID,
+         preferredSpeechProvider: SpeechProviderKind = .minimax,
+         speechProviders: [AISpeechProviderConfiguration] = []) {
         self.providers = providers
         self.defaultTextModel = defaultTextModel
         self.preferredVideoProvider = preferredVideoProvider
         self.preferredVideoModelID = preferredVideoModelID
         self.preferredImageModelID = preferredImageModelID
+        self.preferredSpeechProvider = preferredSpeechProvider
+        self.speechProviders = speechProviders
     }
 
     /// Older installations have no media preferences. Preserve their provider
@@ -217,6 +228,8 @@ struct AIGatewayPreferences: Codable, Equatable {
             ?? AIGatewayStore.recommendedVideoModelID
         preferredImageModelID = try container.decodeIfPresent(String.self, forKey: .preferredImageModelID)
             ?? AIGatewayStore.recommendedImageModelID
+        preferredSpeechProvider = try container.decodeIfPresent(SpeechProviderKind.self, forKey: .preferredSpeechProvider) ?? .minimax
+        speechProviders = try container.decodeIfPresent([AISpeechProviderConfiguration].self, forKey: .speechProviders) ?? []
     }
 }
 
@@ -270,6 +283,16 @@ final class AIGatewayStore: ObservableObject {
     @Published var preferredImageModelID: String {
         didSet { persist() }
     }
+    @Published var preferredSpeechProvider: SpeechProviderKind {
+        didSet { persist() }
+    }
+    @Published private(set) var speechProviders: [AISpeechProviderConfiguration] {
+        didSet { persist() }
+    }
+    @Published private(set) var speechProvidersWithKeys: Set<SpeechProviderKind> = []
+    @Published private(set) var testingSpeechProviders: Set<SpeechProviderKind> = []
+    private var speechConfigurationRevisions: [SpeechProviderKind: Int] = [:]
+
     /// Persisted separately under `assistant.brain`; read by the assistant on every send.
     @Published var assistantBrain: AssistantBrain {
         didSet { defaults.set(assistantBrain.rawValue, forKey: AssistantBrain.defaultsKey) }
@@ -293,6 +316,10 @@ final class AIGatewayStore: ObservableObject {
         preferredVideoProvider = saved.preferredVideoProvider
         preferredVideoModelID = saved.preferredVideoModelID
         preferredImageModelID = saved.preferredImageModelID
+        preferredSpeechProvider = saved.preferredSpeechProvider
+        speechProviders = SpeechProviderKind.allCases.map { kind in
+            saved.speechProviders.first { $0.provider == kind } ?? AISpeechProviderConfiguration(provider: kind)
+        }
         assistantBrain = AssistantBrain(rawValue: defaults.string(forKey: AssistantBrain.defaultsKey) ?? "") ?? .gatewayModel
         refreshKeyPresence()
     }
@@ -521,6 +548,173 @@ final class AIGatewayStore: ObservableObject {
 
     func refreshKeyPresence() {
         providersWithKeys = Set(AIProviderKind.allCases.filter { keychain.contains(account: $0.rawValue) })
+        speechProvidersWithKeys = Set(SpeechProviderKind.allCases.filter { keychain.contains(account: Self.speechSecretAccount($0)) })
+    }
+
+    // MARK: - AI narration
+
+    func speechConfiguration(for provider: SpeechProviderKind) -> AISpeechProviderConfiguration {
+        speechProviders.first { $0.provider == provider } ?? AISpeechProviderConfiguration(provider: provider)
+    }
+
+    func updateSpeechConfiguration(_ provider: SpeechProviderKind, _ change: (inout AISpeechProviderConfiguration) -> Void) {
+        guard let index = speechProviders.firstIndex(where: { $0.provider == provider }) else { return }
+        var value = speechProviders[index]
+        change(&value)
+        guard value != speechProviders[index] else { return }
+        value.lastTestState = .notTested
+        value.lastTestedAt = nil
+        value.lastTestSummary = nil
+        value.cachedVoiceIDs = []
+        speechConfigurationRevisions[provider, default: 0] += 1
+        speechProviders[index] = value
+    }
+
+    nonisolated private static func speechSecretAccount(_ provider: SpeechProviderKind) -> String {
+        "speech.\(provider.rawValue)"
+    }
+
+    func setSpeechAPIKey(_ key: String, for provider: SpeechProviderKind) throws {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
+            throw AIGatewayError.invalidResponse("The narration API key contains invalid characters.")
+        }
+        let account = Self.speechSecretAccount(provider)
+        if trimmed.isEmpty {
+            try keychain.delete(account: account)
+            speechProvidersWithKeys.remove(provider)
+        } else {
+            try keychain.write(trimmed, account: account)
+            speechProvidersWithKeys.insert(provider)
+        }
+        speechConfigurationRevisions[provider, default: 0] += 1
+        if let index = speechProviders.firstIndex(where: { $0.provider == provider }) {
+            speechProviders[index].lastTestState = .notTested
+            speechProviders[index].lastTestedAt = nil
+            speechProviders[index].lastTestSummary = nil
+            speechProviders[index].cachedVoiceIDs = []
+        }
+    }
+
+    /// No fall-through to text-provider credentials: switching voice services
+    /// must never send an unrelated key to a different endpoint.
+    func resolvedSpeechAPIKey(provider: SpeechProviderKind) throws -> String {
+        let key = try keychain.read(account: Self.speechSecretAccount(provider)) ?? ""
+        guard !key.isEmpty || provider == .openAICompatible else {
+            throw AIGatewayError.invalidResponse("Add a narration API key in AI models → AI narration.")
+        }
+        guard !key.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
+            throw AIGatewayError.invalidResponse("The narration API key contains invalid characters.")
+        }
+        return key
+    }
+
+    func resolvedSpeechConfiguration() throws -> SpeechGenerationConfiguration {
+        try resolvedSpeechConfiguration(provider: preferredSpeechProvider)
+    }
+
+    func resolvedSpeechConfiguration(provider: SpeechProviderKind) throws -> SpeechGenerationConfiguration {
+        let value = speechConfiguration(for: provider)
+        let configuration = SpeechGenerationConfiguration(provider: provider, baseURL: value.effectiveBaseURL,
+                                                           model: value.effectiveModelID, voice: value.effectiveVoiceID)
+        try SpeechGenerationService.validate(configuration: configuration)
+        return configuration
+    }
+
+    var speechModelChoices: [String] {
+        let provider = preferredSpeechProvider
+        let presets: [String]
+        switch provider {
+        case .minimax: presets = [provider.defaultModel]
+        case .openAI: presets = [provider.defaultModel, "tts-1", "tts-1-hd"]
+        case .openAICompatible: presets = [provider.defaultModel]
+        }
+        return Self.uniqueModelIDs([speechConfiguration(for: provider).effectiveModelID] + presets)
+    }
+
+    var speechVoiceChoices: [String] {
+        let provider = preferredSpeechProvider
+        let value = speechConfiguration(for: provider)
+        let presets = provider == .openAI ? ["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse", "marin", "cedar"] : []
+        return Self.uniqueModelIDs([value.effectiveVoiceID, provider.defaultVoice] + value.cachedVoiceIDs + presets)
+    }
+
+    /// Checks credentials with a read-only list. This never synthesizes audio or
+    /// spends generation credit. Unknown compatibility services can validate
+    /// settings without pretending their synthesis endpoint has been tested.
+    func testSpeech(_ provider: SpeechProviderKind) async {
+        guard !testingSpeechProviders.contains(provider) else { return }
+        testingSpeechProviders.insert(provider)
+        defer { testingSpeechProviders.remove(provider) }
+        let revision = speechConfigurationRevisions[provider, default: 0]
+        var resultState: AISpeechConnectionState = .failed
+        var resultSummary = ""
+        var voiceIDs: [String] = []
+        var key = ""
+        do {
+            let configuration = try resolvedSpeechConfiguration(provider: provider)
+            key = try resolvedSpeechAPIKey(provider: provider)
+            let baseURL = URL(string: configuration.baseURL)!
+            var request: URLRequest
+            if provider == .minimax {
+                request = URLRequest(url: baseURL.appendingPathComponent("get_voice"))
+                request.httpMethod = "POST"
+                request.httpBody = try JSONSerialization.data(withJSONObject: ["voice_type": "system"])
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            } else {
+                request = URLRequest(url: baseURL.appendingPathComponent("models"))
+            }
+            request.timeoutInterval = 15
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            if !key.isEmpty { request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization") }
+            let (data, response) = try await session.data(for: request, delegate: AISpeechConnectionRedirectRefuser())
+            guard let http = response as? HTTPURLResponse else {
+                throw AIGatewayError.invalidResponse("The voice service did not return an HTTP response.")
+            }
+            if provider == .openAICompatible, [404, 405, 501].contains(http.statusCode) {
+                resultState = .configurationValid
+                resultSummary = "Settings valid. This service has no model-list check; audio generation has not been tested."
+            } else {
+                guard (200...299).contains(http.statusCode) else {
+                    throw AIGatewayError.httpStatus(http.statusCode, "Voice service rejected the connection check.")
+                }
+                guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    throw AIGatewayError.invalidResponse("The voice service returned an invalid list response.")
+                }
+                if provider == .minimax {
+                    guard let base = object["base_resp"] as? [String: Any], let code = base["status_code"] as? NSNumber,
+                          CFGetTypeID(code) != CFBooleanGetTypeID(), code.doubleValue == 0 else {
+                        throw AIGatewayError.invalidResponse("MiniMax rejected the voice-list check. Verify the key and API region.")
+                    }
+                    let voiceGroups = ["system_voice", "voice_cloning", "voice_generation"]
+                    voiceIDs = voiceGroups.flatMap { (object[$0] as? [[String: Any]]) ?? [] }
+                        .compactMap { $0["voice_id"] as? String }
+                    resultState = .verified
+                    resultSummary = "Key verified. Audio generation has not been tested."
+                } else if object["data"] is [[String: Any]] {
+                    resultState = .verified
+                    resultSummary = key.isEmpty
+                        ? "Service reachable. Audio generation has not been tested."
+                        : "Key verified. Audio generation has not been tested."
+                } else if provider == .openAICompatible {
+                    resultState = .configurationValid
+                    resultSummary = "Settings valid. This service has no compatible model list; audio generation has not been tested."
+                } else {
+                    throw AIGatewayError.invalidResponse("OpenAI did not return a model list.")
+                }
+            }
+        } catch {
+            let message = error.localizedDescription
+            resultSummary = String((key.isEmpty ? message : message.replacingOccurrences(of: key, with: "[redacted]")).prefix(240))
+        }
+        // Ignore an old result if the user edited the endpoint, voice, or key
+        // while its request was in flight.
+        guard revision == speechConfigurationRevisions[provider, default: 0],
+              let index = speechProviders.firstIndex(where: { $0.provider == provider }) else { return }
+        speechProviders[index].lastTestedAt = Date()
+        speechProviders[index].lastTestState = resultState
+        speechProviders[index].lastTestSummary = resultSummary
+        speechProviders[index].cachedVoiceIDs = Self.uniqueModelIDs(voiceIDs.filter { key.isEmpty || !$0.contains(key) })
     }
 
     // MARK: - Clients
@@ -680,7 +874,9 @@ final class AIGatewayStore: ObservableObject {
             providers: providers, defaultTextModel: defaultTextModel,
             preferredVideoProvider: preferredVideoProvider,
             preferredVideoModelID: preferredVideoModelID,
-            preferredImageModelID: preferredImageModelID
+            preferredImageModelID: preferredImageModelID,
+            preferredSpeechProvider: preferredSpeechProvider,
+            speechProviders: speechProviders
         )
         guard let data = try? JSONEncoder().encode(preferences) else { return }
         defaults.set(data, forKey: Self.defaultsKey)
@@ -698,5 +894,15 @@ final class AIGatewayStore: ObservableObject {
         AIProviderKind.allCases.map { kind in
             saved.first { $0.kind == kind } ?? AIProviderConfiguration(kind: kind)
         }
+    }
+}
+
+/// A credential check must not forward its bearer token to a redirected path.
+private final class AISpeechConnectionRedirectRefuser: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
     }
 }

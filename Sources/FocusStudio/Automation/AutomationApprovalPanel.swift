@@ -46,7 +46,7 @@ private final class ApprovalPanelController: NSObject, NSWindowDelegate {
                 allow: { [weak self] in self?.finish(true) },
                 deny: { [weak self] in self?.finish(false) }
             )
-            .preferredColorScheme(.dark)
+            .studioAppearance()
         }
         let hosting = NSHostingView(rootView: prompt)
         panel.contentView = hosting
@@ -117,7 +117,7 @@ struct AutomationApprovalPromptView: View {
             .foregroundStyle(StudioTheme.secondaryText)
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(StudioTheme.inset, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             if request.isRemembered {
                 Text("You can revoke this at any time in Settings › AI tools.")
                     .font(.system(size: 11))

@@ -277,7 +277,7 @@ final class RecordingControlPanelCoordinator: ObservableObject {
             panel.contentView = NSHostingView(
                 rootView: AppLocalizedView {
                     FloatingRecordingControls(model: model, hostDisplayID: hostDisplayID)
-                        .preferredColorScheme(.dark)
+                        .studioAppearance()
                 }
             )
             panel.title = L10n.tr("Recording controls")
@@ -430,7 +430,7 @@ struct FloatingRecordingControls: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(Color(red: 0.065, green: 0.071, blue: 0.105).opacity(0.97))
+                .fill(StudioTheme.panel.opacity(0.97))
                 .overlay(alignment: .topLeading) {
                     RoundedRectangle(cornerRadius: cornerRadius)
                         .fill(LinearGradient(colors: [StudioTheme.purple.opacity(0.14), .clear], startPoint: .topLeading, endPoint: .bottomTrailing))
@@ -438,7 +438,7 @@ struct FloatingRecordingControls: View {
         }
         .overlay {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .stroke(LinearGradient(colors: [StudioTheme.purple.opacity(0.5), Color.white.opacity(0.10)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
+                .stroke(LinearGradient(colors: [StudioTheme.purple.opacity(0.5), StudioTheme.rim], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
         }
         .environment(\.locale, localization.locale)
         .onChange(of: model.destination) { _, _ in discardArmed = false }
@@ -472,7 +472,7 @@ struct FloatingRecordingControls: View {
                         Label(LocalizedStringKey(recordedAudio.description),
                               systemImage: recordedAudio.settings.microphone ? "mic.fill" : "speaker.wave.2.fill")
                             .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(StudioTheme.yellow)
+                            .foregroundStyle(StudioTheme.warning)
                             .lineLimit(1)
                             .accessibilityIdentifier("recording.toolbar.countdownAudio")
                     }
@@ -499,7 +499,7 @@ struct FloatingRecordingControls: View {
             if discardArmed {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(StudioTheme.yellow)
+                    .foregroundStyle(StudioTheme.warning)
                 Text("Discard recording?")
                     .font(.system(size: 11, weight: .semibold))
                     .lineLimit(1)
@@ -563,7 +563,7 @@ struct FloatingRecordingControls: View {
             .font(.system(size: 10, weight: .semibold))
             .lineLimit(1)
             .truncationMode(.tail)
-            .foregroundStyle(Color(red: 0.72, green: 0.65, blue: 1))
+            .foregroundStyle(StudioTheme.purple)
             .help(Text(verbatim: summary))
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Text(verbatim: summary))
@@ -578,7 +578,7 @@ struct FloatingRecordingControls: View {
             if audio.settings.systemAudio { Image(systemName: "speaker.wave.2.fill") }
         }
         .font(.system(size: 10, weight: .semibold))
-        .foregroundStyle(StudioTheme.yellow)
+        .foregroundStyle(StudioTheme.warning)
         .help(LocalizedStringKey(audio.description))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(LocalizedStringKey(audio.description))
@@ -722,7 +722,7 @@ struct FloatingRecordingControls: View {
                         .font(.system(size: 10)).lineLimit(1)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(model.lastScreenshotURL == nil ? StudioTheme.yellow : Color.green)
+                .foregroundStyle(model.lastScreenshotURL == nil ? StudioTheme.warning : Color.green)
             }
             Group {
                 if ready {
@@ -770,9 +770,9 @@ struct FloatingRecordingControls: View {
     }
 
     private var statusColor: Color {
-        if ready, areaNeedsDrawing { return StudioTheme.yellow }
-        if ready || model.destination == .countdown { return Color(red: 0.72, green: 0.65, blue: 1) }
-        return captureEngine.isPaused ? StudioTheme.yellow : StudioTheme.red
+        if ready, areaNeedsDrawing { return StudioTheme.warning }
+        if ready || model.destination == .countdown { return StudioTheme.purple }
+        return captureEngine.isPaused ? StudioTheme.warning : StudioTheme.red
     }
 
     private func icon(for kind: CaptureTargetKind) -> String {
@@ -818,7 +818,7 @@ struct FloatingRecordingControls: View {
             Spacer(minLength: 8)
             settingsMenu
             screenshotButton(iconOnly: true)
-            Rectangle().fill(Color.white.opacity(0.09)).frame(width: 1, height: 22)
+            Rectangle().fill(StudioTheme.controlFill).frame(width: 1, height: 22)
             primaryButton
         }
         .disabled(locked || model.isSelectingArea)
@@ -850,7 +850,7 @@ struct FloatingRecordingControls: View {
             }
         }
         .padding(4)
-        .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .background(StudioTheme.inset, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
     }
 
     private var sourceChip: some View {
@@ -873,7 +873,7 @@ struct FloatingRecordingControls: View {
                     .font(.system(size: 8, weight: .bold)).foregroundStyle(.secondary)
             }
             .padding(.horizontal, 12).frame(height: 38)
-            .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 11))
+            .background(StudioTheme.inset, in: RoundedRectangle(cornerRadius: 11))
         }
         .menuStyle(.borderlessButton).menuIndicator(.hidden)
         .frame(minWidth: 120, maxWidth: 240)
@@ -903,7 +903,7 @@ struct FloatingRecordingControls: View {
             }
             .foregroundStyle(StudioTheme.secondaryText)
             .padding(.horizontal, 10).frame(height: 38)
-            .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 11))
+            .background(StudioTheme.inset, in: RoundedRectangle(cornerRadius: 11))
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
@@ -933,7 +933,7 @@ struct FloatingRecordingControls: View {
             }
             .foregroundStyle(StudioTheme.purple)
             .padding(.horizontal, 11).frame(height: 38)
-            .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 11))
+            .background(StudioTheme.inset, in: RoundedRectangle(cornerRadius: 11))
         }
         .buttonStyle(.plain)
         .disabled(model.areaDrawDisplay(preferring: hostDisplayID) == nil)
@@ -1077,18 +1077,18 @@ private struct FloatingControlButtonStyle: ButtonStyle {
         configuration.label
             .font(.system(size: compact ? 11 : 12, weight: .semibold))
             .lineLimit(1)
-            .foregroundStyle(Color.white.opacity(configuration.isPressed ? 0.72 : 0.96))
+            .foregroundStyle((tint == nil ? StudioTheme.text : Color.white).opacity(configuration.isPressed ? 0.72 : 0.96))
             .padding(.horizontal, compact ? 8 : 12)
             .frame(height: height)
             .background(
-                (tint ?? Color.white.opacity(0.09))
+                (tint ?? StudioTheme.controlFill)
                     .opacity(configuration.isPressed ? 0.68 : 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay {
                 if tint == nil {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        .stroke(StudioTheme.line, lineWidth: 1)
                 }
             }
             .opacity(isEnabled ? 1 : 0.38)

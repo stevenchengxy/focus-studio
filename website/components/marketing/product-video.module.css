@@ -1,0 +1,9 @@
+.stage { position: relative; overflow: hidden; border-radius: 16px; background: #d6d1ec; border: 1px solid #b8aec340; box-shadow: 0 22px 55px -30px #47315655; isolation: isolate; }
+.stage video { display: block; width: 100%; height: auto; aspect-ratio: 16/9; object-fit: contain; }
+.playback { position: absolute; bottom: 16px; right: 16px; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; background: #242326d9; color: #fff; border: 1px solid #ffffff40; transition: background .2s, transform .2s; }
+.playback:hover { background: #242326; transform: scale(1.05); }
+.playback:focus-visible { outline: 3px solid #8665f8; outline-offset: -5px; }
+.compact { border-radius: 12px; box-shadow: none; }
+.compact .playback { width: 30px; height: 30px; bottom: 10px; right: 10px; }
+@media(max-width:600px) { .stage { border-radius: 10px; } .playback { width: 32px; height: 32px; right: 10px; bottom: 10px; } }
+@media(prefers-reduced-motion:reduce) { .playback { transition: none; } }

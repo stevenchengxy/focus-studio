@@ -467,6 +467,23 @@ public struct MCPToolCatalog: Sendable {
             propertyDescriptions: ["track": "A bundled track id or title (listed by get_status), an audio file (an absolute path, or relative to your working directory), or \"none\"."]
         ),
         MCPToolSpec(
+            tool: EditVoiceoverTool(), title: "Edit voiceover", description: EditVoiceoverTool().summary,
+            scope: .project, annotations: MCPToolAnnotations(readOnly: false, destructive: true),
+            propertyDescriptions: ["path": "Local audio file, absolute or relative to your working directory. Copied into the project."]
+        ),
+        MCPToolSpec(
+            tool: SetAudioMixTool(), title: "Set audio mix", description: SetAudioMixTool().summary,
+            scope: .project, annotations: MCPToolAnnotations(readOnly: false, idempotent: true)
+        ),
+        MCPToolSpec(
+            tool: ListSpeechModelsTool(), title: "Speech configuration", description: ListSpeechModelsTool().summary,
+            scope: .global, annotations: .reads
+        ),
+        MCPToolSpec(
+            tool: GenerateVoiceoverTool(), title: "Generate narration", description: GenerateVoiceoverTool().summary,
+            scope: .project, annotations: MCPToolAnnotations(readOnly: false, openWorld: true)
+        ),
+        MCPToolSpec(
             tool: SetSoundEffectsTool(), title: "Set sound effects",
             description: "Turn a project's click sound and zoom whoosh on or off, optionally with volumes from 0 to 1. Focus Studio opens the project in its editor.",
             scope: .project, annotations: MCPToolAnnotations(readOnly: false, idempotent: true)
@@ -479,13 +496,13 @@ public struct MCPToolCatalog: Sendable {
         ),
         MCPToolSpec(
             tool: ExportProjectTool(), title: "Export project",
-            description: "Render a project with its look, zooms, captions and audio to an MP4 and return its absolute path. Requires a signed-in Focus Studio account with an unused free export or active subscription; failures/cancellation do not use the allowance. An existing file is replaced only with overwrite: true, and the project's own recording and media are never written. Optional width (1280, 1920, 2560 or 3840) and frame_rate (24, 30 or 60) apply to this export only. Reports progress; an export still running after about 200 seconds returns a job_id for wait_for_job. Focus Studio opens the project in its editor.",
+            description: "Render a project with its look, zooms, captions and audio to an MP4 and return its absolute path. Rendering and export are free and local; no Focus Studio login, subscription or network authorization is required. Third-party AI generation is separate and may incur provider charges. An existing file is replaced only with overwrite: true, and the project's own recording and media are never written. Optional width (1280, 1920, 2560 or 3840) and frame_rate (24, 30 or 60) apply to this export only. Reports progress; an export still running after about 200 seconds returns a job_id for wait_for_job. Focus Studio opens the project in its editor.",
             scope: .project, annotations: MCPToolAnnotations(readOnly: false, destructive: true),
             propertyDescriptions: ["path": "The .mp4 file or a folder for it: an absolute path, or relative to your working directory. Default: export-<timestamp>.mp4 in the project's assets folder. Not inside the Focus Studio library except the project's ai folder."]
         ),
         MCPToolSpec(
             tool: AssembleVideoTool(), title: "Assemble video",
-            description: "Join video clips in order (for example intro + exported demo + outro) into one 1080p or 720p MP4, with a cut or a 0.5 s crossfade. Requires the same account export allowance as export_project; each clip is scaled and letterboxed to fit and its audio kept. An existing file is replaced only with overwrite: true, and a clip is never overwritten. With project_id the default location is that project's assets folder (the project is not opened). A run still going after about 200 seconds returns a job_id for wait_for_job.",
+            description: "Join video clips in order (for example intro + exported demo + outro) into one 1080p or 720p MP4, with a cut or a 0.5 s crossfade. Composition and export are free and local, without a Focus Studio account or network authorization; each clip is scaled and letterboxed to fit and its audio kept. An existing file is replaced only with overwrite: true, and a clip is never overwritten. With project_id the default location is that project's assets folder (the project is not opened). A run still going after about 200 seconds returns a job_id for wait_for_job.",
             scope: .projectReadOnly, requiresProjectID: false, annotations: MCPToolAnnotations(readOnly: false, destructive: true),
             propertyDescriptions: [
                 "clips": "Video files in playback order: absolute paths, or relative to your working directory.",

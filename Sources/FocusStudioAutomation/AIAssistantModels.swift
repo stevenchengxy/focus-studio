@@ -184,6 +184,13 @@ public struct AIAssistantContext: Sendable {
     /// The in-app video model chosen in Settings or the assistant composer.
     /// External automation keeps its explicit tool argument instead.
     public var preferredVideoModelID: @MainActor @Sendable () -> String? = { nil }
+    /// Narration uses a separate, user-selected gateway. Keys never enter tool arguments.
+    public var speechConfiguration: (@MainActor @Sendable () throws -> SpeechGenerationConfiguration)?
+    public var speechAPIKey: (@MainActor @Sendable (SpeechProviderKind) throws -> String)?
+    /// App-owned approval for the exact script/model before a billable request.
+    public var confirmSpeechGeneration: (@MainActor @Sendable (String) async -> Bool)?
+    /// Test seam; production uses SpeechGenerationService.
+    public var speechGenerate: (@Sendable (SpeechGenerationRequest, String) async throws -> SpeechGenerationResult)?
     /// The projects library root. Exports never write inside it except into
     /// the open project's `ai/` folder. Nil when unknown (unit tests).
     public var projectsDirectory: URL?

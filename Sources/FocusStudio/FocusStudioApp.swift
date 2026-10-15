@@ -19,7 +19,7 @@ struct FocusStudioApp: App {
                 TextCompletionInjector(store: model.aiGateway) {
                     StudioRootView()
                         .environmentObject(model)
-                        .preferredColorScheme(.dark)
+                        .studioAppearance()
                         .frame(minWidth: 1_080, minHeight: 700)
                 }
             }
@@ -27,7 +27,11 @@ struct FocusStudioApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unifiedCompact(showsTitle: false))
         .defaultSize(width: 1_440, height: 900)
-        .commands { AppLanguageCommands() }
+        .commands {
+            AppLanguageCommands()
+            StudioAppearanceCommands()
+            AppUpdateCommands(model: model)
+        }
 
         // The assistant lives in its own window so it can drive the app
         // (record, open projects, edit, export) while the main window changes pages.
@@ -55,7 +59,7 @@ struct StudioRootView: View {
 
     var body: some View {
         ZStack {
-            StudioTheme.window.ignoresSafeArea()
+            StudioTheme.canvas.ignoresSafeArea()
 
             // Each destination is its own identity so SwiftUI cross-fades the
             // pages instead of morphing unrelated controls into each other.
@@ -119,7 +123,12 @@ struct StudioRootView: View {
         }
         .safeAreaInset(edge: .top, spacing: 0) {
             if model.destination == .library || model.destination == .director {
-                InstallationNoticeView(isBusy: model.isInstallationBusy, isBusyNow: { model.isInstallationBusy })
+                VStack(spacing: 0) {
+                    InstallationNoticeView(isBusy: model.isInstallationBusy, isBusyNow: { model.isInstallationBusy })
+                    if model.destination == .library && !model.isInstallationBusy {
+                        AppUpdateNoticeView()
+                    }
+                }
             }
         }
         .animation(reduceMotion ? nil : StudioMotion.pageAnimation, value: model.destination)
@@ -135,8 +144,14 @@ struct StudioRootView: View {
             MainWindowPresenter.shared.openMainWindow = { [openWindow] in openWindow(id: MainWindow.id) }
             AssistantWindow.presenter.openMainWindow = { [openWindow] in openWindow(id: AssistantWindow.id) }
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            // Long-running app sessions still discover releases after the daily
+            // interval. The service coalesces activation and startup checks.
+            Task { await AppUpdateService.shared.checkIfNeeded() }
+        }
         .task {
             await model.bootstrap()
+            Task { await AppUpdateService.shared.checkIfNeeded() }
             // QA hook: FOCUS_STUDIO_OPEN_SETTINGS=1 opens the Settings window on launch.
             if ProcessInfo.processInfo.environment["FOCUS_STUDIO_OPEN_SETTINGS"] == "1" {
                 openSettings()

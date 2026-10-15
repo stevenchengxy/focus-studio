@@ -1,10 +1,15 @@
 import { APIError, nowSeconds, sha256, subscriptionIsActive } from './primitives';
 import type { AppEnv, Account } from './runtime';
+import { PRODUCT_ACCESS } from '../product-access';
+
+export function requireProductPayments() {
+  if (!PRODUCT_ACCESS.paymentsEnabled) throw new APIError(409, 'billing_paused', 'Focus Studio is currently free. Paid plans are paused.');
+}
 
 export interface StripeSubscription { id:string; customer:string; status:string; current_period_end?:number; items:{data:Array<{current_period_end?:number;price:{id:string}}>}; }
 interface StripeList { data: StripeSubscription[]; has_more: boolean }
 export function requireBilling(env: AppEnv) {
-  if (!env.STRIPE_SECRET_KEY || !env.STRIPE_WEBHOOK_SECRET || !env.STRIPE_MONTHLY_PRICE_ID || !env.STRIPE_YEARLY_PRICE_ID) throw new APIError(503, 'billing_not_configured', 'Subscriptions are not open yet. Your free export is available.');
+  if (!env.STRIPE_SECRET_KEY || !env.STRIPE_WEBHOOK_SECRET || !env.STRIPE_MONTHLY_PRICE_ID || !env.STRIPE_YEARLY_PRICE_ID) throw new APIError(503, 'billing_not_configured', 'Subscriptions are not open yet. Focus Studio exports are free.');
   if (![env.STRIPE_MONTHLY_PRICE_ID, env.STRIPE_YEARLY_PRICE_ID].every(id => /^price_[A-Za-z0-9]+$/.test(id))) throw new APIError(503, 'billing_not_configured', 'Subscription prices need to be configured.');
 }
 export async function stripe<T>(env: AppEnv, path: string, body?: URLSearchParams, key?: string): Promise<T> {
@@ -47,6 +52,7 @@ export async function ensureCustomer(db: D1Database, env: AppEnv, account: Accou
   return (await db.prepare('SELECT stripe_customer_id FROM accounts WHERE id=?').bind(account.id).first<{stripe_customer_id:string}>())!.stripe_customer_id;
 }
 export async function createCheckout(db: D1Database, env: AppEnv, account: Account, plan: string, origin: string, now = nowSeconds()) {
+  requireProductPayments();
   requireBilling(env);
   if (!['monthly','yearly'].includes(plan)) throw new APIError(400,'invalid_plan','Choose monthly or yearly billing.');
   const customer = await ensureCustomer(db,env,account);

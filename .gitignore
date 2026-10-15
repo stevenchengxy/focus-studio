@@ -12,3 +12,6 @@ ai-clips/
 __pycache__/
 .venv/
 .claude/settings.local.json
+
+# Local Worker integration-test state
+.wrangler/

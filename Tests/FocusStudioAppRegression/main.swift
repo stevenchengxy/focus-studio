@@ -6,8 +6,11 @@ import SwiftUI
 struct AppRegression {
     @MainActor
     static func main() async throws {
-        try NativeSubscriptionRegression.run()
+        try await NativeSubscriptionRegression.run()
         if CommandLine.arguments.contains("--native-subscription-only") { return }
+        setenv("FOCUS_STUDIO_IMPORT_ARK_ENV", "0", 1)
+        try await VoiceoverRegression.run()
+        if CommandLine.arguments.contains("--voiceover-only") { return }
         // Never touch the real ark.env, secrets.json or the network from a
         // test: the ControlServer and MCP end-to-end fixtures run
         // StudioModel.bootstrap(), which would import an Ark key otherwise.

@@ -131,7 +131,7 @@ struct CodexConnectionSettingsView: View {
                 }
             } else {
                 HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.circle").foregroundStyle(StudioTheme.yellow)
+                    Image(systemName: "exclamationmark.circle").foregroundStyle(StudioTheme.warning)
                     Text("Codex was not found on this Mac.").font(.system(size: 11))
                     Spacer()
                     Link("Install Codex", destination: URL(string: "https://learn.chatgpt.com/docs/codex/cli")!)
@@ -338,7 +338,7 @@ struct CodexConnectionSettingsView: View {
                     .foregroundStyle(StudioTheme.secondaryText).textSelection(.enabled)
             }
             if let error = director.lastErrorMessage {
-                Text(error).font(.system(size: 11)).foregroundStyle(StudioTheme.yellow)
+                Text(error).font(.system(size: 11)).foregroundStyle(StudioTheme.warning)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }

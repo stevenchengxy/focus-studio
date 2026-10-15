@@ -1,0 +1,122 @@
+[
+  {
+    "draft": false,
+    "prerelease": true,
+    "name": "Focus Studio 1.14.2 \u2014 Glass Palette Preview",
+    "published_at": "2026-10-14T00:45:54Z",
+    "html_url": "https://github.com/stevenchengxy/focus-studio/releases/tag/v1.14.2-preview.1",
+    "assets": [
+      {
+        "name": "Focus-Studio-1.14.2-SHA256SUMS.txt",
+        "browser_download_url": "https://github.com/stevenchengxy/focus-studio/releases/download/v1.14.2-preview.1/Focus-Studio-1.14.2-SHA256SUMS.txt",
+        "state": "uploaded",
+        "size": 106
+      },
+      {
+        "name": "Focus-Studio-1.14.2-universal-local.dmg",
+        "browser_download_url": "https://github.com/stevenchengxy/focus-studio/releases/download/v1.14.2-preview.1/Focus-Studio-1.14.2-universal-local.dmg",
+        "state": "uploaded",
+        "size": 72900415
+      }
+    ]
+  },
+  {
+    "draft": false,
+    "prerelease": true,
+    "name": "Focus Studio 1.14.1 \u2014 Light & Dark Preview",
+    "published_at": "2026-10-13T19:08:47Z",
+    "html_url": "https://github.com/stevenchengxy/focus-studio/releases/tag/v1.14.1-preview.1",
+    "assets": [
+      {
+        "name": "Focus-Studio-1.14.1-SHA256SUMS.txt",
+        "browser_download_url": "https://github.com/stevenchengxy/focus-studio/releases/download/v1.14.1-preview.1/Focus-Studio-1.14.1-SHA256SUMS.txt",
+        "state": "uploaded",
+        "size": 212
+      },
+      {
+        "name": "Focus-Studio-1.14.1-universal-local.dmg",
+        "browser_download_url": "https://github.com/stevenchengxy/focus-studio/releases/download/v1.14.1-preview.1/Focus-Studio-1.14.1-universal-local.dmg",
+        "state": "uploaded",
+        "size": 72824254
+      },
+      {
+        "name": "Focus-Studio-1.14.1-universal-local.zip",
+        "browser_download_url": "https://github.com/stevenchengxy/focus-studio/releases/download/v1.14.1-preview.1/Focus-Studio-1.14.1-universal-local.zip",
+        "state": "uploaded",
+        "size": 69141667
+      }
+    ]
+  },
+  {
+    "draft": false,
+    "prerelease": true,
+    "name": "Focus Studio 1.14.0 Preview \u2014 narration + desktop companions",
+    "published_at": "2026-10-13T18:11:54Z",
+    "html_url": "https://github.com/stevenchengxy/focus-studio/releases/tag/v1.14.0-preview.1",
+    "assets": [
+      {
+        "name": "Focus-Studio-1.14.0-universal-local.dmg",
+        "browser_download_url": "https://github.com/stevenchengxy/focus-studio/releases/download/v1.14.0-preview.1/Focus-Studio-1.14.0-universal-local.dmg",
+        "state": "uploaded",
+        "size": 72822070
+      },
+      {
+        "name": "Focus-Studio-1.14.0-universal-local.zip",
+        "browser_download_url": "https://github.com/stevenchengxy/focus-studio/releases/download/v1.14.0-preview.1/Focus-Studio-1.14.0-universal-local.zip",
+        "state": "uploaded",
+        "size": 69078038
+      },
+      {
+        "name": "Focus-Studio-Desktop-0.1.0-linux-amd64.deb",
+        "browser_download_url": "https://github.com/stevenchengxy/focus-studio/releases/download/v1.14.0-preview.1/Focus-Studio-Desktop-0.1.0-linux-amd64.deb",
+        "state": "uploaded",
+        "size": 99395164
+      },
+      {
+        "name": "Focus-Studio-Desktop-0.1.0-linux-x86_64.AppImage",
+        "browser_download_url": "https://github.com/stevenchengxy/focus-studio/releases/download/v1.14.0-preview.1/Focus-Studio-Desktop-0.1.0-linux-x86_64.AppImage",
+        "state": "uploaded",
+        "size": 125203321
+      },
+      {
+        "name": "Focus-Studio-Desktop-0.1.0-windows-x64.exe",
+        "browser_download_url": "https://github.com/stevenchengxy/focus-studio/releases/download/v1.14.0-preview.1/Focus-Studio-Desktop-0.1.0-windows-x64.exe",
+        "state": "uploaded",
+        "size": 111834360
+      },
+      {
+        "name": "SHA256SUMS.txt",
+        "browser_download_url": "https://github.com/stevenchengxy/focus-studio/releases/download/v1.14.0-preview.1/SHA256SUMS.txt",
+        "state": "uploaded",
+        "size": 545
+      }
+    ]
+  },
+  {
+    "draft": false,
+    "prerelease": true,
+    "name": "Focus Studio 1.13.0 Preview 1 (build 61)",
+    "published_at": "2026-10-13T17:17:53Z",
+    "html_url": "https://github.com/stevenchengxy/focus-studio/releases/tag/v1.13.0-preview.1",
+    "assets": [
+      {
+        "name": "Focus-Studio-1.13.0-universal-local.dmg",
+        "browser_download_url": "https://github.com/stevenchengxy/focus-studio/releases/download/v1.13.0-preview.1/Focus-Studio-1.13.0-universal-local.dmg",
+        "state": "uploaded",
+        "size": 72436883
+      },
+      {
+        "name": "Focus-Studio-1.13.0-universal-local.sha256",
+        "browser_download_url": "https://github.com/stevenchengxy/focus-studio/releases/download/v1.13.0-preview.1/Focus-Studio-1.13.0-universal-local.sha256",
+        "state": "uploaded",
+        "size": 212
+      },
+      {
+        "name": "Focus-Studio-1.13.0-universal-local.zip",
+        "browser_download_url": "https://github.com/stevenchengxy/focus-studio/releases/download/v1.13.0-preview.1/Focus-Studio-1.13.0-universal-local.zip",
+        "state": "uploaded",
+        "size": 68703004
+      }
+    ]
+  }
+]

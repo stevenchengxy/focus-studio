@@ -671,6 +671,26 @@ private func remapMetadata(_ original: RecordingProject, through spans: [TimeSpa
         }
         return pieces
     }.sorted { $0.start < $1.start }
+    if var audio = result.settings.productDemoAudio, let voices = audio.voiceovers {
+        // A split adds handles but removes no picture: do not introduce a
+        // narration split or a de-click dip at a continuous video boundary.
+        var voiceSpans: [TimeSpan] = []
+        for span in spans {
+            if let previous = voiceSpans.last,
+               abs(previous.oldEnd - span.oldStart) < 0.000_001,
+               abs(previous.newEnd - span.newStart) < 0.000_001 {
+                voiceSpans[voiceSpans.count - 1] = TimeSpan(oldStart: previous.oldStart,
+                    oldEnd: span.oldEnd, newStart: previous.newStart)
+            } else { voiceSpans.append(span) }
+        }
+        audio.voiceovers = voices.flatMap { voice in
+            voiceSpans.enumerated().compactMap { index, span in
+                voice.excerpt(keeping: .init(start: span.oldStart, end: span.oldEnd),
+                              movedTo: span.newStart, newID: index > 0)
+            }
+        }
+        result.settings.productDemoAudio = audio
+    }
     result.chapters = original.chapters.map { chapters in
         chapters.flatMap { chapter -> [DemoChapter] in
             var pieces: [DemoChapter] = []

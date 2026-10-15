@@ -102,9 +102,9 @@ final class StudioModel: ObservableObject {
     let codexAssistant = CodexDirectorService()
     /// LLM provider keys and the default text model for every AI feature.
     let aiGateway = AIGatewayStore()
-    /// Recording and editing remain local; successful exports use this account gate.
+    /// Retains legacy account credentials and export recovery; product exports are free and local.
     let subscription = NativeSubscriptionStore()
-    private let exportAuthorizationProvider: any ExportAuthorizing
+    private let exportAuthorizationProvider: (any ExportAuthorizing)?
     /// The one assistant conversation for the whole app, created on first use.
     /// Its context follows whatever project is open; see ``AIAssistantContext``.
     private(set) lazy var assistantSession: AIAssistantSession = makeAssistantSession()
@@ -210,7 +210,7 @@ final class StudioModel: ObservableObject {
         self.inputMonitoringAccess = inputMonitoringAccess
         self.screenCaptureAccess = screenCaptureAccess
         self.finishCapture = finishCapture
-        self.exportAuthorizationProvider = exportAuthorization ?? subscription.client
+        self.exportAuthorizationProvider = exportAuthorization ?? (ProductAccessPolicy.requiresExportAccount ? subscription.client : nil)
         refreshInteractionTrackingPermission()
         // A capture can fail by itself (the stream stops, the window closes):
         // its attempt then ends as failed, without waiting for Finish or Cancel,
@@ -410,6 +410,17 @@ final class StudioModel: ObservableObject {
             app: self
         )
         context.exportAuthorization = exportAuthorizationProvider
+        context.speechConfiguration = { [weak self] in
+            guard let self else { throw AIToolError.noProject }
+            return try self.aiGateway.resolvedSpeechConfiguration()
+        }
+        context.speechAPIKey = { [weak self] provider in
+            guard let self else { throw AIToolError.noProject }
+            return try self.aiGateway.resolvedSpeechAPIKey(provider: provider)
+        }
+        context.confirmSpeechGeneration = { summary in
+            await SpeechGenerationConsent.ask(summary: summary)
+        }
         context.preferredVideoModelID = { [weak self] in self?.aiGateway.preferredVideoModelID }
         context.geminiVideoAPIKey = { [weak self] in
             guard let self, self.aiGateway.configuration(for: .googleGemini).isEnabled else { return nil }
@@ -1924,6 +1935,26 @@ final class StudioModel: ObservableObject {
             destination = .director
             show(error)
         }
+    }
+
+    func chooseVoiceover(for project: RecordingProject) async -> VoiceoverClip? {
+        let panel = NSOpenPanel()
+        panel.title = L10n.tr("Import voiceover")
+        panel.allowedContentTypes = [.audio]; panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        do { return try await store.importVoiceover(from: url, for: project) }
+        catch { show(error); return nil }
+    }
+
+    func importVoiceover(from url: URL, projectID: UUID) async throws -> VoiceoverClip {
+        if let blocker = automationBlocker { throw blocker.failure }
+        guard let project = project(id: projectID) else { throw ProjectStore.StoreError.projectNotFound }
+        return try await store.importVoiceover(from: url, for: project)
+    }
+
+    func discardImportedVoiceovers(_ clips: [VoiceoverClip], projectID: UUID) async {
+        guard let project = project(id: projectID) else { return }
+        await store.discardImportedVoiceovers(clips, for: project)
     }
 
     func importBackgroundMusic(for project: RecordingProject) async -> String? {

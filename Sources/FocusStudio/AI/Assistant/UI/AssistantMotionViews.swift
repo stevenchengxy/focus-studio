@@ -6,7 +6,7 @@ import SwiftUI
 
 // MARK: - Typing indicator
 
-/// Three dots that bob while the model works (fade only under Reduce Motion).
+/// Activity stays local to the response in progress; Reduce Motion is static.
 struct TypingIndicatorView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var animating = false
@@ -17,17 +17,17 @@ struct TypingIndicatorView: View {
                 Circle()
                     .fill(StudioTheme.purple)
                     .frame(width: 6, height: 6)
-                    .offset(y: animating && !reduceMotion ? -3 : 0)
-                    .opacity(animating ? 1 : 0.4)
+                    .opacity(reduceMotion ? 0.65 : (animating ? 0.9 : 0.3))
                     .animation(
-                        .easeInOut(duration: 0.42).repeatForever(autoreverses: true).delay(Double(index) * 0.14),
+                        reduceMotion ? nil : .easeInOut(duration: 0.65).repeatForever(autoreverses: true).delay(Double(index) * 0.16),
                         value: animating
                     )
             }
         }
         .padding(.horizontal, 2)
         .frame(height: 12)
-        .onAppear { animating = true }
+        .onAppear { animating = !reduceMotion }
+        .onChange(of: reduceMotion) { _, reduced in animating = !reduced }
         .accessibilityLabel(Text("Thinking…"))
     }
 }
@@ -47,7 +47,7 @@ struct AudioLevelMeterView: View {
             ForEach(0..<Self.weights.count, id: \.self) { index in
                 let drive = min(1, max(0, level * Self.weights[index] * 1.4))
                 RoundedRectangle(cornerRadius: 1, style: .continuous)
-                    .fill(drive > 0.08 ? tint : Color.white.opacity(0.2))
+                    .fill(drive > 0.08 ? tint : StudioTheme.secondaryText.opacity(0.35))
                     .frame(width: 3, height: 3 + 10 * drive)
             }
         }
@@ -59,8 +59,7 @@ struct AudioLevelMeterView: View {
 
 // MARK: - Microphone button
 
-/// Mic toggle: a red fill with a rippling ring while recording, a spinner
-/// while permissions and the audio engine start.
+/// Recording uses a steady red stop control; the nearby meter shows real audio.
 struct MicrophoneButton: View {
     var isRecording: Bool
     var isPreparing: Bool
@@ -69,9 +68,6 @@ struct MicrophoneButton: View {
     var body: some View {
         Button(action: action) {
             ZStack {
-                if isRecording {
-                    RecordingRipple()
-                }
                 if isPreparing {
                     ProgressView()
                         .controlSize(.mini)
@@ -81,45 +77,20 @@ struct MicrophoneButton: View {
                         .foregroundStyle(isRecording ? Color.white : StudioTheme.text)
                 }
             }
-            .frame(width: 32, height: 30)
-            .background(isRecording ? StudioTheme.red : Color.white.opacity(0.055))
+            .frame(width: 20, height: 30)
+            .padding(.horizontal, 5)
+            .background(isRecording ? StudioTheme.red : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(isRecording ? StudioTheme.red.opacity(0.7) : StudioTheme.line, lineWidth: 1)
-            )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
 }
 
-private struct RecordingRipple: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var expanded = false
-
-    var body: some View {
-        Circle()
-            .stroke(StudioTheme.red, lineWidth: 2)
-            .frame(width: 22, height: 22)
-            .scaleEffect(expanded && !reduceMotion ? 1.6 : 1)
-            .opacity(expanded ? 0 : 0.75)
-            .animation(
-                reduceMotion ? nil : .easeOut(duration: 1.1).repeatForever(autoreverses: false),
-                value: expanded
-            )
-            .onAppear {
-                guard !reduceMotion else { return }
-                expanded = true
-            }
-            .allowsHitTesting(false)
-    }
-}
-
 // MARK: - Staggered appearance
 
 /// Fades and lifts a view in after a delay proportional to its index, so a
-/// row of chips appears one after another. Opacity only under Reduce Motion.
+/// row of chips appears once. Immediate presentation under Reduce Motion.
 struct StaggeredAppearModifier: ViewModifier {
     let index: Int
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -130,7 +101,7 @@ struct StaggeredAppearModifier: ViewModifier {
             .opacity(visible ? 1 : 0)
             .offset(y: visible || reduceMotion ? 0 : 6)
             .onAppear {
-                withAnimation(reduceMotion ? StudioMotion.fade : StudioMotion.selection.delay(Double(index) * 0.06)) {
+                withAnimation(reduceMotion ? nil : StudioMotion.fade.delay(Double(index) * 0.04)) {
                     visible = true
                 }
             }
@@ -143,31 +114,88 @@ extension View {
     }
 }
 
-// MARK: - Pulsing border
+// MARK: - Confirmation arrival
 
-/// A slow breathing stroke used to draw attention to the confirmation card.
-struct PulsingBorderModifier: ViewModifier {
+/// A single border fade draws attention when approval becomes available.
+/// The card then stays still while the user reads its scope and price.
+struct ConfirmationHighlightModifier: ViewModifier {
     var color: Color
     var cornerRadius: CGFloat
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var bright = false
+    @State private var settled = false
 
     func body(content: Content) -> some View {
         content
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(color.opacity(reduceMotion ? 0.6 : (bright ? 0.95 : 0.4)), lineWidth: 1)
+                    .stroke(color.opacity(reduceMotion || settled ? 0.45 : 0.85), lineWidth: 1)
             )
             .onAppear {
-                guard !reduceMotion else { return }
-                withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) { bright = true }
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.8)) { settled = true }
             }
     }
 }
 
 extension View {
-    func pulsingBorder(_ color: Color, cornerRadius: CGFloat) -> some View {
-        modifier(PulsingBorderModifier(color: color, cornerRadius: cornerRadius))
+    func confirmationHighlight(_ color: Color, cornerRadius: CGFloat) -> some View {
+        modifier(ConfirmationHighlightModifier(color: color, cornerRadius: cornerRadius))
+    }
+}
+
+// MARK: - Direct interaction feedback
+
+struct AssistantControlButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var hovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .frame(minWidth: 20, minHeight: 30)
+            .padding(.horizontal, 5)
+            .background(configuration.isPressed ? StudioTheme.controlPressed
+                        : (hovering && isEnabled ? StudioTheme.controlFill : Color.clear),
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .opacity(isEnabled ? 1 : 0.45)
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+            .onHover { hovering = $0 }
+            .animation(reduceMotion ? nil : StudioMotion.hover, value: hovering)
+            .animation(reduceMotion ? nil : StudioMotion.press, value: configuration.isPressed)
+    }
+}
+
+struct AssistantActionButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var hovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(hovering && isEnabled ? StudioTheme.controlFill : StudioTheme.panelRaised,
+                        in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .stroke(hovering && isEnabled ? StudioTheme.purple.opacity(0.35) : StudioTheme.line, lineWidth: 1)
+            }
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
+            .opacity(isEnabled ? 1 : 0.45)
+            .contentShape(RoundedRectangle(cornerRadius: 11))
+            .onHover { hovering = $0 }
+            .animation(reduceMotion ? nil : StudioMotion.hover, value: hovering)
+            .animation(reduceMotion ? nil : StudioMotion.press, value: configuration.isPressed)
+    }
+}
+
+struct AssistantSendButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.9 : 1)
+            .opacity(configuration.isPressed ? 0.8 : 1)
+            .animation(reduceMotion ? nil : StudioMotion.press, value: configuration.isPressed)
     }
 }
 
@@ -186,7 +214,7 @@ struct IconToggleStyle: ToggleStyle {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(configuration.isOn ? Color.white : StudioTheme.text)
                 .frame(width: 32, height: 30)
-                .background(configuration.isOn ? StudioTheme.purple : Color.white.opacity(0.055))
+                .background(configuration.isOn ? StudioTheme.purple : StudioTheme.controlFill)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -210,7 +238,7 @@ struct SpeechPermissionNotice: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "mic.slash.fill")
-                .foregroundStyle(StudioTheme.yellow)
+                .foregroundStyle(StudioTheme.warning)
             Text(issue.message)
                 .font(.system(size: 12))
                 .fixedSize(horizontal: false, vertical: true)

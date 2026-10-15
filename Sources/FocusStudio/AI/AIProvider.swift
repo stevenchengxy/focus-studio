@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FocusStudioAutomation)
+import FocusStudioAutomation
+#endif
 
 /// The wire protocol a provider speaks. Everything except Anthropic exposes an
 /// OpenAI-style `chat/completions` endpoint.
@@ -252,4 +255,57 @@ struct AIModelInfo: Codable, Hashable, Identifiable, Sendable {
         self.displayName = displayName
         self.ownedBy = ownedBy
     }
+}
+
+/// Narration credentials are independent of text and video credentials. This
+/// payload contains only user-visible preferences; secret accounts use a
+/// separate `speech.` namespace in the production secret store.
+struct AISpeechProviderConfiguration: Codable, Equatable, Identifiable, Sendable {
+    var provider: SpeechProviderKind
+    var baseURLOverride = ""
+    var modelID = ""
+    var voiceID = ""
+    var lastTestState: AISpeechConnectionState = .notTested
+    var lastTestSummary: String?
+    var lastTestedAt: Date?
+    var cachedVoiceIDs: [String] = []
+
+    var id: SpeechProviderKind { provider }
+    var effectiveBaseURL: String {
+        let override = baseURLOverride.trimmingCharacters(in: .whitespacesAndNewlines)
+        var result = override.isEmpty ? provider.defaultBaseURL : override
+        while result.hasSuffix("/") { result.removeLast() }
+        return result
+    }
+    var effectiveModelID: String {
+        let value = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? provider.defaultModel : value
+    }
+    var effectiveVoiceID: String {
+        let value = voiceID.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? provider.defaultVoice : value
+    }
+
+    init(provider: SpeechProviderKind) { self.provider = provider }
+
+    private enum CodingKeys: String, CodingKey {
+        case provider, baseURLOverride, modelID, voiceID, lastTestState
+        case lastTestSummary, lastTestedAt, cachedVoiceIDs
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        provider = try values.decode(SpeechProviderKind.self, forKey: .provider)
+        baseURLOverride = try values.decodeIfPresent(String.self, forKey: .baseURLOverride) ?? ""
+        modelID = try values.decodeIfPresent(String.self, forKey: .modelID) ?? ""
+        voiceID = try values.decodeIfPresent(String.self, forKey: .voiceID) ?? ""
+        lastTestState = try values.decodeIfPresent(AISpeechConnectionState.self, forKey: .lastTestState) ?? .notTested
+        lastTestSummary = try values.decodeIfPresent(String.self, forKey: .lastTestSummary)
+        lastTestedAt = try values.decodeIfPresent(Date.self, forKey: .lastTestedAt)
+        cachedVoiceIDs = try values.decodeIfPresent([String].self, forKey: .cachedVoiceIDs) ?? []
+    }
+}
+
+enum AISpeechConnectionState: String, Codable, Sendable {
+    case notTested, configurationValid, verified, failed
 }

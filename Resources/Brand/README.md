@@ -1,9 +1,26 @@
-# Focus Studio application icon
+# Focus Studio brand mark
 
-Created with the built-in Codex ImageGen tool (imagegen skill) on 2026-09-21. Original raster master: `FocusStudioIcon.png` (1254 × 1254, alpha). The violet focus frame and folded play ribbon represent product capture and controlled camera movement. No third-party logo was used.
+`FocusStudioIcon.svg` is the editable vector master. Created on 2026-10-15 from the Focus Studio website's own lavender aperture sculpture (`website/components/marketing/focus-sculpture.tsx` and its CSS). The rounded glass frame, pearl highlights, dark aperture, focus corners, and play gesture connect the app identity to that sculpture. The icon stays upright for a clear silhouette at small sizes; its restrained lower edge supplies depth without perspective distortion.
 
-`scripts/build-icon.sh` preserves the master, resamples macOS icon sizes, and packages `Resources/FocusStudio.icns`. The build embeds both ICNS and PNG in the signed application. Not a vector master or trademark clearance.
+This is an authored SVG, with no embedded bitmap, external font, third-party logo, or generated image. `FocusStudioIcon.png` is the 1024 × 1024 RGBA export with a transparent exterior. The previous raster-only icon remains recoverable in Git history.
 
-## Generation prompt
+## Regenerate
 
-Use case: logo-brand. Asset type: production macOS app icon for Focus Studio, a local screen recording and product demo editor with cinematic cursor-following zoom. Generate ONE finished icon, not a board or mockup. Design an original minimal geometric symbol combining four soft white focus-frame corner brackets and a central luminous play triangle; the play shape can be an elegantly rounded folded ribbon, not busy. Clear bold silhouette recognizable at 32 pixels. Existing product palette is deep purple, violet and subtle periwinkle. Rounded square macOS icon tile with rich violet gradient, restrained soft dimensional bevel, calm precise professional creative-tool feel. Centered straight-on orthographic composition. Tile occupies about 88% of a 1024 x 1024 square image, genuinely transparent alpha outside the rounded square, no checkerboard baked in. Keep very generous clean breathing room inside tile. No letters, words, numbers, watermark, photographic background, extra UI, border outside tile, or recognizable competing brand logos. Deliver a polished sharp 1024x1024 PNG app icon with alpha.
+With the website dependencies installed, run from the repository root:
+
+```sh
+node scripts/generate-brand-assets.cjs
+zsh scripts/build-icon.sh
+```
+
+The export script uses Sharp's SVG renderer and synchronizes these files:
+
+- `Resources/Brand/FocusStudioIcon.png` — macOS in-app master, 1024 px.
+- `website/public/icons/focus-studio.svg` and `website/public/favicon.svg` — exact vector copies for browser use.
+- `website/public/icons/focus-studio.png` — 1024 px web image.
+- `website/public/icons/icon-192.png` and `icon-512.png` — PWA install icons.
+- `desktop/build/icon.png` — 512 px Windows/Linux packaging source.
+
+`build-icon.sh` packages all macOS icon sizes into `Resources/FocusStudio.icns`. It only needs the committed PNG and macOS system tools, so ordinary app builds do not depend on Node.js. The app build embeds both ICNS and PNG.
+
+Use the complete mark on light or dark backgrounds. Preserve its transparent exterior and dark aperture; do not add a colored tile or crop away the outer bevel.

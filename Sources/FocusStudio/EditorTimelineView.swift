@@ -75,7 +75,7 @@ struct EditorTimelineView: View {
                             timelineRow(label: "Zoom", icon: "plus.magnifyingglass") {
                     ZStack(alignment: .leading) {
                         RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .fill(Color.white.opacity(0.025))
+                            .fill(StudioTheme.inset)
                             .contentShape(Rectangle())
                             .gesture(
                                 SpatialTapGesture(count: 2).onEnded { value in
@@ -121,7 +121,7 @@ struct EditorTimelineView: View {
                                 guard x >= scrollOffset - 4, x <= scrollOffset + viewportWidth + 4 else { continue }
                                 context.fill(Path(ellipseIn: CGRect(x: x - scrollOffset - 2, y: rowHeight - 9,
                                                                     width: 4, height: 4)),
-                                             with: .color(.white.opacity(0.8)))
+                                             with: .color(StudioTheme.purple.opacity(0.8)))
                             }
                         }
                         .frame(width: viewportWidth, height: rowHeight)
@@ -153,7 +153,7 @@ struct EditorTimelineView: View {
                             timelineRow(label: "Chapters", icon: "captions.bubble") {
                     ZStack(alignment: .leading) {
                         RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .fill(Color.white.opacity(0.025))
+                            .fill(StudioTheme.inset)
                             .contentShape(Rectangle())
                             .gesture(
                                 SpatialTapGesture(count: 2).onEnded { value in
@@ -203,7 +203,7 @@ struct EditorTimelineView: View {
                 }
 
                             timelineRow(label: "Audio", icon: "waveform") {
-                    AudioTrack(settings: project.settings.productDemoAudio)
+                    AudioTrack(settings: project.settings.productDemoAudio, duration: duration)
                         .contentShape(Rectangle())
                         .onTapGesture { selectedTool = .audio }
                 }
@@ -233,7 +233,7 @@ struct EditorTimelineView: View {
                     } else {
                         Label("Video timeline unavailable", systemImage: "exclamationmark.triangle")
                             .font(.system(size: 10))
-                            .foregroundStyle(StudioTheme.yellow)
+                            .foregroundStyle(StudioTheme.warning)
                     }
                             }
                         }
@@ -393,7 +393,7 @@ struct EditorTimelineView: View {
             fixedLaneLabel("Video", icon: "film", tool: .video, height: videoRowHeight) {
                 EditorPlaybackTimeReader(clock: playbackClock) { time in
                     Button(action: splitAtPlayhead) { Image(systemName: "scissors") }
-                        .foregroundStyle(StudioTheme.yellow)
+                        .foregroundStyle(StudioTheme.warning)
                         .disabled(isVideoEditing || !placements.contains {
                             time > $0.start + 0.1 && time < $0.end - 0.1
                         })
@@ -565,7 +565,7 @@ struct EditorTimelineView: View {
             .frame(height: height - 6)
             .overlay {
                 RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(active ? Color.white.opacity(0.12) : .clear, lineWidth: 1)
+                    .strokeBorder(active ? StudioTheme.line : .clear, lineWidth: 1)
                     .allowsHitTesting(false)
             }
         .padding(.vertical, 3)
@@ -577,19 +577,21 @@ struct EditorTimelineView: View {
 
 private struct AudioTrack: View {
     let settings: ProductDemoAudioSettings?
+    let duration: Double
 
     var body: some View {
         let hasMusic = settings?.backgroundMusicPath != nil
         let hasEffects = settings?.clickSoundEnabled == true
             || settings?.zoomTransitionSoundEnabled == true
-        let hasEnhancements = hasMusic || hasEffects
+        let voices = settings?.voiceovers ?? []
+        let hasEnhancements = hasMusic || hasEffects || !voices.isEmpty
         RoundedRectangle(cornerRadius: 6, style: .continuous)
-            .fill(hasEnhancements ? Color.cyan.opacity(0.46) : Color.white.opacity(0.025))
+            .fill(hasEnhancements ? StudioTheme.cyanTrack : StudioTheme.inset)
             .overlay(alignment: .leading) {
                 HStack(spacing: 6) {
                     Image(systemName: hasMusic ? "music.note" : (hasEffects ? "waveform" : "plus.circle"))
                     Group {
-                        if hasMusic {
+                        if hasMusic && voices.isEmpty {
                             Text(verbatim: trackTitle)
                         } else {
                             Text(LocalizedStringKey(trackTitle))
@@ -607,9 +609,22 @@ private struct AudioTrack: View {
                 .foregroundStyle(hasEnhancements ? Color.white.opacity(0.88) : StudioTheme.secondaryText)
                 .padding(.horizontal, 9)
             }
+            .overlay(alignment: .bottomLeading) {
+                GeometryReader { geometry in
+                    ForEach(voices) { clip in
+                        let start = min(duration, max(0, clip.timelineStart))
+                        let end = min(duration, max(start, clip.timelineEnd))
+                        Capsule().fill(Color.white.opacity(clip.isEnabled ? 0.85 : 0.18))
+                            .frame(width: max(0, (end - start) / max(duration, 0.001) * geometry.size.width), height: 3)
+                            .offset(x: start / max(duration, 0.001) * geometry.size.width, y: geometry.size.height - 5)
+                            .help(clip.title)
+                    }
+                }.allowsHitTesting(false)
+            }
     }
 
     private var trackTitle: String {
+        if !(settings?.voiceovers ?? []).isEmpty { return "Voiceover" }
         if settings?.backgroundMusicPath != nil { return musicName }
         if settings?.clickSoundEnabled == true || settings?.zoomTransitionSoundEnabled == true {
             return "Sound effects"
@@ -654,7 +669,7 @@ private struct RulerRow: View {
                         var path = Path()
                         path.move(to: CGPoint(x: minorX - visibleX.lowerBound, y: size.height - (minor == 0 ? 8 : 4)))
                         path.addLine(to: CGPoint(x: minorX - visibleX.lowerBound, y: size.height))
-                        context.stroke(path, with: .color(.white.opacity(minor == 0 ? 0.25 : 0.10)))
+                        context.stroke(path, with: .color(StudioTheme.secondaryText.opacity(minor == 0 ? 0.65 : 0.3)))
                     }
                     let title = interval < 1 ? second.editorTimecode : second.formattedDuration
                     context.draw(context.resolve(Text(title)
@@ -771,14 +786,14 @@ private struct TimelinePointerOverlay: View {
                         path.move(to: CGPoint(x: previewX, y: 10))
                         path.addLine(to: CGPoint(x: previewX, y: 254))
                     }
-                    .stroke(Color.cyan.opacity(0.52), style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                    .stroke(StudioTheme.guide.opacity(0.6), style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
                     RoundedRectangle(cornerRadius: 2)
-                        .fill(Color.cyan.opacity(0.7))
+                        .fill(StudioTheme.guide.opacity(0.8))
                         .frame(width: 8, height: 8)
                         .offset(x: previewX - 4, y: 3)
                     Text(previewTime.editorTimecode)
                         .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.9))
+                        .foregroundStyle(StudioTheme.text)
                         .padding(.horizontal, 5)
                         .padding(.vertical, 2)
                         .background(StudioTheme.panelRaised, in: RoundedRectangle(cornerRadius: 4))
@@ -786,13 +801,13 @@ private struct TimelinePointerOverlay: View {
                 }
             }
             Rectangle()
-                .fill(Color.white.opacity(0.92))
+                .fill(StudioTheme.playhead)
                 .frame(width: 1.5, height: 254)
-                .shadow(color: .black.opacity(0.5), radius: 2)
+                .shadow(color: StudioTheme.panelShadow, radius: 2)
                 .offset(x: committedX - 0.75)
             UnevenRoundedRectangle(topLeadingRadius: 3, bottomLeadingRadius: 1,
                                    bottomTrailingRadius: 1, topTrailingRadius: 3)
-                .fill(.white)
+                .fill(StudioTheme.playhead)
                 .frame(width: 10, height: 10)
                 .offset(x: committedX - 5, y: 3)
         }
@@ -838,7 +853,7 @@ private struct ZoomBlockView: View {
 
         ZStack {
             RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(LinearGradient(colors: displayedSegment.isEnabled ? [StudioTheme.purple, StudioTheme.purpleSoft] : [.gray.opacity(0.45), .gray.opacity(0.3)], startPoint: .top, endPoint: .bottom))
+                .fill(LinearGradient(colors: displayedSegment.isEnabled ? [StudioTheme.purple, StudioTheme.purpleTrackEnd] : [StudioTheme.mutedTrack, StudioTheme.mutedTrack], startPoint: .top, endPoint: .bottom))
                 .shadow(color: StudioTheme.purple.opacity(isSelected ? 0.55 : 0), radius: isSelected ? 6 : 0)
             // The transitions are shaded so their length is visible at a glance.
             if !displayedSegment.isInstant {
@@ -1077,7 +1092,7 @@ private struct ChapterBlockView: View {
     @State private var dragPreview: DemoChapter?
 
     private let handleWidth = 14.0
-    private static let tint = Color(red: 0.13, green: 0.66, blue: 0.80)
+    private static let tint = StudioTheme.cyanTrack
     private var displayedChapter: DemoChapter { dragPreview ?? chapter }
 
     var body: some View {
@@ -1087,7 +1102,7 @@ private struct ChapterBlockView: View {
 
         ZStack {
             RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(displayedChapter.isEnabled ? Self.tint : Color.gray.opacity(0.45))
+                .fill(displayedChapter.isEnabled ? Self.tint : StudioTheme.mutedTrack)
                 .shadow(color: Self.tint.opacity(isSelected ? 0.55 : 0), radius: isSelected ? 6 : 0)
             RoundedRectangle(cornerRadius: 5, style: .continuous)
                 .stroke(Color.white.opacity(isSelected ? 0.9 : (isHovering ? 0.35 : 0.12)), lineWidth: 1.5)
@@ -1256,12 +1271,12 @@ private struct CursorTrack: View {
                 if index == first { path.move(to: point) }
                 else { path.addLine(to: point) }
             }
-            context.stroke(path, with: .color(Color.cyan.opacity(0.65)), lineWidth: 1)
+            context.stroke(path, with: .color(StudioTheme.guide.opacity(0.75)), lineWidth: 1)
         }
         .frame(width: viewportWidth)
         }
         .frame(width: timelineWidth, alignment: .leading)
-        .background(Color.white.opacity(0.018))
+        .background(StudioTheme.inset)
         .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
     }
 

@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src data:; base-uri 'none'; form-action 'none'; frame-src 'none'">
+<title>Choose what to record</title><link rel="stylesheet" href="shell.css"></head>
+<body><main><div class="eyebrow">FOCUS STUDIO DESKTOP</div><h1>Choose what to record.</h1><p class="muted">Only the screen or window you select will be recorded.</p>
+<div class="tabs" role="group" aria-label="Capture type"><button id="all" aria-pressed="true">All sources</button><button id="screen" aria-pressed="false">Screens</button><button id="window" aria-pressed="false">Windows</button></div>
+<div id="sources" class="sources" role="group" aria-label="Available screens and windows"></div>
+<div class="audio"><label id="audio-label" hidden><input id="audio" type="checkbox"> Include all system audio</label><p id="audio-note" class="muted"></p></div>
+<footer><span id="selection" class="muted" aria-live="polite">Select a source to continue.</span><button id="cancel">Cancel</button><button id="confirm" class="primary" disabled>Share selected source</button></footer>
+</main><script src="chooser.js"></script></body></html>

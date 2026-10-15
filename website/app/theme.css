@@ -1,0 +1,162 @@
+/* Light restores the original warm-paper marketing palette in globals.css.
+   Dark overrides surround media without filtering or recoloring video pixels. */
+:root {
+  color-scheme: light;
+  --paper: #f5f3ec;
+  --ink: #242326;
+  --muted: #737176;
+  --purple: #8665f8;
+  --line: #dedbd4;
+  --surface: #faf8f2;
+  --surface-raised: #ffffff;
+  --surface-soft: #e9e6de;
+  --glass-border: #dedbd4;
+  --glass-highlight: #ffffff;
+  --control-bg: #f1eee7;
+  --control-hover: #eae7df;
+  --action-bg: #242326;
+  --action-fg: #fff;
+  --action-hover: #414043;
+  --accent: #e4dcf8;
+  --accent-foreground: var(--ink);
+  --secondary: var(--surface-soft);
+  --secondary-foreground: var(--ink);
+  --card: var(--surface-raised);
+  --card-foreground: var(--ink);
+  --popover: var(--surface-raised);
+  --popover-foreground: var(--ink);
+  --primary: var(--action-bg);
+  --primary-foreground: var(--action-fg);
+  --border: var(--line);
+  --input: var(--line);
+  --shadow-color: #31264d26;
+  --success: #347b63;
+  --danger: #9b3d51;
+  --danger-surface: #fff0f3;
+  --danger-border: #f2ced8;
+  --atmosphere-lilac: #dcd3f16b;
+  --atmosphere-blue: #d2ded447;
+  --atmosphere-mint: #c9efda47;
+  --atmosphere-blush: #f5f3ec;
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #15141b;
+  --ink: #f0edf7;
+  --muted: #b0a9be;
+  --purple: #b69bf6;
+  --line: #38333f;
+  --surface: #24212ddb;
+  --surface-raised: #2b2634;
+  --surface-soft: #211e29;
+  --glass-border: #62566f66;
+  --glass-highlight: #ffffff13;
+  --control-bg: #ffffff07;
+  --control-hover: #3c334b;
+  --action-bg: #e9e0fc;
+  --action-fg: #281d3c;
+  --action-hover: #d6c3fa;
+  --accent: #3d3051;
+  --shadow-color: #05030c50;
+  --success: #9bcfb7;
+  --danger: #f5a9bd;
+  --danger-surface: #492330;
+  --danger-border: #70404e;
+  --atmosphere-lilac: #66508c38;
+  --atmosphere-blue: #49688e29;
+  --atmosphere-mint: #49685817;
+}
+
+html[data-theme="dark"] body { background: var(--paper); color: var(--ink); }
+html[data-theme="dark"] .site-header { background: color-mix(in srgb, var(--paper) 88%, transparent); border-color: var(--glass-border); backdrop-filter: blur(10px); }
+html[data-theme="dark"] .focus-site { background: radial-gradient(ellipse 80% 520px at 72% 190px, var(--atmosphere-blue), transparent 78%), var(--paper); }
+html[data-theme="dark"] .main-nav { color: var(--muted); }
+html[data-theme="dark"] .main-nav a:hover { color: var(--ink); }
+html[data-theme="dark"] .main-nav.is-open { background: var(--surface-raised); color: var(--ink); border-color: var(--line); }
+html[data-theme="dark"] .mobile-menu { color: var(--ink); }
+html[data-theme="dark"] .button-dark { background: var(--action-bg); color: var(--action-fg); box-shadow: inset 0 1px 0 var(--glass-highlight), 0 5px 18px var(--shadow-color); }
+html[data-theme="dark"] .button-dark:hover { background: var(--action-hover); }
+html[data-theme="dark"] .button-outline { border-color: var(--line); background: var(--control-bg); color: var(--ink); }
+html[data-theme="dark"] .button-plain { color: var(--ink); }
+html[data-theme="dark"] .button-plain:hover, html[data-theme="dark"] .button-outline:hover { background: var(--control-hover); }
+html[data-theme="dark"] .focus-site :is(.hero-description,.hero-note,.hero-footnote,.feature-copy>p,.feature-copy .step-index,.section-heading>p,.film-copy>p,.closing-note,.footer-links,.footer-bottom,.footer-bottom>button) { color: var(--muted); }
+html[data-theme="dark"] .hero-footnote>a { color: var(--ink); }
+html[data-theme="dark"] .hero-note span, html[data-theme="dark"] .feature-tags>span, html[data-theme="dark"] .faq-list details, html[data-theme="dark"] .site-footer, html[data-theme="dark"] .footer-bottom, html[data-theme="dark"] .footer-links a>span { border-color: var(--line); }
+html[data-theme="dark"] .feature-tags>span { color: var(--muted); background: var(--control-bg); }
+html[data-theme="dark"] .faq-list details>p { color: var(--muted); }
+html[data-theme="dark"] .faq-list details>.text-link { color: var(--purple); }
+html[data-theme="dark"] .faq-list summary>svg { color: var(--muted); }
+html[data-theme="dark"] .skip-link { color: var(--action-fg); background: var(--action-bg); }
+
+/* A porcelain frame around the interactive illustration; the scene itself is
+   deliberately unchanged, like the adjacent real product screenshot. */
+html[data-theme="dark"] .focus-site .fs-motion-showcase { border-color: var(--glass-border); box-shadow: inset 0 1px 0 var(--glass-highlight), 0 28px 60px -25px var(--shadow-color); background: var(--surface); }
+html[data-theme="dark"] .fs-motion-top, html[data-theme="dark"] .fs-motion-controls { color: var(--ink); background: var(--surface-soft); border-color: var(--line); }
+html[data-theme="dark"] .fs-motion-top>span:nth-child(2) { color: var(--muted); }
+html[data-theme="dark"] .fs-motion-top button { color: var(--ink); background: var(--control-bg); border-color: var(--glass-border); }
+html[data-theme="dark"] .fs-motion-top button:hover { background: var(--control-hover); }
+html[data-theme="dark"] .fs-motion-controls>button { color: var(--muted); }
+html[data-theme="dark"] .fs-motion-controls>button:hover { background: var(--control-hover); color: var(--ink); }
+html[data-theme="dark"] .fs-motion-controls>button.selected { background: var(--accent); color: var(--ink); border-color: var(--glass-border); box-shadow: inset 0 1px 0 var(--glass-highlight); }
+
+/* Semi-transparent fills and fixed highlights create glass without repainting
+   large blurred surfaces while the little product illustrations animate. */
+html[data-theme="dark"] .focus-site .ai-section { color: var(--ink); background: radial-gradient(ellipse at 75% 35%, var(--atmosphere-lilac), transparent 65%), var(--surface-soft); border-block: 1px solid var(--glass-border); }
+html[data-theme="dark"] .ai-copy h2 .serif-word, html[data-theme="dark"] .ai-copy>.text-link { color: var(--purple); }
+html[data-theme="dark"] .ai-copy>p, html[data-theme="dark"] .ai-copy>.eyebrow, html[data-theme="dark"] .ai-steps small { color: var(--muted); }
+html[data-theme="dark"] .ai-steps b { color: var(--ink); }
+html[data-theme="dark"] .ai-steps>div>span { color: var(--purple); border-color: var(--glass-border); background: var(--control-bg); }
+html[data-theme="dark"] .ai-orbit { border-color: var(--glass-border); opacity: .28; }
+html[data-theme="dark"] .conversation { background: linear-gradient(130deg, var(--surface-raised), var(--surface)); border-color: var(--glass-border); color: var(--ink); box-shadow: inset 0 1px 0 var(--glass-highlight), 0 20px 50px -20px var(--shadow-color); }
+html[data-theme="dark"] .conversation-top { border-color: var(--line); }
+html[data-theme="dark"] .conversation-top small, html[data-theme="dark"] .conversation-preview small, html[data-theme="dark"] .conversation-tools small, html[data-theme="dark"] .conversation-composer, html[data-theme="dark"] .illustration-note { color: var(--muted); }
+html[data-theme="dark"] .conversation-reply, html[data-theme="dark"] .conversation-tools>div, html[data-theme="dark"] .conversation-preview { color: var(--ink); }
+html[data-theme="dark"] .conversation-user { background: var(--accent); color: var(--ink); border-color: var(--glass-border); }
+html[data-theme="dark"] .conversation-preview { background: var(--surface-soft); border-color: var(--line); }
+html[data-theme="dark"] .conversation-tools small, html[data-theme="dark"] .conversation-composer { border-color: var(--line); }
+html[data-theme="dark"] .conversation-tools>div>svg { color: var(--success); }
+html[data-theme="dark"] .conversation-preview>svg { color: var(--muted); }
+html[data-theme="dark"] .ai-spark, html[data-theme="dark"] .conversation-composer>span { color: var(--purple); background: var(--accent); }
+
+html[data-theme="dark"] .focus-site .pricing-section { background: radial-gradient(ellipse at 80% 15%, var(--atmosphere-blue), transparent 60%), var(--surface-soft); }
+html[data-theme="dark"] .free-plan { color: var(--ink); background: var(--surface); border-color: var(--glass-border); box-shadow: inset 0 1px 0 var(--glass-highlight); }
+html[data-theme="dark"] .pro-plan { color: var(--ink); background: linear-gradient(130deg, var(--surface-raised), var(--accent)); border-color: var(--glass-border); box-shadow: inset 0 1px 0 var(--glass-highlight), 0 16px 30px -20px var(--shadow-color); }
+html[data-theme="dark"] .plan-price>span, html[data-theme="dark"] .free-plan>p, html[data-theme="dark"] .plan-details, html[data-theme="dark"] .billing-description, html[data-theme="dark"] .pricing-note { color: var(--muted); }
+html[data-theme="dark"] .plan-details svg { color: var(--success); }
+html[data-theme="dark"] .plan-badge { background: var(--accent); color: var(--purple); }
+html[data-theme="dark"] .billing-switch { border-color: var(--glass-border); background: var(--control-bg); }
+html[data-theme="dark"] .billing-switch>button { color: var(--muted); }
+html[data-theme="dark"] .billing-switch>button>span { color: var(--muted); }
+html[data-theme="dark"] .billing-switch>button.selected { background: var(--surface-raised); color: var(--ink); box-shadow: 0 1px 4px var(--shadow-color); }
+html[data-theme="dark"] .checkout-message { background: var(--surface-raised); color: var(--ink); border: 1px solid var(--line); }
+
+html[data-theme="dark"] .dialog-surface { color: var(--ink); background: linear-gradient(145deg, var(--surface-raised), var(--paper)); border-color: var(--glass-border); box-shadow: inset 0 1px 0 var(--glass-highlight), 0 22px 80px #09061433; }
+html[data-theme="dark"] .dialog-close { background: var(--surface-soft); color: var(--ink); }
+html[data-theme="dark"] .dialog-close:hover { background: var(--control-hover); }
+html[data-theme="dark"] .platform-tabs { background: var(--surface-soft); border-color: var(--glass-border); }
+html[data-theme="dark"] .platform-tabs>button { color: var(--muted); }
+html[data-theme="dark"] .platform-tabs>button.selected { background: var(--surface-raised); color: var(--ink); }
+html[data-theme="dark"] .platform-content>p, html[data-theme="dark"] .platform-content>small { color: var(--muted); }
+html[data-theme="dark"] .platform-content>.text-link { color: var(--purple); }
+html[data-theme="dark"] .platform-icon { color: var(--purple); background: var(--accent); }
+html[data-theme="dark"] .platform-icon.mint { color: #b7d8c4; background: #2d443b; }
+html[data-theme="dark"] .video-dialog-surface { color: var(--ink); background: var(--surface-raised); border-color: var(--glass-border); }
+html[data-theme="dark"] .video-dialog-header { color: var(--ink); }
+html[data-theme="dark"] .video-dialog-header>.dialog-close { color: var(--ink); background: var(--control-bg); }
+html[data-theme="dark"] .video-dialog p { color: var(--muted); }
+
+.document-nav { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 65px; }
+html[data-theme="dark"] .document-shell p, html[data-theme="dark"] .document-shell li { color: var(--muted); }
+html[data-theme="dark"] .document-shell code { background: var(--surface-soft); color: var(--purple); border-color: var(--line); }
+html[data-theme="dark"] .document-shell p a, html[data-theme="dark"] .document-shell li a, html[data-theme="dark"] .document-back { color: var(--purple); }
+html[data-theme="dark"] .document-note { background: var(--surface-soft); border-color: var(--glass-border); }
+
+/* Artwork keeps its original palette. Dark-mode surfaces only surround it. */
+html[data-theme="dark"] .focus-site .zoom-art { background: #36323c; }
+html[data-theme="dark"] .focus-site .timeline-art { background: #302a3b; }
+html[data-theme="dark"] .focus-site .feature-art::after { border-color: #ffffff0c; }
+html[data-theme="dark"] .focus-site .editor-proof figure { border-color: var(--glass-border); box-shadow: 0 20px 60px #0004; }
+
+@media(max-width:1100px) { .nav-actions { gap: 15px; } .main-nav { margin-right: 0; gap: 20px; } }
+@media(max-width:600px) { .nav-actions { gap: 11px; } .document-nav { margin-bottom: 47px; } }

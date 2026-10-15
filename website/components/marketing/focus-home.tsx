@@ -1,41 +1,34 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowDown, ArrowRight, ArrowUpRight, AudioLines, Check, CheckCheck, ChevronDown, Circle, CirclePlay, Code2, Command, Download, Expand, Focus, Layers3, Menu, Monitor, MousePointer2, MoveUpRight, Pause, Play, Plus, Scan, Scissors, Sparkles, WandSparkles, X } from "lucide-react";
+import { INSTALLERS, installerPath } from "@/lib/installers";
+import { ThemeToggle } from "@/components/theme/theme-toggle";
+import { LocaleToggle } from "@/components/locale/locale-toggle";
+import { useLocale } from "@/components/locale/locale-provider";
+import { ProductVideo } from "./product-video";
+import { useMarketingMotion } from "./use-marketing-motion";
+import { FocusSculpture } from "./focus-sculpture";
+import design from "./design-refinement.module.css";
+import community from "./community-feature.module.css";
+import { ArrowDown, ArrowUpRight, CirclePlay, Code2, Command, Download, Focus, Menu, Monitor, Play, Plus, X } from "lucide-react";
 
-interface SiteConfig {
-  billingConfigured?: boolean;
-  macDownloadUrl?: string | null;
-  demoVideoUrl?: string | null;
-}
-
-type Effect = "zoom" | "spotlight" | "lift";
 type Platform = "mac" | "windows" | "linux";
-const effectOptions: { id: Effect; label: string; Icon: typeof Focus; description: string }[] = [
-  { id: "zoom", label: "Smooth zoom", Icon: Focus, description: "Guide the eye. Keep the context." },
-  { id: "spotlight", label: "Spotlight", Icon: Scan, description: "Let one detail do the talking." },
-  { id: "lift", label: "Lift & tilt", Icon: Layers3, description: "Give the important bit a little dimension." },
-];
-
 export function Brand({ dark = false }: { dark?: boolean }) {
-  return <a className={`brand${dark ? " brand-dark" : ""}`} href="/" aria-label="Focus Studio home"><span className="brand-mark"><Focus size={25} strokeWidth={1.8} /><Play size={10} className="brand-play" fill="currentColor" /></span><span>focus<span className="brand-light">studio</span><span className="brand-period">.</span></span></a>;
-}
-
-function ArrowLink({ href, children }: { href: string; children: React.ReactNode }) {
-  return <a href={href} className="text-link">{children}<ArrowUpRight size={17} /></a>;
+  const { t } = useLocale();
+  return <a className={`brand${dark ? " brand-dark" : ""}`} href="/" aria-label={t("Focus Studio home", "Focus Studio 首页")}><img className="brand-icon" src="/icons/focus-studio.svg" width="36" height="36" alt=""/><span>Focus Studio</span></a>;
 }
 
 export function FocusHome() {
-  const [effect, setEffect] = useState<Effect>("zoom");
+  const { t } = useLocale();
   const [motion, setMotion] = useState(false);
   const [mobileMenu, setMobileMenu] = useState(false);
-  const [config, setConfig] = useState<SiteConfig>({});
+  const [demoVideoUrl, setDemoVideoUrl] = useState<string | null>(null);
   const [platform, setPlatform] = useState<Platform>("mac");
   const [downloadOpen, setDownloadOpen] = useState(false);
+  const [release, setRelease] = useState<{platform:Platform;version:string;download_url:string;release_url:string}|null>(null);
   const [videoOpen, setVideoOpen] = useState(false);
-  const [plan, setPlan] = useState<"annual" | "monthly">("annual");
-  const [checkoutBusy, setCheckoutBusy] = useState(false);
-  const [checkoutMessage, setCheckoutMessage] = useState("");
+  const siteRef = useRef<HTMLDivElement>(null);
+  useMarketingMotion(siteRef, motion);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const videoDialogRef = useRef<HTMLDialogElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -45,114 +38,81 @@ export function FocusHome() {
     setMotion(!reduced.matches);
     const listener = () => setMotion(!reduced.matches);
     reduced.addEventListener("change", listener);
-    fetch("/api/config").then((r) => r.ok ? r.json() : {}).then(setConfig).catch(() => {});
+    fetch("/api/config").then(r => r.ok ? r.json() : null).then((value: unknown) => {
+      if (value && typeof value === "object" && "demoVideoUrl" in value && typeof value.demoVideoUrl === "string") setDemoVideoUrl(value.demoVideoUrl);
+    }).catch(() => {});
     if (navigator.platform.toLowerCase().includes("win")) setPlatform("windows");
     else if (navigator.platform.toLowerCase().includes("linux")) setPlatform("linux");
-    return () => reduced.removeEventListener("change", listener);
+    const openFromLink = () => { if (window.location.hash === "#download" || new URLSearchParams(window.location.search).get("download") === "1") setDownloadOpen(true); };
+    openFromLink(); window.addEventListener("hashchange", openFromLink);
+    return () => { reduced.removeEventListener("change", listener); window.removeEventListener("hashchange", openFromLink); };
   }, []);
-
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (downloadOpen) dialog?.showModal(); else dialog?.close();
-  }, [downloadOpen]);
-
+  useEffect(() => { if (downloadOpen) dialogRef.current?.showModal(); else dialogRef.current?.close(); }, [downloadOpen]);
   useEffect(() => {
     if (videoOpen) { videoDialogRef.current?.showModal(); void videoRef.current?.play().catch(() => {}); }
     else { videoRef.current?.pause(); videoDialogRef.current?.close(); }
   }, [videoOpen]);
+  useEffect(() => {
+    if (!downloadOpen) return;
+    const controller = new AbortController(); setRelease(null);
+    fetch(`/api/releases?platform=${platform}&channel=preview`, {signal:controller.signal})
+      .then(response => response.ok ? response.json() : null).then((value: unknown) => {
+        if (controller.signal.aborted || !value || typeof value !== "object") return;
+        const item = value as Record<string, unknown>;
+        if (item.platform !== platform || typeof item.version !== "string" || !/^\d+\.\d+\.\d+$/.test(item.version) || typeof item.download_url !== "string" || typeof item.release_url !== "string") return;
+        const download = new URL(item.download_url, window.location.origin), notes = new URL(item.release_url);
+        if (download.origin !== window.location.origin || download.pathname !== `/api/download/${platform}` || download.username || download.password || download.hash ||
+          notes.origin !== "https://github.com" || notes.username || notes.password || !notes.pathname.startsWith("/stevenchengxy/focus-studio/releases/tag/")) return;
+        setRelease({platform, version:item.version, download_url:download.href, release_url:notes.href});
+      }).catch(() => {});
+    return () => controller.abort();
+  }, [downloadOpen, platform]);
+  const currentRelease = release?.platform === platform ? release : null;
+  const desktopDownloadUrl = currentRelease?.download_url || installerPath(platform);
 
-  async function checkout() {
-    setCheckoutMessage("");
-    if (!config.billingConfigured) {
-      setCheckoutMessage("Subscriptions are not open yet. You can create an account and try your first export free.");
-      return;
-    }
-    setCheckoutBusy(true);
-    try {
-      const response = await fetch("/api/billing/checkout", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ plan: plan === "annual" ? "yearly" : "monthly" }) });
-      const data = await response.json() as { url?: string; checkoutUrl?: string; error?: string | { code?: string; message?: string }; message?: string; loginUrl?: string };
-      if (response.status === 401) { window.location.href = data.loginUrl || "/account"; return; }
-      if (!response.ok) throw new Error((typeof data.error === "string" ? data.error : data.error?.message) || data.message || "Checkout is unavailable. Please try again later.");
-      const next = data.url || data.checkoutUrl;
-      if (!next) throw new Error("Checkout is unavailable. Please try again later.");
-      const url = new URL(next, window.location.origin);
-      if (url.protocol !== "https:" && url.origin !== window.location.origin) throw new Error("Checkout returned an invalid address.");
-      window.location.href = url.href;
-    } catch (error) {
-      setCheckoutMessage(error instanceof Error ? error.message : "Checkout is unavailable. Please try again later.");
-    } finally { setCheckoutBusy(false); }
-  }
-
-  const activeEffect = effectOptions.find((item) => item.id === effect)!;
-
-  return (
-    <div className={`focus-site${motion ? " has-motion" : " motion-paused"}`}>
-      <a className="skip-link" href="#main">Skip to content</a>
-      <header className="site-header">
-        <div className="nav-wrap"><Brand />
-          <nav aria-label="Main navigation" className={mobileMenu ? "main-nav is-open" : "main-nav"}>
-            <a href="#possibilities" onClick={() => setMobileMenu(false)}>The possibilities</a>
-            <a href="#workflow" onClick={() => setMobileMenu(false)}>The workflow</a>
-            <a href="#pricing" onClick={() => setMobileMenu(false)}>Pricing</a>
-          </nav>
-          <div className="nav-actions"><a className="sign-in" href="/account">Sign in</a><button className="button button-dark button-small" onClick={() => setDownloadOpen(true)}>Get Focus Studio <ArrowDown size={15}/></button><button className="mobile-menu" aria-label={mobileMenu ? "Close navigation" : "Open navigation"} aria-expanded={mobileMenu} onClick={() => setMobileMenu(!mobileMenu)}>{mobileMenu ? <X/> : <Menu/>}</button></div>
+  return <div className={`focus-site ${design.refinedSite}${motion ? " has-motion" : " motion-paused"}`} ref={siteRef}>
+    <a className="skip-link" href="#main">{t("Skip to content", "跳转到正文")}</a>
+    <header className="site-header"><div className="nav-wrap"><Brand/>
+      <nav aria-label={t("Main navigation", "主导航")} className={mobileMenu ? "main-nav is-open" : "main-nav"}>
+        <a href="#possibilities" onClick={() => setMobileMenu(false)}>{t("Explore", "功能")}</a>
+        <a href="#workflow" onClick={() => setMobileMenu(false)}>{t("Workflow", "工作流")}</a>
+        <a href="/community">{t("Community", "作品社区")}</a>
+        <a className="nav-account" href="/account" target="_top">{t("Sign in", "登录")}</a>
+      </nav>
+      <div className="nav-actions"><a className="sign-in" href="/account" target="_top">{t("Sign in", "登录")}</a><LocaleToggle/><ThemeToggle/><button className="button button-dark button-small" onClick={() => setDownloadOpen(true)}>{t("Free download", "免费下载")} <ArrowDown size={15}/></button><button className="mobile-menu" aria-label={mobileMenu ? t("Close navigation", "关闭导航") : t("Open navigation", "展开导航")} aria-expanded={mobileMenu} onClick={() => setMobileMenu(!mobileMenu)}>{mobileMenu ? <X/> : <Menu/>}</button></div>
+    </div></header>
+    <main id="main">
+      <section className="hero section-wrap">
+        <div className={design.heroAtmosphere} aria-hidden="true" data-motion-section><div className={design.lightField}/><div className={design.compositionFrame}><i/><i/><i/><i/></div><div className={design.heroSculpture}><FocusSculpture variant="hero" size="var(--focus-sculpture-size)"/></div><div className={design.orbitDot}/></div>
+        <div className="hero-copy" data-reveal>
+          <h1>{t("Your product.", "你的产品。")}<br/>{t("In its ", "值得")}<span className="best-light">{t("best light.", "出彩。")}<svg viewBox="0 0 590 25" preserveAspectRatio="none" aria-hidden="true"><path d="M6 17C169 3 374 4 581 14"/></svg></span></h1>
+          <p className="hero-description">{t("Record. Refine. Show what makes your product special.", "录制，打磨，让产品亮点被看见。")}</p>
+          <div className="hero-actions"><button className="button button-dark" onClick={() => setDownloadOpen(true)}>{t("Make your first demo", "开始制作 Demo")} <ArrowUpRight size={19}/></button><button className="button button-plain" onClick={() => setVideoOpen(true)}><CirclePlay size={21} strokeWidth={1.5}/>{t("See it in action", "看看实际效果")}</button></div>
+          <p className="hero-note">{t("Free to create. Free to export.", "录制、剪辑与导出，目前全部免费。")}<span>{t("Mac + desktop previews", "Mac · Windows / Linux 预览版")}</span></p>
         </div>
-      </header>
-
-      <main id="main">
-        <section className="hero section-wrap">
-          <div className="hero-copy">
-
-            <h1>Your product.<br/>In its <span className="best-light">best light.<svg viewBox="0 0 590 25" preserveAspectRatio="none" aria-hidden="true"><path d="M6 17C169 3 374 4 581 14"/></svg></span></h1>
-            <p className="hero-description">Record. Refine. Show what makes your product special.</p>
-            <div className="hero-actions"><button className="button button-dark" onClick={() => setDownloadOpen(true)}>Make your first demo <ArrowUpRight size={19}/></button><button className="button button-plain" onClick={() => setVideoOpen(true)}><CirclePlay size={21} strokeWidth={1.5}/> See it in action</button></div>
-            <p className="hero-note">One free export. No card required. <span>macOS 15+</span></p>
-          </div>
-
-          <div className={`showcase effect-${effect}`}>
-            <div className="showcase-header"><span className="showcase-brand"><Focus size={15}/> Live preview</span><span className="live-label">Interactive illustration</span><button className="motion-button" aria-label={motion ? "Pause animation" : "Play animation"} aria-pressed={!motion} onClick={() => setMotion(!motion)}>{motion ? <Pause size={14}/> : <Play size={14}/>}</button></div>
-            <div className="demo-stage" role="img" aria-label={`${activeEffect.label} illustration of a project planning dashboard`}>
-              <div className="stage-orbit orbit-one"/><div className="stage-orbit orbit-two"/>
-              <div className="product-window"><div className="product-window-bar"><div className="traffic-lights"><i/><i/><i/></div><span>studio / launch-plan</span><Expand size={10}/></div>
-                <div className="product-window-body"><aside className="demo-sidebar"><div className="demo-brand"><span>k</span> kinetic</div><div className="demo-team"><span>W</span> Workspace <ChevronDown size={9}/></div><p>YOUR WORKSPACE</p><div className="demo-side-item"><Monitor/>Overview</div><div className="demo-side-item active"><Layers3/>Projects<span>8</span></div><div className="demo-side-item"><Circle/>Activity</div><div className="demo-side-item"><CheckCheck/>My tasks</div><div className="demo-sidebar-bottom"><span>J</span><div>Jamie Parker<small>Personal workspace</small></div></div></aside>
-                <div className="demo-main"><div className="demo-breadcrumb">Workspace <span>/</span> Projects <span>/</span> Launch day</div><div className="demo-title-row"><div><div className="demo-tag">THE NEXT BIG THING</div><h3>A little idea.<br/>A big launch.</h3></div><div className="demo-avatars"><span>J</span><span>A</span><span>M</span><span>+2</span></div></div><div className="demo-project-tabs"><b>Overview</b><span>Board</span><span>Files</span><span>Activity</span><button tabIndex={-1} aria-hidden="true"><Plus size={10}/> Add task</button></div>
-                  <div className="demo-content"><div className="demo-progress"><div><span>Launch readiness</span><span className="demo-small-pill">On track</span></div><p>Make every detail count.</p><div className="demo-progress-track"><i/></div><div className="demo-progress-meta"><span>24 of 32 tasks complete</span><b>75%</b></div></div><div className="demo-note"><span><Sparkles size={13}/></span><b>A clear story.<br/>A confident launch.</b><p>Show the world what you’ve built.</p></div></div>
-                  <div className="demo-tasks"><div><span><Check size={10}/></span><b>Find the story</b><small>Done</small></div><div><span><Check size={10}/></span><b>Bring the details into focus</b><small>Done</small></div><div><span/><b>Share something remarkable</b><small>Up next</small></div></div>
-                </div></div>
-              </div>
-              <div className="spotlight-shade"/>
-              <div className="focus-detail"><div><span>Launch readiness</span><span className="demo-small-pill">On track</span></div><p>Make every detail count.</p><div className="demo-progress-track"><i/></div><div className="demo-progress-meta"><span>24 of 32 tasks complete</span><b>75%</b></div></div>
-              <div className="demo-pointer"><MousePointer2 size={35} fill="white" stroke="#27212f" strokeWidth={1.5}/><span>Focus on what matters</span></div>
-
-            </div>
-            <div className="showcase-bottom"><div className="effect-switch" role="group" aria-label="Preview an effect">{effectOptions.map(({id, label, Icon}) => <button key={id} className={effect === id ? "selected" : ""} aria-pressed={effect === id} onClick={() => setEffect(id)}><Icon size={15}/>{label}</button>)}</div></div>
-          </div>
-          <div className="hero-footnote"><span><Command size={14}/> Crafted for Mac</span><span><Code2 size={15}/> Works with Codex</span><a href="/studio">Try Browser Studio <ArrowUpRight size={14}/></a></div>
-        </section>
-
-        <section className="possibilities section-wrap" id="possibilities">
-          <div className="section-heading"><div><h2>Make the ordinary<br/><span className="serif-word">worth a second look.</span></h2></div></div>
-          <div className="feature-editorial"><div className="feature-art zoom-art"><div className="small-window"><div className="small-top"><span/><span/><span/></div><div className="art-text-lines"><i/><i/></div><div className="art-button">Publish your idea <ArrowUpRight size={17}/></div><div className="art-text-lines lower"><i/><i/></div></div><div className="zoom-crop"><div className="art-button">Publish your idea <ArrowUpRight size={22}/></div></div><MousePointer2 className="art-cursor" size={43} fill="#fff" stroke="#27212f"/><span className="art-chip"><Focus size={14}/> Right on cue.</span></div><div className="feature-copy"><span className="step-index">01 / THE CAMERA</span><h3>A natural eye<br/>for the important bit.</h3><p>Smooth zooms. A spotlight on the details. A little depth when it matters.</p><div className="feature-tags"><span>Smooth zoom</span><span>Region effects</span><span>Cursor polish</span></div></div></div>
-          <div className="feature-editorial reverse"><div className="feature-art timeline-art"><div className="timeline-mini"><div className="timeline-mini-toolbar"><Play size={13} fill="currentColor"/><span>00:08.240</span><Scissors size={13}/><span className="timeline-mini-spacer"/><span>00:24</span></div><div className="timeline-mini-ruler"><span>0:00</span><span>0:05</span><span>0:10</span><span>0:15</span></div><div className="mini-track mini-track-video"><div>Opening</div><div>The good part</div><div>One last look</div></div><div className="mini-track mini-track-zoom"><div>Zoom in</div><div>Spotlight</div></div><div className="mini-audio"><AudioLines size={17}/>{Array.from({length: 48}, (_,i) => <i key={i} style={{height: `${9 + ((i * 17) % 27)}px`}}/>)}</div><div className="mini-playhead"><span/></div></div><span className="art-chip"><Scissors size={14}/> Every second, considered.</span></div><div className="feature-copy"><span className="step-index">02 / THE EDIT</span><h3>Find your rhythm.<br/>Leave the waiting out.</h3><p>Trim, arrange and fine-tune. Undo whenever you need to.</p><div className="feature-tags"><span>Frame-level control</span><span>Transitions</span><span>Undo & redo</span></div></div></div>
-        </section>
-
-        <section className="editor-proof section-wrap" aria-labelledby="editor-proof-title"><h2 id="editor-proof-title">Make every frame <span className="serif-word">yours.</span></h2><figure><img src="/media/focus-studio-editor.jpg" alt="The actual Focus Studio Mac editor with a product preview, effect timeline and editing controls"/><figcaption>Focus Studio for macOS · Actual editor</figcaption></figure></section>
-
-        <section className="ai-section" id="workflow"><div className="section-wrap ai-inner"><div className="ai-copy"><h2>Meet your<br/><span className="serif-word">demo co-pilot.</span></h2><p>Record and edit with Codex. Keep the final say.</p><div className="ai-steps"><div><span>1</span><p><b>Give it a direction.</b></p></div><div><span>2</span><p><b>Connect through MCP.</b></p></div><div><span>3</span><p><b>Keep the final say.</b></p></div></div><a href="/help#codex" className="text-link">How the connection works <ArrowUpRight size={17}/></a></div><div className="ai-visual"><div className="ai-orbit orbit-a"/><div className="ai-orbit orbit-b"/><div className="conversation"><div className="conversation-top"><span className="ai-spark"><Sparkles size={17}/></span><div>Focus assistant<small>Connected to your workflow</small></div><span className="conversation-status"/></div><div className="conversation-user">Make the onboarding feel effortless. Cut the pauses and bring the invite button into focus.</div><div className="conversation-reply"><span className="ai-spark"><Sparkles size={14}/></span><div>Let’s make every step feel intentional.</div></div><div className="conversation-tools"><div><Check size={13}/><span>Trim the pauses</span><small>Timeline</small></div><div><Check size={13}/><span>Spotlight the invitation</span><small>Effects</small></div><div><Check size={13}/><span>Keep the original take</span><small>Working copy</small></div></div><div className="conversation-preview"><div className="conversation-preview-icon"><Play fill="currentColor" size={19}/></div><div>Your story, with a little more polish.<small>Preview before exporting</small></div><ArrowUpRight size={17}/></div><div className="conversation-composer">What would you like to change?<span><ArrowUpRight size={14}/></span></div></div><span className="illustration-note">Illustrative workflow · Codex connection required</span></div></div></section>
-
-        <section className="film-section section-wrap" aria-labelledby="film-title"><div className="film-copy"><h2 id="film-title">A closer look<br/>at <span className="serif-word">Focus.</span></h2><button className="text-link" onClick={() => setVideoOpen(true)}>Play the effect reel <CirclePlay size={19}/></button></div><button className="film-poster" onClick={() => setVideoOpen(true)} aria-label="Play Focus Studio effect reel"><img src="/media/focus-studio-demo.jpg" alt="Focus Studio effect preview" onError={(event) => { event.currentTarget.style.display = "none"; }}/><div className="film-fallback"><Focus size={100} strokeWidth={0.75}/><span>Small details.<br/>Big difference.</span></div><span className="film-play"><Play size={25} fill="currentColor"/></span><span className="film-caption"><span>FOCUS STUDIO / EFFECT REEL</span><span>Watch <ArrowUpRight size={14}/></span></span></button></section>
-
-        <section className="pricing-section" id="pricing"><div className="section-wrap"><div className="pricing-heading"><div><h2>Your first export<br/>is <span className="serif-word">on us.</span></h2></div></div><div className="pricing-grid"><div className="free-plan"><h3>First look</h3><div className="plan-price">$0<span>to get started</span></div><p>One successful export per account.</p><a className="button button-outline" href="/account">Create your account <ArrowUpRight size={17}/></a><div className="plan-details"><span><Check size={15}/> No card required</span><span><Check size={15}/> Preview and edit before you export</span></div></div><div className="pro-plan"><div className="pro-top"><span className="plan-badge">Focus Studio Pro</span></div><div className="billing-switch" role="group" aria-label="Billing interval"><button className={plan === "annual" ? "selected" : ""} aria-pressed={plan === "annual"} onClick={() => {setPlan("annual");setCheckoutMessage("");}}>Yearly <span>Save 69%</span></button><button className={plan === "monthly" ? "selected" : ""} aria-pressed={plan === "monthly"} onClick={() => {setPlan("monthly");setCheckoutMessage("");}}>Monthly</button></div><div className="plan-price" aria-live="polite">${plan === "annual" ? "9" : "29"}<span>/ month</span></div><p className="billing-description">{plan === "annual" ? "$108 billed once a year. Taxes may apply." : "$29 billed monthly. Taxes may apply."}</p><button className="button button-dark" disabled={checkoutBusy} onClick={checkout}>{checkoutBusy ? "Opening checkout…" : config.billingConfigured ? "Get Focus Studio Pro" : "View subscription availability"}<ArrowUpRight size={17}/></button><div className="plan-details"><span><Check size={15}/> Export beyond your first demo</span><span><Check size={15}/> Monthly or annual billing</span><span><Check size={15}/> AI provider usage billed separately</span></div>{checkoutMessage && <div className="checkout-message" role="status">{checkoutMessage}<a href="/account">Go to your account <ArrowRight size={13}/></a></div>}</div></div><p className="pricing-note">Editing stays local. Export requires an account and an internet connection. Browser Studio is a separate, lighter beta.</p></div></section>
-
-        <section className="faq-section section-wrap"><div><h2>Good questions.</h2></div><div className="faq-list"><details><summary>Do I need AI to use Focus Studio?<Plus size={17}/></summary><p>No. Record and edit directly with the native Mac app. Connect Codex when you want an assistant to help record a workflow, adjust an edit or prepare an export.</p></details><details><summary>Can I use it on Windows or Linux?<Plus size={17}/></summary><p>The full native editor currently requires macOS 15 or later. On Windows and Linux, Browser Studio offers a lighter browser-based workflow. It is a beta, not a native desktop installer, and screen capture support depends on your browser.</p><a href="/studio" className="text-link">Open Browser Studio <ArrowUpRight size={14}/></a></details><details><summary>How does the free export work?<Plus size={17}/></summary><p>Create an account to get one successful export. An unsuccessful export should not use your allowance. Export requires an internet connection to verify your account. Additional exports require an active subscription once billing is available.</p></details><details><summary>Where do my recordings go?<Plus size={17}/></summary><p>The native editor stores your projects on your Mac. AI generation and Codex are optional connections; content you send to them is processed by the provider you choose. Browser Studio processes media in your browser.</p><a href="/privacy" className="text-link">Read the privacy overview <ArrowUpRight size={14}/></a></details><details><summary>Is AI video generation included in Pro?<Plus size={17}/></summary><p>AI model usage is separate from your Focus Studio subscription. Connect your own supported provider and choose a model before generating. Review the generation request and estimated cost before continuing.</p></details></div></section>
-
-        <section className="closing-section section-wrap"><div className="closing-symbol"><Focus size={42} strokeWidth={1.5}/><Play size={14} fill="currentColor"/></div><h2>Now give it<br/>a <span className="serif-word">proper introduction.</span></h2><button className="button button-dark" onClick={() => setDownloadOpen(true)}>Get Focus Studio <ArrowDown size={18}/></button><span className="closing-note">Start with one free export.</span></section>
-      </main>
-
-      <footer className="site-footer section-wrap"><div className="footer-top"><div><Brand/></div><div className="footer-links"><a href="#possibilities">Explore</a><a href="#pricing">Pricing</a><a href="/studio">Browser Studio <span>Beta</span></a><a href="/help">Getting started</a><a href="/privacy">Privacy</a><a href="https://github.com/stevenchengxy/focus-studio" target="_blank" rel="noreferrer">GitHub <ArrowUpRight size={12}/></a></div></div><div className="footer-bottom"><span>© {new Date().getFullYear()} Focus Studio.</span><button onClick={() => window.scrollTo({top:0,behavior: motion ? "smooth" : "instant"})}>Back to top <ArrowUpRight size={13}/></button></div></footer>
-
-      <dialog className="download-dialog" ref={dialogRef} onCancel={() => setDownloadOpen(false)} onClick={(event) => { if (event.target === event.currentTarget) setDownloadOpen(false); }}><div className="dialog-surface"><button className="dialog-close" aria-label="Close download options" onClick={() => setDownloadOpen(false)}><X size={20}/></button><span className="eyebrow">FIND YOUR FOCUS</span><h2>A good place<br/>to start.</h2><div className="platform-tabs" role="group" aria-label="Choose your platform">{(["mac","windows","linux"] as Platform[]).map((item) => <button key={item} className={platform === item ? "selected" : ""} aria-pressed={platform === item} onClick={() => setPlatform(item)}>{item === "mac" ? "macOS" : item === "windows" ? "Windows" : "Linux"}</button>)}</div>{platform === "mac" ? <div className="platform-content"><div className="platform-icon"><Monitor size={29}/></div><h3>The full studio. On your Mac.</h3><p>Native screen recording, precise editing, local effects and your AI co-pilot.</p>{config.macDownloadUrl ? <a className="button button-dark" href={config.macDownloadUrl}>Download for Mac <Download size={17}/></a> : <a className="button button-dark" href="https://github.com/stevenchengxy/focus-studio/releases" target="_blank" rel="noreferrer">View Mac releases <ArrowUpRight size={17}/></a>}<small>macOS 15+ · Apple silicon & Intel<br/>Preview build. See installation notes before opening.</small><a className="text-link" href="/help#installation">Installation notes <ArrowUpRight size={13}/></a></div> : <div className="platform-content"><div className="platform-icon mint"><Monitor size={29}/></div><h3>Meet Browser Studio.</h3><p>A lighter companion for {platform === "windows" ? "Windows" : "Linux"}. Work with video in your browser, without a desktop installation.</p><a className="button button-dark" href="/studio">Open Browser Studio <ArrowUpRight size={17}/></a><small>Beta · A modern browser is required.<br/>Native {platform === "windows" ? "Windows" : "Linux"} app is not available yet.</small></div>}</div></dialog>
-      <dialog className="video-dialog" ref={videoDialogRef} onCancel={() => setVideoOpen(false)} onClick={(event) => {if(event.target === event.currentTarget) setVideoOpen(false);}}><div className="video-dialog-surface"><div className="video-dialog-header"><span><Focus size={18}/> Focus Studio / effect reel</span><button className="dialog-close" aria-label="Close video" onClick={() => setVideoOpen(false)}><X size={20}/></button></div><video ref={videoRef} src={config.demoVideoUrl || "/media/focus-studio-demo.mp4"} controls playsInline preload="none" poster="/media/focus-studio-demo.jpg">Your browser does not support this video. <a href="/media/focus-studio-demo.mp4">Download the effect reel.</a></video><p>Actual renderer output using illustrative demo footage.</p></div></dialog>
-    </div>
-  );
+        <ProductVideo motion={motion}/>
+        <div className="hero-footnote"><span><Command size={14}/>{t("Crafted for Mac", "为 Mac 精心打造")}</span><span><Code2 size={15}/>{t("Works with Codex", "支持 Codex")}</span><a href="/community">{t("Made with Focus", "发现社区作品")} <ArrowUpRight size={14}/></a></div>
+        <div className={design.focusThread} aria-hidden="true" data-motion-section><span/><div><i/></div><Focus size={16} strokeWidth={1}/><div><i/></div><span/></div>
+      </section>
+      <section className="possibilities section-wrap" id="possibilities">
+        <div className="section-heading" data-reveal><div><h2>{t("Make the ordinary", "让平凡的操作")}<br/><span className="serif-word">{t("worth a second look.", "值得再看一眼。")}</span></h2></div></div>
+        <div className="feature-editorial" data-reveal><div className="feature-art product-feature"><ProductVideo motion={motion} compact src="/media/focus-detail-lift.mp4" poster="/media/focus-detail-lift.jpg"/></div><div className="feature-copy"><span className="step-index">{t("01 / THE CAMERA", "01 / 镜头")}</span><h3>{t("A natural eye", "让视线自然聚焦")}<br/>{t("for the important bit.", "在重要的地方。")}</h3><p>{t("Smooth zooms. A spotlight on the details. A little depth when it matters.", "流畅缩放，局部强调，细节恰到好处。")}</p><div className="feature-tags"><span>{t("Smooth zoom", "平滑缩放")}</span><span>{t("Region effects", "局部特效")}</span><span>{t("Cursor polish", "鼠标优化")}</span></div></div></div>
+        <div className="feature-editorial reverse" data-reveal><div className="feature-art product-feature editor-detail" data-motion-section><div className="editor-detail-window"><img src="/media/focus-studio-editor.jpg" alt={t("Focus Studio timeline with editable zoom, local emphasis and video tracks", "Focus Studio 的缩放、局部特效和视频编辑轨道")} loading="lazy" decoding="async"/></div></div><div className="feature-copy"><span className="step-index">{t("02 / THE EDIT", "02 / 剪辑")}</span><h3>{t("Find your rhythm.", "找到节奏。")}<br/>{t("Leave the waiting out.", "剪掉等待。")}</h3><p>{t("Trim, arrange and fine-tune. Undo whenever you need to.", "裁剪、排序、精细调整。随时撤销，放心尝试。")}</p><div className="feature-tags"><span>{t("Frame-level control", "逐帧控制")}</span><span>{t("Transitions", "转场特效")}</span><span>{t("Undo & redo", "撤销与重做")}</span></div></div></div>
+      </section>
+      <section className="editor-proof section-wrap" aria-labelledby="editor-proof-title" data-reveal><h2 id="editor-proof-title">{t("Make every frame ", "每一帧，都有")}<span className="serif-word">{t("yours.", "你的想法。")}</span></h2><div className={design.editorStage}><div className={design.editorContours} aria-hidden="true"/><figure className="editor-proof-stage"><img loading="lazy" decoding="async" src="/media/focus-studio-editor.jpg" alt={t("The Focus Studio Mac editor with a product preview, effect timeline and editing controls", "Focus Studio Mac 编辑器的产品预览、特效时间轴与编辑面板")}/></figure></div></section>
+      <section className="ai-section" id="workflow"><div className="section-wrap ai-inner"><div className="ai-copy" data-reveal><h2>{t("Meet your", "认识你的")}<br/><span className="serif-word">{t("demo co-pilot.", "Demo 创作搭档。")}</span></h2><p>{t("Record and edit with Codex. Keep the final say.", "让 Codex 协助录制与剪辑，创作始终由你决定。")}</p><a href="/help#codex" className="text-link">{t("How the connection works", "了解如何连接")} <ArrowUpRight size={17}/></a></div><figure className={design.assistantProof} data-reveal><img src={t("/media/focus-assistant-en.png", "/media/focus-assistant-zh.png")} alt={t("The Focus Studio AI assistant, connected to Codex, with recording, editing and video creation actions", "Focus Studio AI 助手，已连接 Codex，提供录制、剪辑和视频生成入口")} width="1440" height="1440" loading="lazy" decoding="async"/></figure></div></section>
+      <section className="film-section section-wrap" aria-labelledby="film-title" data-reveal><div className="film-copy"><h2 id="film-title">{t("A closer look", "近一点，")}<br/>{t("at ", "看见 ")}<span className="serif-word">Focus.</span></h2><button className="text-link" onClick={() => setVideoOpen(true)}>{t("Play the effect reel", "播放特效演示")} <CirclePlay size={19}/></button></div><button className="film-poster" onClick={() => setVideoOpen(true)} aria-label={t("Play Focus Studio effect reel", "播放 Focus Studio 特效演示")}><img src="/media/focus-studio-demo-flat.jpg" alt={t("Focus Studio effect preview", "Focus Studio 特效预览")} onError={event => { event.currentTarget.style.display = "none"; }}/><div className="film-fallback"><Focus size={100} strokeWidth={0.75}/><span>{t("Small details.", "细节虽小。")}<br/>{t("Big difference.", "效果不同。")}</span></div><span className="film-play"><Play size={25} fill="currentColor"/></span><span className="film-caption"><span>{t("FOCUS STUDIO / EFFECT REEL", "FOCUS STUDIO / 特效演示")}</span><span>{t("Watch", "观看")} <ArrowUpRight size={14}/></span></span></button></section>
+      <section className={community.section} id="community"><div className={`section-wrap ${community.inner}`} data-reveal><div><span className="step-index">{t("MADE WITH FOCUS", "用 FOCUS 创作")}</span><h2>{t("Good ideas deserve", "让好作品")}<br/><span className="serif-word">{t("an audience.", "被看见。")}</span></h2><p>{t("Share a demo. Discover a different way to tell your story.", "分享你的 Demo，也发现不一样的表达。")}</p></div><div className={community.links}><a href="/community"><span><Focus size={20}/>{t("Explore the community", "浏览作品社区")}</span><ArrowUpRight size={22}/></a><a href="/community/new"><span><Plus size={20}/>{t("Share your work", "分享我的作品")}</span><ArrowUpRight size={22}/></a></div></div></section>
+      <section className="faq-section section-wrap"><div><h2>{t("Good questions.", "你可能想知道。")}</h2></div><div className="faq-list">
+        <details><summary>{t("Is Focus Studio free?", "Focus Studio 免费吗？")}<Plus size={17}/></summary><p>{t("Recording, editing and exporting are currently free. Optional AI services use your own provider account and may charge separately.", "目前录制、剪辑和导出全部免费。可选的 AI 服务使用你自己的服务商账户，可能产生单独费用。")}</p></details>
+        <details><summary>{t("Do I need AI to use it?", "一定要连接 AI 才能使用吗？")}<Plus size={17}/></summary><p>{t("No. Record and edit directly in the Mac app. Connect Codex when you want help recording a workflow or refining an edit.", "不需要。你可以直接使用 Mac 软件录制和编辑；需要协助操作、录制或优化时，再连接 Codex。")}</p></details>
+        <details><summary>{t("Can I use Windows or Linux?", "支持 Windows 和 Linux 吗？")}<Plus size={17}/></summary><p>{t("Installable desktop previews offer recording and essential edits. They require internet access and do not yet include the full Mac editor or native MCP. The Mac app requires macOS 15+.", "可下载安装桌面预览版，进行录制和基础编辑。预览版需要联网，暂不包含完整 Mac 编辑器和原生 MCP。Mac 版要求 macOS 15 或更高版本。")}</p><button className="text-link" onClick={() => {setPlatform("windows");setDownloadOpen(true);}}>{t("See downloads", "查看下载选项")} <ArrowUpRight size={14}/></button></details>
+        <details><summary>{t("Where do my recordings go?", "我的录屏会保存在哪里？")}<Plus size={17}/></summary><p>{t("Mac projects stay on your device. Sharing to the community is your choice. Content you send to an AI provider is handled under that provider’s policies.", "Mac 项目保存在本机。是否分享到社区由你决定；发送给 AI 服务商的内容遵循该服务商的数据政策。")}</p><a href="/privacy" className="text-link">{t("Privacy overview", "隐私说明")} <ArrowUpRight size={14}/></a></details>
+      </div></section>
+      <section className="closing-section section-wrap" data-reveal data-motion-section><div className={design.closingArt}><FocusSculpture variant="closing" size="var(--focus-sculpture-size)"/></div><h2>{t("Now give it", "现在，给你的产品")}<br/><span className="serif-word">{t("a proper introduction.", "一次精彩亮相。")}</span></h2><button className="button button-dark" onClick={() => setDownloadOpen(true)}>{t("Download Focus Studio", "免费下载 Focus Studio")} <ArrowDown size={18}/></button><span className="closing-note">{t("Create freely. Make it yours.", "自由创作，让想法成片。")}</span></section>
+    </main>
+    <footer className="site-footer section-wrap"><div className="footer-top"><Brand/><div className="footer-links"><a href="#possibilities">{t("Explore", "功能")}</a><a href="/community">{t("Community", "作品社区")}</a><a href="/help">{t("Getting started", "快速上手")}</a><a href="/privacy">{t("Privacy", "隐私")}</a><a href="https://github.com/stevenchengxy/focus-studio" target="_blank" rel="noreferrer">GitHub <ArrowUpRight size={12}/></a></div></div><div className="footer-bottom"><span>© {new Date().getFullYear()} Focus Studio.</span><button onClick={() => window.scrollTo({top:0,behavior: motion ? "smooth" : "instant"})}>{t("Back to top", "返回顶部")} <ArrowUpRight size={13}/></button></div></footer>
+    <dialog className="download-dialog" ref={dialogRef} aria-labelledby="download-title" onCancel={() => setDownloadOpen(false)} onClick={event => {if(event.target===event.currentTarget)setDownloadOpen(false);}}><div className="dialog-surface"><button className="dialog-close" aria-label={t("Close download options", "关闭下载选项")} onClick={() => setDownloadOpen(false)}><X size={20}/></button><span className="eyebrow">{t("FREE DOWNLOAD", "免费下载")}</span><h2 id="download-title">{t("A good place", "精彩作品，")}<br/>{t("to start.", "从这里开始。")}</h2><div className="platform-tabs" role="group" aria-label={t("Choose your platform", "选择操作系统")}>{(["mac","windows","linux"] as Platform[]).map(item=><button key={item} className={platform===item?"selected":""} aria-pressed={platform===item} onClick={()=>setPlatform(item)}>{item==="mac"?"macOS":item==="windows"?"Windows":"Linux"}</button>)}</div><div className="platform-content"><div className={`platform-icon${platform!=="mac"?" mint":""}`}><Monitor size={29}/></div><h3>{platform==="mac"?t("The full studio. On your Mac.", "完整创作体验，在你的 Mac 上。"):t("A desktop preview, ready to explore.", "桌面预览版，邀你体验。")}</h3><p>{platform==="mac"?t("Native recording, precise edits and your AI co-pilot.", "原生录屏、精细剪辑，还有你的 AI 搭档。"):t("Screen recording and essential edits. Internet required.", "支持录屏与基础编辑，需要联网。")}</p><a className="button button-dark" href={desktopDownloadUrl}>{t("Download for", "下载")} {platform==="mac"?"Mac":platform==="windows"?"Windows":"Linux"} · {INSTALLERS[platform].format}<Download size={17}/></a><small>{currentRelease&&<>v{currentRelease.version} · </>}{platform==="mac"?t("macOS 15+ · Apple silicon & Intel", "macOS 15+ · Apple 芯片与 Intel"):platform==="windows"?"Windows x64":"Linux x64 · AppImage"}<br/>{platform==="mac"?t("Preview build · Check installation notes", "预览版 · 请查看安装说明"):t("Preview · Full Mac editor and native MCP are not included", "预览版 · 暂不包含完整 Mac 编辑器和原生 MCP")}</small><a className="text-link" href={platform==="mac"?"/help#installation":"/help#desktop"}>{t("Installation notes", "安装说明")}<ArrowUpRight size={13}/></a></div>{currentRelease&&<a className="text-link" href={currentRelease.release_url} target="_blank" rel="noreferrer">{t("Release notes", "版本说明")}<ArrowUpRight size={13}/></a>}</div></dialog>
+    <dialog className="video-dialog" ref={videoDialogRef} aria-label={t("Focus Studio effect reel", "Focus Studio 特效演示")} onCancel={()=>setVideoOpen(false)} onClick={event=>{if(event.target===event.currentTarget)setVideoOpen(false);}}><div className="video-dialog-surface"><div className="video-dialog-header"><span><Focus size={18}/>{t("Focus Studio / effect reel", "Focus Studio / 特效演示")}</span><button className="dialog-close" aria-label={t("Close video", "关闭视频")} onClick={()=>setVideoOpen(false)}><X size={20}/></button></div><video ref={videoRef} src={demoVideoUrl||"/media/focus-studio-demo-flat.mp4"} controls playsInline preload="none" poster="/media/focus-studio-demo-flat.jpg">{t("Your browser does not support this video.", "你的浏览器不支持此视频。")}<a href="/media/focus-studio-demo-flat.mp4">{t("Download the effect reel.", "下载演示视频。")}</a></video><p>{t("Actual renderer output using illustrative demo footage.", "使用示例内容展示软件实际渲染效果。")}</p></div></dialog>
+  </div>;
 }

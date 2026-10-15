@@ -88,6 +88,7 @@ struct EditorInspectorView: View {
     let onSaveMediaToShared: (UUID) -> Void
     let isImportingMedia: Bool
     let onSelectRegion: (UUID?) -> Void
+    let onPausePlayback: () -> Void
     @State private var isGeneratingChapters = false
     @State private var captionsMessage: String?
     @State private var trimStartDraft = 0.0
@@ -121,7 +122,7 @@ struct EditorInspectorView: View {
         VStack(alignment: .leading, spacing: 8) {
             Label("No automatic zoom cues", systemImage: "exclamationmark.triangle.fill")
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(StudioTheme.yellow)
+                .foregroundStyle(StudioTheme.warning)
             Text("No clicks or typing were captured inside the visible video. Browser automation may not send system mouse events. For manual recording, check Accessibility and Input Monitoring.")
                 .font(.system(size: 10))
                 .foregroundStyle(StudioTheme.secondaryText)
@@ -908,7 +909,7 @@ struct EditorInspectorView: View {
             }
         } else {
             Label("Video timeline unavailable", systemImage: "exclamationmark.triangle")
-                .foregroundStyle(StudioTheme.yellow)
+                .foregroundStyle(StudioTheme.warning)
         }
     }
 
@@ -937,11 +938,13 @@ struct EditorInspectorView: View {
                 }
             }
 
+            EditorVoiceoverSection(project: $project, insertionTime: { playbackClock.time }, pausePlayback: onPausePlayback)
+
             if project.settings.productDemoAudio != nil {
                 InspectorSection("Captured audio") {
                     LabeledSlider(
                         value: audioBinding(\.sourceAudioVolume),
-                        range: 0...1,
+                        range: 0...2,
                         label: "Original",
                         suffix: "%",
                         multiplier: 100,
@@ -982,7 +985,7 @@ struct EditorInspectorView: View {
                                 }
                                 .padding(.horizontal, 8)
                                 .frame(height: 38)
-                                .background(Color.white.opacity(isSelectedMusic(asset) ? 0.07 : 0.025))
+                                .background((isSelectedMusic(asset) ? StudioTheme.controlPressed : StudioTheme.inset))
                                 .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                             }
                             .buttonStyle(.plain)
@@ -1409,7 +1412,7 @@ struct EditorInspectorView: View {
 
 // MARK: - Captions
 
-private let chapterTint = Color(red: 0.13, green: 0.66, blue: 0.80)
+private let chapterTint = StudioTheme.cyanTrack
 
 extension EditorInspectorView {
     /// Chapters in playback order; numbering matches the timeline, SRT and video.
@@ -1586,7 +1589,7 @@ extension EditorInspectorView {
         }
         .padding(.horizontal, 7)
         .frame(height: 36)
-        .background(Color.white.opacity(isSelected ? 0.08 : 0.025))
+        .background((isSelected ? StudioTheme.controlPressed : StudioTheme.inset))
         .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -1789,7 +1792,7 @@ private struct BackgroundAssetSwatch: View {
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(Color.white.opacity(0.05))
+                .fill(StudioTheme.inset)
             if let thumbnail {
                 Image(nsImage: thumbnail)
                     .resizable()
@@ -1804,7 +1807,7 @@ private struct BackgroundAssetSwatch: View {
         .overlay {
             RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .stroke(
-                    isSelected ? Color.white : Color.white.opacity(0.13),
+                    isSelected ? StudioTheme.purple : StudioTheme.line,
                     lineWidth: isSelected ? 2 : 1
                 )
         }
@@ -1832,7 +1835,7 @@ private struct WallpaperSwatch: View {
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(Color.white.opacity(0.05))
+                .fill(StudioTheme.inset)
             if let thumbnail {
                 Image(nsImage: thumbnail)
                     .resizable()
@@ -1847,7 +1850,7 @@ private struct WallpaperSwatch: View {
         .overlay {
             RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .stroke(
-                    isSelected ? Color.white : Color.white.opacity(0.13),
+                    isSelected ? StudioTheme.purple : StudioTheme.line,
                     lineWidth: isSelected ? 2 : 1
                 )
         }
@@ -1909,7 +1912,7 @@ private struct CursorStyleSwatch: View {
         .overlay {
             RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .stroke(
-                    isSelected ? Color.white : Color.white.opacity(0.13),
+                    isSelected ? StudioTheme.purple : StudioTheme.line,
                     lineWidth: isSelected ? 2 : 1
                 )
         }
@@ -1962,7 +1965,7 @@ private struct BackgroundPresetSwatch: View {
             .overlay {
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .stroke(
-                        isSelected ? Color.white : Color.white.opacity(0.13),
+                        isSelected ? StudioTheme.purple : StudioTheme.line,
                         lineWidth: isSelected ? 2 : 1
                     )
             }
@@ -2013,7 +2016,7 @@ private struct InspectorDisclosureSection<Content: View>: View {
         }
         .tint(StudioTheme.secondaryText)
         .padding(13)
-        .background(Color.white.opacity(0.025))
+        .background(StudioTheme.inset)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -2041,7 +2044,7 @@ private struct InspectorSection<Content: View>: View {
             content
         }
         .padding(13)
-        .background(Color.white.opacity(0.025))
+        .background(StudioTheme.inset)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)

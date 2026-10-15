@@ -8,11 +8,13 @@ mkdir -p "$PROJECT_DIR/.artifacts"
 ICON_STAGE="$(mktemp -d "$PROJECT_DIR/.artifacts/icon-build.XXXXXX")"
 ICONSET="$ICON_STAGE/FocusStudio.iconset"
 mkdir -p "$ICONSET"
-# Resampling is only packaging: the generated master is preserved untouched.
+# Package the committed raster export. Regenerate it from the vector master with
+# `node scripts/generate-brand-assets.cjs` after changing the design.
 for point_size in 16 32 128 256 512; do
     sips -z "$point_size" "$point_size" "$SOURCE_ICON" --out "$ICONSET/icon_${point_size}x${point_size}.png" >/dev/null
     pixel_size=$((point_size * 2))
     sips -z "$pixel_size" "$pixel_size" "$SOURCE_ICON" --out "$ICONSET/icon_${point_size}x${point_size}@2x.png" >/dev/null
 done
 iconutil -c icns "$ICONSET" -o "$PROJECT_DIR/Resources/FocusStudio.icns"
-echo "Built Resources/FocusStudio.icns from the preserved generated master."
+rm -rf -- "$ICON_STAGE"
+echo "Built Resources/FocusStudio.icns from the vector-derived brand master."

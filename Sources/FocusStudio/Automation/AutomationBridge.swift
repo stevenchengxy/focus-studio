@@ -134,14 +134,24 @@ final class AutomationBridge {
         let includesImage = spec.returnsImage
         let consent = audioConsentHandler(clientName: clientName, programName: programName, stillAllowed: stillAllowed)
         let microphone = microphoneAccessHandler(stillAllowed: stillAllowed)
+        let speechConsent: @MainActor @Sendable (String) async -> Bool = { [model] summary in
+            let caller = [clientName, programName].compactMap { $0 }.joined(separator: " · ")
+            guard await SpeechGenerationConsent.ask(summary: summary, caller: caller) else { return false }
+            return stillAllowed?() == nil && model.automationNavigationRefusal == nil && !Task.isCancelled
+        }
         return await jobs.run(tool: spec.name, clientName: clientName, arrivedAt: arrived, detaches: spec.detaches, progress: progress) { report in
             var context = prepared.context
             context.numericProgress = report
             context.recordingAudioConsent = consent
             context.microphoneAccess = microphone
+            context.confirmSpeechGeneration = speechConsent
             do {
                 let result = try await tool.run(arguments: prepared.arguments.values, context: context, progress: { _ in })
                 return MCPToolCallResult(result, includesImage: includesImage)
+            } catch let failure as AIToolFailure where spec.name == "generate_voiceover" {
+                // Preserve possible paid usage and no-retry guidance even when
+                // the surrounding call was cancelled during synthesis.
+                return .failure(failure)
             } catch {
                 // A tool may wrap the cancellation it was interrupted by.
                 if error is CancellationError || Task.isCancelled { throw CancellationError() }

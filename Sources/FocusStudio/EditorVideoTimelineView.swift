@@ -153,9 +153,9 @@ struct EditorVideoTimelineView: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(Color.white.opacity(0.035))
+                .fill(StudioTheme.inset)
             Rectangle()
-                .fill(Color.white.opacity(0.03))
+                .fill(StudioTheme.inset)
                 .frame(height: 17)
                 .frame(maxHeight: .infinity, alignment: .top)
                 .allowsHitTesting(false)
@@ -246,12 +246,12 @@ struct EditorVideoTimelineView: View {
         } label: {
             Image(systemName: transitionSymbol(transition?.preset ?? .cut))
                 .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(.white)
+                .foregroundStyle(transition?.preset == .cut || transition == nil ? StudioTheme.text : Color.white)
                 .frame(width: 20, height: 16)
                 .background(transition?.preset == .cut || transition == nil ? StudioTheme.panelRaised : StudioTheme.purple,
                             in: RoundedRectangle(cornerRadius: 5))
                 .overlay(RoundedRectangle(cornerRadius: 5)
-                    .strokeBorder(.white.opacity(isHovered ? 0.95 : 0.55), lineWidth: 1))
+                    .strokeBorder(StudioTheme.playhead.opacity(isHovered ? 0.7 : 0.25), lineWidth: 1))
         }
         .menuStyle(.borderlessButton)
         .frame(width: 22, height: 17)

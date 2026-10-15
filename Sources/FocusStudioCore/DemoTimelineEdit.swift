@@ -177,6 +177,16 @@ public struct DemoTimelineEdit: Sendable {
                 return copy
             }
         }.sorted { $0.start < $1.start }
+        if var audio = result.settings.productDemoAudio, let voices = audio.voiceovers {
+            audio.voiceovers = voices.flatMap { voice in
+                var output = 0.0
+                return ranges.enumerated().compactMap { index, range in
+                    defer { output += range.duration }
+                    return voice.excerpt(keeping: range, movedTo: output, newID: index > 0)
+                }
+            }
+            result.settings.productDemoAudio = audio
+        }
         result.chapters = original.chapters?.flatMap { chapter in
             pieces(start: chapter.start, end: chapter.end).enumerated().map { index, piece in
                 var copy = chapter
@@ -260,6 +270,9 @@ public enum DemoPacingAnalyzer {
         var spans = times.map { DemoKeepRange(start: max(0, $0 - preRoll), end: min(project.duration, $0 + postRoll)) }
         spans += [.init(start: 0, end: min(project.duration, postRoll)), .init(start: max(0, project.duration - postRoll), end: project.duration)]
         spans += (project.chapters ?? []).filter(\.isEnabled).map { .init(start: max(0, $0.start), end: min(project.duration, $0.end)) }
+        spans += (project.settings.resolvedProductDemoAudio.voiceovers ?? [])
+            .filter { $0.isEnabled && $0.volume > 0 && $0.timelineStart < project.duration }
+            .map { .init(start: max(0, $0.timelineStart), end: min(project.duration, $0.timelineEnd)) }
         spans.sort { $0.start < $1.start }
         var merged: [DemoKeepRange] = []
         for span in spans where span.end > span.start {

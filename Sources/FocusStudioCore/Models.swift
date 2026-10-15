@@ -566,6 +566,10 @@ public struct ProductDemoAudioSettings: Codable, Hashable, Sendable {
     public var backgroundMusicVolume: Double
     public var backgroundMusicFadeIn: Double
     public var backgroundMusicFadeOut: Double
+    /// Optional for older project compatibility. Speech is never looped.
+    public var voiceovers: [VoiceoverClip]?
+    /// Music gain multiplier during speech; nil disables automatic ducking.
+    public var voiceoverDuckingLevel: Double?
 
     public var clickSoundEnabled: Bool
     public var clickSoundVolume: Double
@@ -588,8 +592,12 @@ public struct ProductDemoAudioSettings: Codable, Hashable, Sendable {
         clickSoundPath: String? = nil,
         zoomTransitionSoundEnabled: Bool = false,
         zoomTransitionSoundVolume: Double = 0.28,
-        zoomTransitionSoundPath: String? = nil
+        zoomTransitionSoundPath: String? = nil,
+        voiceovers: [VoiceoverClip]? = nil,
+        voiceoverDuckingLevel: Double? = nil
     ) {
+        self.voiceovers = voiceovers
+        self.voiceoverDuckingLevel = voiceoverDuckingLevel
         self.sourceAudioVolume = sourceAudioVolume
         self.backgroundMusicPath = backgroundMusicPath
         self.backgroundMusicVolume = backgroundMusicVolume

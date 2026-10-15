@@ -193,7 +193,7 @@ private final class AudioConsentPanelController: NSObject, NSWindowDelegate {
                 withoutSound: { [weak self] in self?.finish(.withoutSound) },
                 cancel: { [weak self] in self?.finish(.cancel) }
             )
-            .preferredColorScheme(.dark)
+            .studioAppearance()
         }
         let hosting = NSHostingView(rootView: prompt)
         panel.contentView = hosting
@@ -256,7 +256,7 @@ struct AutomationAudioConsentPromptView: View {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: request.audio.microphone ? "mic.fill" : "speaker.wave.2.fill")
                     .font(.system(size: 24))
-                    .foregroundStyle(StudioTheme.yellow)
+                    .foregroundStyle(StudioTheme.warning)
                     .frame(width: 28)
                 VStack(alignment: .leading, spacing: 6) {
                     Text(headline)

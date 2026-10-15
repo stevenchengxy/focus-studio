@@ -1431,3 +1431,123 @@
 "Finish a saved render without using another export." = "Finish a saved render without using another export.";
 "Your rendered video is safe. Open Settings → Account → Recover export to finish without using another export." = "Your rendered video is safe. Open Settings → Account → Recover export to finish without using another export.";
 "The saved export file is missing. Your source recording has not changed." = "The saved export file is missing. Your source recording has not changed.";
+
+/* Voiceover editing */
+"Voiceover" = "Voiceover";
+"Import voiceover" = "Import voiceover";
+"Voiceover clip" = "Voiceover clip";
+"Add a recorded explanation or an audio file." = "Add a recorded explanation or an audio file.";
+"Timeline start" = "Timeline start";
+"Volume %" = "Volume %";
+"Restore full audio" = "Restore full audio";
+"Remove voiceover" = "Remove voiceover";
+"Audio beyond the video end is not played." = "Audio beyond the video end is not played.";
+"Lower music during voiceover" = "Lower music during voiceover";
+"Music under voice" = "Music under voice";
+"Check the audio times, volume and fades." = "Check the audio times, volume and fades.";
+"Apply" = "Apply";
+
+/* Voiceover recording */
+"Audio mix" = "Audio mix";
+"Record voiceover" = "Record voiceover";
+"Microphone level" = "Microphone level";
+"Save voiceover" = "Save voiceover";
+"Cancel voiceover" = "Cancel voiceover";
+"Waiting for microphone access…" = "Waiting for microphone access…";
+"Saving voiceover…" = "Saving voiceover…";
+"Record from the selected frame. Use headphones when playing the preview." = "Record from the selected frame. Use headphones when playing the preview.";
+"Allow microphone access in System Settings to record voiceover." = "Allow microphone access in System Settings to record voiceover.";
+"The microphone could not start. Check the input device and try again." = "The microphone could not start. Check the input device and try again.";
+"Record a little longer before saving." = "Record a little longer before saving.";
+
+/* App appearance */
+"Light appearance" = "Light";
+"Dark appearance" = "Dark";
+"Change appearance" = "Change appearance";
+
+/* AI narration gateway */
+"AI service" = "AI service";
+"Text and video" = "Text and video";
+"AI narration" = "AI narration";
+"Voice provider" = "Voice provider";
+"Narration API key" = "Narration API key";
+"Optional for a local service" = "Optional for a local service";
+"Narration model" = "Narration model";
+"Voice" = "Voice";
+"Narration voice" = "Narration voice";
+"Custom model ID" = "Custom model ID";
+"Voice ID" = "Voice ID";
+"Custom voice ID" = "Custom voice ID";
+"Check connection" = "Check connection";
+"Could not remove the saved key." = "Could not remove the saved key.";
+"Could not save the key. Please try again." = "Could not save the key. Please try again.";
+"Checking credentials without generating audio…" = "Checking credentials without generating audio…";
+"Checks your key without generating audio." = "Checks your key without generating audio.";
+"Codex can turn your script into narration and captions. Generation asks for confirmation before using paid credits." = "Codex can turn your script into narration and captions. Generation asks for confirmation before using paid credits.";
+"Key verified. Audio generation has not been tested." = "Key verified. Audio generation has not been tested.";
+"Service reachable. Audio generation has not been tested." = "Service reachable. Audio generation has not been tested.";
+"Settings valid. This service has no model-list check; audio generation has not been tested." = "Settings valid. This service has no model-list check; audio generation has not been tested.";
+"Settings valid. This service has no compatible model list; audio generation has not been tested." = "Settings valid. This service has no compatible model list; audio generation has not been tested.";
+"Unexpected response: Add a narration API key in AI models → AI narration." = "Unexpected response: Add a narration API key in AI models → AI narration.";
+"Unexpected response: The narration API key contains invalid characters." = "Unexpected response: The narration API key contains invalid characters.";
+"Unexpected response: The voice service did not return an HTTP response." = "Unexpected response: The voice service did not return an HTTP response.";
+"Unexpected response: The voice service returned an invalid list response." = "Unexpected response: The voice service returned an invalid list response.";
+"Unexpected response: MiniMax rejected the voice-list check. Verify the key and API region." = "Unexpected response: MiniMax rejected the voice-list check. Verify the key and API region.";
+"Unexpected response: OpenAI did not return a model list." = "Unexpected response: OpenAI did not return a model list.";
+"Use an HTTPS narration base URL without credentials or query parameters. Local compatible servers may use HTTP on loopback." = "Use an HTTPS narration base URL without credentials or query parameters. Local compatible servers may use HTTP on loopback.";
+"Choose a valid narration model in Settings › AI models." = "Choose a valid narration model in Settings › AI models.";
+"Choose a valid narration voice in Settings › AI models." = "Choose a valid narration voice in Settings › AI models.";
+"Generate AI narration" = "Generate AI narration";
+"Provider charges may apply. Nothing is generated until you confirm." = "Provider charges may apply. Nothing is generated until you confirm.";
+"Generate narration" = "Generate narration";
+
+/* App release updates */
+"Check for Updates…" = "Check for Updates…";
+"Software updates" = "Software updates";
+"Download update" = "Download update";
+"Release notes" = "Release notes";
+"Requires macOS %@ or later." = "Requires macOS %@ or later.";
+"Update channel" = "Update channel";
+"Stable releases" = "Stable releases";
+"Preview releases" = "Preview releases";
+"Check automatically once a day" = "Check automatically once a day";
+"Last checked" = "Last checked";
+"Updates open in your browser. Install when you are ready; your projects and settings stay in place." = "Updates open in your browser. Install when you are ready; your projects and settings stay in place.";
+"Check for a newer version." = "Check for a newer version.";
+"Checking for updates…" = "Checking for updates…";
+"You're up to date." = "You're up to date.";
+"No release is available in this channel yet." = "No release is available in this channel yet.";
+"Focus Studio %@ is available." = "Focus Studio %@ is available.";
+"Dismiss update notice" = "Dismiss update notice";
+"Installation and permissions" = "Installation and permissions";
+"The update service returned invalid release information." = "The update service returned invalid release information.";
+"This app's version could not be checked." = "This app's version could not be checked.";
+"Could not check for updates. Check your connection and try again." = "Could not check for updates. Check your connection and try again.";
+"The update service returned HTTP 400." = "The update service returned HTTP 400.";
+"The update service returned HTTP 401." = "The update service returned HTTP 401.";
+"The update service returned HTTP 403." = "The update service returned HTTP 403.";
+"The update service returned HTTP 429." = "The update service returned HTTP 429.";
+"The update service returned HTTP 500." = "The update service returned HTTP 500.";
+"The update service returned HTTP 502." = "The update service returned HTTP 502.";
+"The update service returned HTTP 503." = "The update service returned HTTP 503.";
+"The update service returned HTTP 504." = "The update service returned HTTP 504.";
+"The last update check did not complete. Please try again." = "The last update check did not complete. Please try again.";
+
+"Free access" = "Free access";
+"Record, edit and export without signing in." = "Record, edit and export without signing in.";
+"Unlimited local exports" = "Unlimited local exports";
+"Your projects stay on this Mac. No account or connection is needed to export." = "Your projects stay on this Mac. No account or connection is needed to export.";
+"AI providers may charge separately. Generation always asks for confirmation." = "AI providers may charge separately. Generation always asks for confirmation.";
+"Visit the community" = "Visit the community";
+"Save a previously rendered video to your Mac." = "Save a previously rendered video to your Mac.";
+
+/* Compact assistant workspace */
+"Record a website" = "Record a website";
+"Plan a demo" = "Plan a demo";
+"Polish a recording" = "Polish a recording";
+"Create a video clip" = "Create a video clip";
+"Tools" = "Tools";
+"Models, voice replies and drafting tools" = "Models, voice replies and drafting tools";
+"Set up video model" = "Set up video model";
+"Describe your video, or paste a link…" = "Describe your video, or paste a link…";
+"Codex connected · Connection settings" = "Codex connected · Connection settings";

@@ -35,6 +35,14 @@ enum FocusStudioE2E {
                 try await validateRecordedProject(at: URL(fileURLWithPath: path), outputDirectory: outputDirectory)
                 return
             }
+            if CommandLine.arguments.contains("--voiceover-only") {
+                var spec = SyntheticVideoSpecification(); spec.duration = 8; spec.includesAudio = false
+                let source = outputDirectory.appendingPathComponent("voiceover-silent-source.mp4")
+                try? FileManager.default.removeItem(at: source)
+                try await SyntheticGridVideoWriter.write(spec, to: source)
+                try await VoiceoverValidation.run(sourceURL: source, outputDirectory: outputDirectory)
+                return
+            }
             try runCoreSelfChecks()
             #if DEBUG
             try await runEventMonitorSelfCheck()

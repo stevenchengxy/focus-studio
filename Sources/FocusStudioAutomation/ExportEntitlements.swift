@@ -1,6 +1,13 @@
 import FocusStudioCore
 import Foundation
 
+/// Product access is temporarily free. This never changes third-party AI billing
+/// or the separate approval required by paid generation tools.
+public enum ProductAccessPolicy {
+    public static let requiresExportAccount = false
+    public static let paymentsEnabled = false
+}
+
 public struct ExportReservation: Sendable, Equatable {
     public let id: String
     public init(id: String) { self.id = id }

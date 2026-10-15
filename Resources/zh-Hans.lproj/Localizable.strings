@@ -1430,3 +1430,123 @@
 "Finish a saved render without using another export." = "继续保存已渲染的视频，不重复占用导出次数。";
 "Your rendered video is safe. Open Settings → Account → Recover export to finish without using another export." = "已渲染的视频已保留。请前往“设置 → 账户 → 恢复导出”继续保存，不重复占用导出次数。";
 "The saved export file is missing. Your source recording has not changed." = "未找到待恢复的视频，原始录屏未改动。";
+
+/* Voiceover editing */
+"Voiceover" = "旁白";
+"Import voiceover" = "导入旁白";
+"Voiceover clip" = "旁白片段";
+"Add a recorded explanation or an audio file." = "导入已录制的解说或音频文件。";
+"Timeline start" = "时间线位置";
+"Volume %" = "音量 %";
+"Restore full audio" = "还原完整音频";
+"Remove voiceover" = "移除旁白";
+"Audio beyond the video end is not played." = "超出视频结尾的音频不会播放。";
+"Lower music during voiceover" = "旁白时降低音乐";
+"Music under voice" = "旁白时音乐";
+"Check the audio times, volume and fades." = "请检查音频时间、音量及淡入淡出。";
+"Apply" = "应用";
+
+/* Voiceover recording */
+"Audio mix" = "声音混音";
+"Record voiceover" = "录制旁白";
+"Microphone level" = "麦克风电平";
+"Save voiceover" = "保存旁白";
+"Cancel voiceover" = "取消旁白";
+"Waiting for microphone access…" = "等待麦克风权限…";
+"Saving voiceover…" = "正在保存旁白…";
+"Record from the selected frame. Use headphones when playing the preview." = "从所选帧录制旁白。播放预览时建议戴耳机。";
+"Allow microphone access in System Settings to record voiceover." = "请在系统设置中允许麦克风访问，再录制旁白。";
+"The microphone could not start. Check the input device and try again." = "麦克风无法启动，请检查输入设备后重试。";
+"Record a little longer before saving." = "录制时间太短，请再录制一会儿。";
+
+/* App appearance */
+"Light appearance" = "浅色";
+"Dark appearance" = "深色";
+"Change appearance" = "切换外观";
+
+/* AI narration gateway */
+"AI service" = "AI 服务";
+"Text and video" = "文本与视频";
+"AI narration" = "AI 旁白";
+"Voice provider" = "语音服务";
+"Narration API key" = "旁白 API 密钥";
+"Optional for a local service" = "本地服务可留空";
+"Narration model" = "旁白模型";
+"Voice" = "音色";
+"Narration voice" = "旁白音色";
+"Custom model ID" = "自定义模型 ID";
+"Voice ID" = "音色 ID";
+"Custom voice ID" = "自定义音色 ID";
+"Check connection" = "检查连接";
+"Could not remove the saved key." = "无法移除已保存的密钥。";
+"Could not save the key. Please try again." = "密钥保存失败，请重试。";
+"Checking credentials without generating audio…" = "正在验证密钥，不生成音频…";
+"Checks your key without generating audio." = "仅检查密钥，不生成音频。";
+"Codex can turn your script into narration and captions. Generation asks for confirmation before using paid credits." = "让 Codex 为脚本配旁白和字幕。付费生成前会请你确认。";
+"Key verified. Audio generation has not been tested." = "密钥验证通过，尚未测试音频生成。";
+"Service reachable. Audio generation has not been tested." = "服务可访问，尚未测试音频生成。";
+"Settings valid. This service has no model-list check; audio generation has not been tested." = "配置有效；服务不支持模型列表检查，尚未测试音频生成。";
+"Settings valid. This service has no compatible model list; audio generation has not been tested." = "配置有效；服务未返回兼容的模型列表，尚未测试音频生成。";
+"Unexpected response: Add a narration API key in AI models → AI narration." = "请在“AI 模型 → AI 旁白”中添加旁白 API 密钥。";
+"Unexpected response: The narration API key contains invalid characters." = "旁白 API 密钥包含无效字符，请重新粘贴。";
+"Unexpected response: The voice service did not return an HTTP response." = "语音服务未返回有效响应。";
+"Unexpected response: The voice service returned an invalid list response." = "语音服务返回的列表格式无效。";
+"Unexpected response: MiniMax rejected the voice-list check. Verify the key and API region." = "MiniMax 音色列表检查失败，请确认密钥及 API 服务区域。";
+"Unexpected response: OpenAI did not return a model list." = "OpenAI 未返回模型列表。";
+"Use an HTTPS narration base URL without credentials or query parameters. Local compatible servers may use HTTP on loopback." = "请填写 HTTPS 语音服务地址，不含密钥或查询参数。本地兼容服务可使用 HTTP 回环地址。";
+"Choose a valid narration model in Settings › AI models." = "请在“设置 → AI 模型”中填写有效的旁白模型。";
+"Choose a valid narration voice in Settings › AI models." = "请在“设置 → AI 模型”中填写有效的旁白音色。";
+"Generate AI narration" = "生成 AI 旁白";
+"Provider charges may apply. Nothing is generated until you confirm." = "服务商可能收取费用，确认后才会开始生成。";
+"Generate narration" = "生成旁白";
+
+/* App release updates */
+"Check for Updates…" = "检查更新…";
+"Software updates" = "软件更新";
+"Download update" = "下载更新";
+"Release notes" = "更新说明";
+"Requires macOS %@ or later." = "需要 macOS %@ 或更新版本。";
+"Update channel" = "更新频道";
+"Stable releases" = "正式版";
+"Preview releases" = "预览版";
+"Check automatically once a day" = "每天自动检查一次";
+"Last checked" = "上次检查";
+"Updates open in your browser. Install when you are ready; your projects and settings stay in place." = "在浏览器中下载更新，方便时再安装。项目和设置会保留。";
+"Check for a newer version." = "检查是否有新版本。";
+"Checking for updates…" = "正在检查更新…";
+"You're up to date." = "当前已是最新版本。";
+"No release is available in this channel yet." = "此频道暂时没有可下载的版本。";
+"Focus Studio %@ is available." = "Focus Studio %@ 已发布。";
+"Dismiss update notice" = "稍后提醒";
+"Installation and permissions" = "安装与权限";
+"The update service returned invalid release information." = "更新服务返回的版本信息无效，请稍后重试。";
+"This app's version could not be checked." = "无法识别当前应用的版本。";
+"Could not check for updates. Check your connection and try again." = "检查更新失败，请确认网络连接后重试。";
+"The update service returned HTTP 400." = "更新服务暂时不可用（HTTP 400），请稍后重试。";
+"The update service returned HTTP 401." = "更新服务暂时不可用（HTTP 401），请稍后重试。";
+"The update service returned HTTP 403." = "更新服务暂时不可用（HTTP 403），请稍后重试。";
+"The update service returned HTTP 429." = "更新服务暂时不可用（HTTP 429），请稍后重试。";
+"The update service returned HTTP 500." = "更新服务暂时不可用（HTTP 500），请稍后重试。";
+"The update service returned HTTP 502." = "更新服务暂时不可用（HTTP 502），请稍后重试。";
+"The update service returned HTTP 503." = "更新服务暂时不可用（HTTP 503），请稍后重试。";
+"The update service returned HTTP 504." = "更新服务暂时不可用（HTTP 504），请稍后重试。";
+"The last update check did not complete. Please try again." = "上次检查未完成，请重试。";
+
+"Free access" = "免费使用";
+"Record, edit and export without signing in." = "无需登录，即可录制、编辑和导出。";
+"Unlimited local exports" = "不限次数，本地导出";
+"Your projects stay on this Mac. No account or connection is needed to export." = "项目保存在这台 Mac 上，导出无需账号或网络。";
+"AI providers may charge separately. Generation always asks for confirmation." = "AI 服务商可能单独收费，生成前会请你确认。";
+"Visit the community" = "访问社区";
+"Save a previously rendered video to your Mac." = "将之前已渲染的视频保存到这台 Mac。";
+
+/* Compact assistant workspace */
+"Record a website" = "录制网页";
+"Plan a demo" = "规划演示";
+"Polish a recording" = "优化录屏";
+"Create a video clip" = "生成视频";
+"Tools" = "工具";
+"Models, voice replies and drafting tools" = "模型、语音回复与起草工具";
+"Set up video model" = "设置视频模型";
+"Describe your video, or paste a link…" = "描述你想做的视频，或粘贴链接…";
+"Codex connected · Connection settings" = "Codex 已连接 · 连接设置";

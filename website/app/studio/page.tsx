@@ -1,9 +1,10 @@
-import { BrowserStudio } from "./studio";
+import { DesktopGate } from "./desktop-gate";
 import "./studio.css";
+import "./studio-appearance.css";
 
 export const metadata = {
-  title: "Browser Studio beta — Focus Studio",
-  description: "Record or import a video, trim the good parts, add a focus effect and export in your browser.",
+  title: "Focus Studio Desktop",
+  description: "Download Focus Studio to record and edit on your desktop.",
 };
 
-export default function StudioPage() { return <BrowserStudio />; }
+export default function StudioPage() { return <DesktopGate />; }

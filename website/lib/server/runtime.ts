@@ -2,8 +2,9 @@ import { env } from 'cloudflare:workers';
 import { getChatGPTUser } from '@/app/chatgpt-auth';
 import { APIError, checkOrigin, nowSeconds, sha256 } from './primitives';
 import { webSessionAccount } from './google-auth';
+import { PRODUCT_ACCESS } from '../product-access';
 
-export interface AppEnv { DB?: D1Database; SITE_ORIGIN?: string; STRIPE_SECRET_KEY?: string; STRIPE_WEBHOOK_SECRET?: string; STRIPE_MONTHLY_PRICE_ID?: string; STRIPE_YEARLY_PRICE_ID?: string; MAC_DOWNLOAD_URL?: string; DEMO_VIDEO_URL?: string; DEMO_POSTER_URL?: string; GOOGLE_CLIENT_ID?: string; GOOGLE_CLIENT_SECRET?: string; SESSION_SECRET?: string }
+export interface AppEnv { DB?: D1Database; SITE_ORIGIN?: string; STRIPE_SECRET_KEY?: string; STRIPE_WEBHOOK_SECRET?: string; STRIPE_MONTHLY_PRICE_ID?: string; STRIPE_YEARLY_PRICE_ID?: string; MAC_DOWNLOAD_URL?: string; WINDOWS_DOWNLOAD_URL?: string; LINUX_DOWNLOAD_URL?: string; DEMO_VIDEO_URL?: string; DEMO_POSTER_URL?: string; GOOGLE_CLIENT_ID?: string; GOOGLE_CLIENT_SECRET?: string; SESSION_SECRET?: string }
 export const settings = () => env as unknown as AppEnv;
 export function database(): D1Database {
   const db = settings().DB;
@@ -19,7 +20,7 @@ export function siteOrigin(request: Request) {
   return new URL(request.url).origin;
 }
 export const billingConfigured = () => {
-  const e = settings(); return !!(e.STRIPE_SECRET_KEY && e.STRIPE_WEBHOOK_SECRET && e.STRIPE_MONTHLY_PRICE_ID && e.STRIPE_YEARLY_PRICE_ID);
+  const e = settings(); return PRODUCT_ACCESS.paymentsEnabled && !!(e.STRIPE_SECRET_KEY && e.STRIPE_WEBHOOK_SECRET && e.STRIPE_MONTHLY_PRICE_ID && e.STRIPE_YEARLY_PRICE_ID);
 };
 export type Account = { id: string; email: string; stripe_customer_id: string | null; sync_version: number };
 export async function authenticate(request: Request, browserOnly = false): Promise<Account> {
@@ -33,7 +34,7 @@ export async function authenticate(request: Request, browserOnly = false): Promi
   const webAccount = await webSessionAccount(db,settings(),request);
   if (webAccount) return webAccount;
   const user = await getChatGPTUser();
-  if (!user) throw new APIError(401, 'sign_in_required', 'Sign in to use your free export.');
+  if (!user) throw new APIError(401, 'sign_in_required', 'Sign in to continue.');
   await db.prepare(`INSERT INTO accounts(id,email,created_at) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET email=excluded.email`).bind(user.userId, user.email, nowSeconds()).run();
   return (await db.prepare('SELECT * FROM accounts WHERE id=?').bind(user.userId).first<Account>())!;
 }

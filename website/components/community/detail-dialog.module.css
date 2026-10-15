@@ -1,0 +1,1 @@
+.modal{margin:auto;max-height:calc(100dvh - 48px);width:min(460px,calc(100vw - 32px));overflow-y:auto}.modal::backdrop{background:#17141c80}.modal:focus-visible{outline:2px solid var(--purple);outline-offset:3px}.modal>div{flex-wrap:wrap}

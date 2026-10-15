@@ -476,6 +476,10 @@ public protocol AppControlling: AnyObject, Sendable {
     /// editor (saving and closing any open project first), as Import video
     /// does. A nil title is the file name.
     func importVideo(from url: URL, title: String?) async throws -> RecordingProject
+    /// Copies a narration file into this project without changing its audio mix.
+    func importVoiceover(from url: URL, projectID: UUID) async throws -> VoiceoverClip
+    /// Roll back fresh imports that were never committed to the project.
+    func discardImportedVoiceovers(_ clips: [VoiceoverClip], projectID: UUID) async
     /// Create an independent, editable cut while preserving the source project.
     func createDemoCut(projectID: UUID, keepRanges: [DemoKeepRange], title: String?) async throws -> RecordingProject
     /// Apply one validated video-track edit. Its first call may open a new
@@ -513,6 +517,11 @@ public protocol AppControlling: AnyObject, Sendable {
 }
 
 extension AppControlling {
+    public func discardImportedVoiceovers(_ clips: [VoiceoverClip], projectID: UUID) async {}
+    public func importVoiceover(from url: URL, projectID: UUID) async throws -> VoiceoverClip {
+        throw AIToolError.failed("Importing voiceover is unavailable in this app.")
+    }
+
     public func createDemoCut(projectID: UUID, keepRanges: [DemoKeepRange], title: String?) async throws -> RecordingProject {
         throw AIToolError.failed("Creating an editable demo cut is unavailable in this app.")
     }
@@ -2109,7 +2118,7 @@ public struct ExportProjectTool: AIAssistantTool {
             }
             let settings = project?.settings
             let audio = settings?.productDemoAudio
-            let projectFiles = [source, settings?.backgroundImagePath, audio?.backgroundMusicPath, audio?.clickSoundPath, audio?.zoomTransitionSoundPath]
+            let projectFiles = ([source, settings?.backgroundImagePath, audio?.backgroundMusicPath, audio?.clickSoundPath, audio?.zoomTransitionSoundPath] + (audio?.voiceovers ?? []).map { Optional($0.filePath) })
                 .compactMap(resolved)
             protectedFiles = (projectFiles + extraFiles).map(AIToolPaths.canonicalPath)
             libraryRoot = context.projectsDirectory
