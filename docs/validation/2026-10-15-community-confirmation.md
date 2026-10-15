@@ -22,6 +22,8 @@
 | --- | --- | --- |
 | 网站服务端测试 | 83/83 PASS | 包含社区权限、设备purpose隔离、ChatGPT/Google身份分离、token过期/撤销、浏览器Origin、幂等确认及永久资格 |
 | TypeScript | PASS | 最终UI及账户身份显示 |
+| 下载与release路由 | 19/19 PASS | 最新包fallback及受限下载代理 |
+| 普通社区完整Worker HTTP | 71/71 PASS | 直接连接最终构建Worker；包括配对、回连、上传、发布、范围预览、编辑、撤回、删除和确认持久化 |
 | moderation HTTP | 91 checks PASS | 本地构建Worker、合成身份、完整配对与回连；测试内容已删除 |
 | 原生客户端回归 | PASS | 真实app源编译，模拟transport和内存vault验证状态、取消、回连回执与独立凭据 |
 | 原生离线免费导出回归 | PASS | 未登录reserve/commit/recovery及手动/MCP导出 |
@@ -34,6 +36,6 @@
 
 ## 验证边界
 
-普通HTTP串行脚本在本地Wrangler多次遇到503“worker restarted mid-request”或超时；单独请求同路径返回预期403。原始失败日志保留为 `.artifacts/installation-validation/community-http.log`，不能计为已通过的完整测试。
+最初通过本地Wrangler ProxyWorker的串行脚本遇到503或超时。诊断发现代理层对非根路径异常错误比较href，误报“worker restarted mid-request”；GET进入等待队列导致挂起。绕过该代理直连最终构建Worker后，同一原脚本、同一全部断言71/71通过，无重试、无应用源码或依赖修改。原始失败与独立socket诊断日志仍保留（`community-http.log`、`community-http-native.log`）；成功日志为 `.artifacts/installation-validation/community-http-direct-worker.log`。临时身份、草稿及配对均为本地测试，测试内容已删除，运行器已关闭。
 
 没有替换用户当前正在运行的旧版，也没有完成真实账户的浏览器登录到各平台客户端回连的人工验收。Mac包本地签名，未经过Apple公证。最终安装验证见同目录 `2026-10-15-installation-1.14.6.md`。
