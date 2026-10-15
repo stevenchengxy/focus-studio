@@ -125,6 +125,8 @@ actor NativeCommunityConnectionClient {
     private let origin: URL
     private let transport: any CommunityConnectionTransport
     private let vault: any CommunityCredentialVault
+    private let legacyVault: (any CommunityLegacyCredentialVault)?
+    private let isInstalledClient: @Sendable () -> Bool
     private let now: @Sendable () -> Date
     private var saved: Saved?
     private var loaded = false
@@ -132,10 +134,16 @@ actor NativeCommunityConnectionClient {
     private var credentialMutation: Task<Void, Error>?
 
     init(origin: URL = serviceURL, transport: any CommunityConnectionTransport = CommunityURLSessionTransport(),
-         vault: any CommunityCredentialVault = CommunityKeychainVault(), now: @escaping @Sendable () -> Date = Date.init) {
+         vault: any CommunityCredentialVault = CommunityKeychainVault(),
+         legacyVault: (any CommunityLegacyCredentialVault)? = nil,
+         isInstalledClient: @escaping @Sendable () -> Bool = { NativeCommunityInstallationPolicy.isRunningInstalledApp },
+         now: @escaping @Sendable () -> Date = { Date() }) {
         precondition(origin.scheme == "https" && origin.host != nil && origin.user == nil && origin.password == nil
                      && origin.query == nil && origin.fragment == nil && (origin.path.isEmpty || origin.path == "/"))
         self.origin = origin; self.transport = transport; self.vault = vault; self.now = now
+        // A fixture/custom origin must never read the production legacy item.
+        self.legacyVault = legacyVault ?? (origin == Self.serviceURL ? CommunityLegacyKeychainVault() : nil)
+        self.isInstalledClient = isInstalledClient
     }
     func snapshot() -> CommunityConnectionSnapshot {
         .init(pairing: saved?.pairing, identity: saved?.token?.identity, hasCredential: saved?.token != nil,
@@ -148,7 +156,12 @@ actor NativeCommunityConnectionClient {
     }
     private func load(_ operation: UInt64) async throws {
         if loaded { return }
-        if let pending = credentialMutation { try await pending.value; try check(operation) }
+        if let pending = credentialMutation {
+            // Wait for ordering, then inspect the current vault. A completed
+            // storage failure must not permanently poison every later retry.
+            _ = try? await pending.value
+            try check(operation)
+        }
         let data = try await vault.read()
         try check(operation)
         if let data {
@@ -161,22 +174,49 @@ actor NativeCommunityConnectionClient {
                     && Self.browserURL(origin: origin, userCode: $0.userCode) == $0.verificationURL }) ?? true else {
                 // Reject incompatible credentials without sending them. Clear
                 // only this community item so the next connection can recover.
-                try await persist(nil, operation: operation)
+                try await persist(nil, operation: operation, legacyCleanup: .none)
+                loaded = false
                 throw CommunityConnectionError.invalidResponse
             }
             saved = value
+        } else if let legacyVault, let token = try await legacyVault.read() {
+            try check(operation)
+            guard Self.validToken(token) else {
+                try await persist(nil, operation: operation, legacyCleanup: .all)
+                throw CommunityConnectionError.invalidResponse
+            }
+            // The old item has no identity or expiry. Keep it intact and only
+            // hold an unverified token in memory until GET /device/community
+            // returns an authoritative community identity and expiry.
+            saved = .init(version: 1, origin: origin.absoluteString, purpose: "community",
+                          token: .init(accessToken: token, expiresAt: .distantFuture, clientConfirmed: false))
         }
+        try check(operation)
         loaded = true
     }
-    private func persist(_ value: Saved?, operation: UInt64) async throws {
+    private enum LegacyCleanup { case matching, all, none }
+    private func persist(_ value: Saved?, operation: UInt64, legacyCleanup: LegacyCleanup = .matching) async throws {
         try check(operation)
         let data = try value.map { try JSONEncoder().encode($0) }
-        let previous = credentialMutation, vault = vault
+        let previous = credentialMutation, vault = vault, legacyVault = legacyVault
+        let matchingToken = value?.token?.accessToken ?? saved?.token?.accessToken
         // Serialize writes, including a cancellation's delete, even if a vault
         // implementation completes an earlier write asynchronously.
         let mutation = Task {
             if let previous { _ = try? await previous.value }
-            if let data { try await vault.write(data) } else { try await vault.delete() }
+            if let data { try await vault.write(data) }
+            if let legacyVault {
+                switch legacyCleanup {
+                case .matching:
+                    if let matchingToken { try await legacyVault.delete(ifMatching: matchingToken) }
+                case .all:
+                    if let token = try await legacyVault.read() { try await legacyVault.delete(ifMatching: token) }
+                case .none: break
+                }
+            }
+            // A failed legacy deletion must not remove the only newer item and
+            // let an old token silently restore a disconnected account later.
+            if data == nil { try await vault.delete() }
         }
         credentialMutation = mutation
         try await mutation.value
@@ -184,6 +224,7 @@ actor NativeCommunityConnectionClient {
         saved = value; loaded = true
     }
     func restore() async throws -> CommunityConnectionSnapshot {
+        try requireInstalledClient()
         let operation = begin()
         try await load(operation)
         if let pairing = saved?.pairing {
@@ -195,6 +236,7 @@ actor NativeCommunityConnectionClient {
         return try await refreshIdentity(token, operation: operation)
     }
     func startPairing() async throws -> CommunityConnectionPairing {
+        try requireInstalledClient()
         let operation = begin()
         try await load(operation)
         guard saved?.token == nil else { throw CommunityConnectionError(code: "already_connected", message: "Disconnect this community account before connecting another.") }
@@ -214,6 +256,7 @@ actor NativeCommunityConnectionClient {
         return pairing
     }
     func pollPairing(_ pairing: CommunityConnectionPairing) async throws -> CommunityConnectionSnapshot? {
+        try requireInstalledClient()
         let operation = begin()
         try await load(operation)
         guard saved?.pairing?.deviceCode == pairing.deviceCode else { throw CancellationError() }
@@ -265,6 +308,7 @@ actor NativeCommunityConnectionClient {
         return snapshot()
     }
     func confirmClient() async throws -> CommunityConnectionSnapshot {
+        try requireInstalledClient()
         let operation = begin()
         try await load(operation)
         guard var token = saved?.token, token.identity != nil else { throw CommunityConnectionError.expired }
@@ -285,13 +329,13 @@ actor NativeCommunityConnectionClient {
     }
     func cancelPairing() async throws {
         let operation = begin()
-        try await persist(nil, operation: operation)
+        try await persist(nil, operation: operation, legacyCleanup: .all)
     }
     func disconnect() async throws {
         let operation = begin()
         try await load(operation)
         let token = saved?.token?.accessToken
-        try await persist(nil, operation: operation)
+        try await persist(nil, operation: operation, legacyCleanup: .all)
         if let token {
             do {
                 let response = try await request(.revoke, body: [:], token: token)
@@ -309,6 +353,11 @@ actor NativeCommunityConnectionClient {
         }
     }
     private struct Response { let data: Data; let status: Int }
+    private func requireInstalledClient() throws {
+        guard isInstalledClient() else {
+            throw CommunityConnectionError(code: "installation_required", message: "Open Focus Studio from Applications to confirm this client.")
+        }
+    }
     private func request(_ endpoint: Endpoint, method: String = "POST", body: [String: String]? = nil, token: String? = nil) async throws -> Response {
         var request = URLRequest(url: origin.appendingPathComponent("api").appendingPathComponent(endpoint.rawValue))
         request.httpMethod = method; request.timeoutInterval = 20; request.httpShouldHandleCookies = false
@@ -317,12 +366,18 @@ actor NativeCommunityConnectionClient {
         if let body { request.httpBody = try JSONSerialization.data(withJSONObject: body); request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         let (data, response) = try await transport.send(request)
-        guard response.url == request.url, data.count <= 65_536 else { throw CommunityConnectionError.invalidResponse }
+        guard response.url == request.url, data.count <= 65_536,
+              response.value(forHTTPHeaderField: "Content-Type")?.split(separator: ";", maxSplits: 1).first?
+                .trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "application/json" else {
+            throw CommunityConnectionError.invalidResponse
+        }
         guard (200..<300).contains(response.statusCode) else {
             struct Failure: Decodable { struct Detail: Decodable { let code: String }; let error: Detail }
             let detail = try? JSONDecoder().decode(Failure.self, from: data)
             switch response.statusCode {
             case 401: throw CommunityConnectionError.expired
+            case 403 where ["community_device_required", "community_sign_in_required"].contains(detail?.error.code ?? ""):
+                throw CommunityConnectionError.expired
             case 410: throw CommunityConnectionError(code: detail?.error.code ?? "code_expired", message: "This community sign-in code expired. Connect again.")
             case 429: throw CommunityConnectionError(code: "rate_limited", message: "Too many connection requests. Please wait a moment and try again.")
             case 300..<400: throw CommunityConnectionError.invalidResponse

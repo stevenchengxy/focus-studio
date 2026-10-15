@@ -1,6 +1,6 @@
 {
   "name": "focus-studio-desktop",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Installable screen recording and demo editing companion for Focus Studio",
   "desktopName": "focus-studio-desktop.desktop",
   "private": true,

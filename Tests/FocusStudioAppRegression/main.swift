@@ -6,13 +6,11 @@ import SwiftUI
 struct AppRegression {
     @MainActor
     static func main() async throws {
-        if CommandLine.arguments.contains("--native-community-only") {
-            try await NativeCommunityConnectionRegression.run()
-            return
-        }
+        try await NativeCommunityRegression.run()
+        try await NativeCommunityConnectionRegression.run()
+        if CommandLine.arguments.contains("--native-community-only") { return }
         try await NativeSubscriptionRegression.run()
         if CommandLine.arguments.contains("--native-subscription-only") { return }
-        try await NativeCommunityConnectionRegression.run()
         setenv("FOCUS_STUDIO_IMPORT_ARK_ENV", "0", 1)
         try await VoiceoverRegression.run()
         if CommandLine.arguments.contains("--voiceover-only") { return }

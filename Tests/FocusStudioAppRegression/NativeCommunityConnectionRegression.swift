@@ -331,7 +331,7 @@ enum NativeCommunityConnectionRegression {
         for replacement in ["https://other.invalid", "https://community-fixture.invalid:444"] {
             let transport = CommunityFixtureTransport([])
             let scopedVault = CommunityFixtureVault(saved)
-            let value = NativeCommunityConnectionClient(origin: URL(string: replacement)!, transport: transport, vault: scopedVault, now: { instant })
+            let value = NativeCommunityConnectionClient(origin: URL(string: replacement)!, transport: transport, vault: scopedVault, isInstalledClient: { true }, now: { instant })
             try await expect("invalid_response") { _ = try await value.restore() }
             try await transport.assertFinished()
         }
@@ -351,7 +351,7 @@ enum NativeCommunityConnectionRegression {
             try await transport.assertFinished()
         }
         let expiredTransport = CommunityFixtureTransport([])
-        let expired = NativeCommunityConnectionClient(origin: origin, transport: expiredTransport, vault: vault,
+        let expired = NativeCommunityConnectionClient(origin: origin, transport: expiredTransport, vault: vault, isInstalledClient: { true },
                                                        now: { instant.addingTimeInterval(30 * 86400 + 1) })
         try await expect("connection_expired") { _ = try await expired.restore() }
         let deleted = await vault.read()
@@ -362,7 +362,7 @@ enum NativeCommunityConnectionRegression {
         let original = client(CommunityFixtureTransport([start()]), pendingVault)
         _ = try await original.startPairing()
         let transport = CommunityFixtureTransport([])
-        let oldPairing = NativeCommunityConnectionClient(origin: origin, transport: transport, vault: pendingVault,
+        let oldPairing = NativeCommunityConnectionClient(origin: origin, transport: transport, vault: pendingVault, isInstalledClient: { true },
                                                          now: { instant.addingTimeInterval(601) })
         try await expect("connection_expired") { _ = try await oldPairing.restore() }
         let pendingDeleted = await pendingVault.read()
@@ -379,7 +379,7 @@ enum NativeCommunityConnectionRegression {
         let confirmationVault = CommunityFixtureVault(saved)
         let confirmationTransport = CommunityFixtureTransport([])
         let expiredConfirmation = NativeCommunityConnectionClient(origin: origin, transport: confirmationTransport,
-            vault: confirmationVault, now: { instant.addingTimeInterval(30 * 86400 + 1) })
+            vault: confirmationVault, isInstalledClient: { true }, now: { instant.addingTimeInterval(30 * 86400 + 1) })
         try await expect("connection_expired") { _ = try await expiredConfirmation.confirmClient() }
         let confirmationDeleted = await confirmationVault.read()
         precondition(confirmationDeleted == nil)
@@ -515,7 +515,7 @@ enum NativeCommunityConnectionRegression {
     }
 
     private static func client(_ transport: CommunityFixtureTransport, _ vault: CommunityFixtureVault) -> NativeCommunityConnectionClient {
-        NativeCommunityConnectionClient(origin: origin, transport: transport, vault: vault, now: { instant })
+        NativeCommunityConnectionClient(origin: origin, transport: transport, vault: vault, isInstalledClient: { true }, now: { instant })
     }
     private static func connected() async throws -> (NativeCommunityConnectionClient, CommunityFixtureTransport, CommunityFixtureVault) {
         let vault = CommunityFixtureVault()
