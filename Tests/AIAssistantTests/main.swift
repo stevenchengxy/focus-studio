@@ -19,6 +19,12 @@ struct AIAssistantTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
 
+        if ProcessInfo.processInfo.environment["FOCUS_STUDIO_TEST_FILTER"] == "zoom-timing" {
+            try await demoEditingMinimumZoomDuration(root: root)
+            print("AIAssistantTests: PASS (zoom timing boundary, enable/disable, add/update parity and atomic invalid edits)")
+            return
+        }
+
         step("protocol parsing"); protocolParsing()
         step("video timeline rendering"); try await videoTimelineRendering(root: root)
         step("media library assistant tools"); try await mediaLibraryTools(root: root)

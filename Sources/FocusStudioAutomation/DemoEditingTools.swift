@@ -42,6 +42,18 @@ enum ZoomMotionToolSupport {
     }
 }
 
+enum ZoomToolTimingSupport {
+    static let minimumDuration = 0.2
+
+    static func meetsMinimumDuration(start: Double, end: Double) -> Bool {
+        guard start.isFinite, end.isFinite, end > start else { return false }
+        // Subtracting timestamps such as 22.95 - 22.75 can round below 0.2.
+        // Allow only arithmetic roundoff, not a frame-sized timing tolerance.
+        let tolerance = max(start.ulp, end.ulp, minimumDuration.ulp) * 4
+        return end - start >= minimumDuration - tolerance
+    }
+}
+
 public struct AnalyzeDemoPacingTool: AIAssistantTool {
     public let name = "analyze_demo_pacing"
     public let summary = "Suggest source-time keep ranges from complete recorded input, without changing the project. Input silence is not proof of visual inactivity; inspect loading/results/reading before cutting. Source audio and enabled chapters are protected."
@@ -171,7 +183,8 @@ public struct UpdateZoomTool: AIAssistantTool {
             if let value = edits["ease_in"] { segment.zoomEaseIn = value }
             if let value = edits["ease_out"] { segment.zoomEaseOut = value }
             if let enabled { segment.isEnabled = enabled }
-            guard segment.start >= 0, segment.end <= current.duration, segment.end - segment.start >= 0.2,
+            guard segment.start >= 0, segment.end <= current.duration,
+                  ZoomToolTimingSupport.meetsMinimumDuration(start: segment.start, end: segment.end),
                   (0...1).contains(segment.targetX), (0...1).contains(segment.targetY), (1.1...3).contains(segment.scale),
                   (0...5).contains(segment.zoomEaseIn ?? 0), (0...5).contains(segment.zoomEaseOut ?? 0) else {
                 throw AIToolError.invalidArgument("Zoom times must be within the project, at least 0.2 seconds apart; target 0–1, scale 1.1–3 and easing 0–5 seconds.")

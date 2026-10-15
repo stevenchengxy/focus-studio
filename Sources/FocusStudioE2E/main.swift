@@ -18,6 +18,19 @@ enum FocusStudioE2E {
                 at: outputDirectory,
                 withIntermediateDirectories: true
             )
+            if CommandLine.arguments.contains("--record-window-id") {
+                guard let value = argumentValue(after: "--record-window-id", in: CommandLine.arguments),
+                      let windowID = UInt32(value), windowID > 0 else {
+                    throw E2EError.assertionFailed("--record-window-id requires a positive Window Server ID")
+                }
+                let durationText = argumentValue(after: "--record-duration", in: CommandLine.arguments) ?? "90"
+                guard let duration = Double(durationText), duration.isFinite, (1...600).contains(duration) else {
+                    throw E2EError.assertionFailed("--record-duration must be 1–600 seconds")
+                }
+                try await TutorialWindowRecorder.record(windowID: windowID, duration: duration,
+                    outputDirectory: outputDirectory, renderCursor: CommandLine.arguments.contains("--render-recorded-cursor"))
+                return
+            }
             if let path = argumentValue(after: "--preview-benchmark", in: CommandLine.arguments) {
                 let scale = Double(argumentValue(after: "--preview-scale", in: CommandLine.arguments) ?? "1") ?? 1
                 try await PreviewPlaybackBenchmark.run(projectPath: path, scale: scale, outputDirectory: outputDirectory)

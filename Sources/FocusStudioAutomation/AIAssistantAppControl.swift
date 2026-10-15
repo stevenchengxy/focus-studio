@@ -1586,7 +1586,7 @@ public struct AddZoomTool: AIAssistantTool {
     public let name = "add_zoom"
     public let summary = "Add a manual zoom with an optional motion preset to the open project: the camera moves to (x, y) on the recording between start and end seconds. Existing automatic zooms stay."
 
-    static let minimumDuration = 0.2
+    static let minimumDuration = ZoomToolTimingSupport.minimumDuration
     static let scaleRange = 1.1...3.0
 
     public init() {}
@@ -1627,7 +1627,7 @@ public struct AddZoomTool: AIAssistantTool {
         guard start >= 0, end <= duration + 0.001 else {
             throw AIToolError.invalidArgument("start and end must lie within 0–\(AIToolSupport.seconds(duration)) s (got \(AIToolSupport.seconds(start))–\(AIToolSupport.seconds(end))).")
         }
-        guard end - start >= Self.minimumDuration else {
+        guard ZoomToolTimingSupport.meetsMinimumDuration(start: start, end: end) else {
             throw AIToolError.invalidArgument("end must be at least \(Self.minimumDuration) s after start.")
         }
         guard (0...1).contains(x), (0...1).contains(y) else {

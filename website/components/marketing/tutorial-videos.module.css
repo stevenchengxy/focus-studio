@@ -1,0 +1,56 @@
+.section { padding-block: 105px 24px; }
+.heading { display: flex; justify-content: space-between; align-items: baseline; gap: 24px; margin-bottom: 35px; }
+.heading h2 { margin: 0; font-size: clamp(32px, 4.1vw, 49px); font-weight: 400; line-height: 1.15; letter-spacing: -.055em; }
+.heading a { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted, #79747e); white-space: nowrap; }
+.heading a:hover { color: var(--ink); }
+.grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px; }
+.card { display: flex; flex-direction: column; min-width: 0; padding: 0; text-align: left; background: transparent; color: var(--ink); border-radius: 14px; }
+.poster { display: block; width: 100%; position: relative; overflow: hidden; aspect-ratio: 8 / 5; border-radius: 14px; background: #dfd9e8; border: 1px solid #31233f17; box-shadow: 0 8px 28px #2f203b08; transition: box-shadow .25s ease; }
+.poster img { display: block; width: 100%; height: 100%; object-fit: contain; transition: transform .35s cubic-bezier(.2,.7,.2,1); }
+.play { position: absolute; inset: 0; margin: auto; width: 48px; height: 48px; display: grid; place-items: center; border-radius: 50%; background: #24212adb; color: #fff; border: 1px solid #ffffff47; box-shadow: 0 4px 18px #14101c20; transition: transform .25s ease, background .25s ease; }
+.play svg { margin-left: 2px; }
+.cardFooter { display: flex; width: 100%; align-items: center; gap: 11px; padding: 19px 2px 5px; font-size: 16px; font-weight: 500; line-height: 1.5; }
+.number { font-size: 10px; letter-spacing: .05em; color: var(--muted, #79747e); font-variant-numeric: tabular-nums; }
+.cardFooter > svg { flex-shrink: 0; margin-left: auto; color: var(--muted, #79747e); transition: transform .25s ease; }
+@media (hover: hover) {
+  .card:hover .poster { box-shadow: 0 12px 32px #2f203b15; }
+  .card:hover .poster img { transform: scale(1.025); }
+  .card:hover .play { transform: scale(1.08); background: #6c4cd1; }
+  .card:hover .cardFooter > svg { transform: translate(2px, -2px); }
+}
+.card:active .play { transform: scale(.96); }
+.dialog { width: min(1120px, calc(100vw - 40px)); max-width: none; max-height: calc(100dvh - 40px); margin: auto; padding: 0; border: 1px solid #ffffff28; border-radius: 17px; overflow: auto; background: #17161a; color: #fff; box-shadow: 0 24px 90px #08061166; }
+.dialog::backdrop { background: #111017b8; }
+.dialog[open] { animation: appear .22s cubic-bezier(.2,.7,.2,1); }
+.playerHeader { padding: 14px 18px 14px 23px; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.playerHeader h3 { margin: 0; font-size: 15px; font-weight: 500; line-height: 1.5; }
+.playerHeader button { display: grid; place-items: center; flex-shrink: 0; width: 36px; height: 36px; border-radius: 50%; color: #ece9f2; background: #ffffff0e; transition: background .2s; }
+.playerHeader button:hover { background: #ffffff1c; }
+.player video { display: block; width: 100%; max-height: calc(100dvh - 140px); aspect-ratio: 8 / 5; background: #0c0c0e; object-fit: contain; }
+.error { display: flex; justify-content: center; flex-wrap: wrap; gap: 12px; padding: 12px 20px 20px; margin: 0; font-size: 13px; color: #c4bacf; }
+.error a { display: inline-flex; align-items: center; gap: 4px; text-decoration: underline; text-underline-offset: 3px; }
+:global(html[data-theme="dark"]) .poster { background: #25222c; border-color: #ffffff15; }
+@keyframes appear { from { opacity: 0; transform: translateY(10px) scale(.985); } to { opacity: 1; transform: none; } }
+@media (max-width: 850px) {
+  .section { padding-top: 78px; }
+  .grid { gap: 16px; }
+  .cardFooter { font-size: 14px; gap: 8px; padding-top: 15px; }
+  .play { width: 42px; height: 42px; }
+}
+@media (max-width: 600px) {
+  .section { padding-block: 58px 0; }
+  .heading { align-items: flex-start; flex-direction: column; gap: 17px; margin-bottom: 26px; }
+  .grid { grid-template-columns: 1fr; gap: 27px; }
+  .cardFooter { font-size: 16px; padding-top: 14px; }
+  .poster { border-radius: 12px; }
+  .play { width: 48px; height: 48px; }
+  .dialog { width: calc(100vw - 20px); max-height: calc(100dvh - 20px); border-radius: 12px; }
+  .playerHeader { padding: 10px 12px 10px 17px; }
+  .playerHeader h3 { font-size: 14px; }
+  .player video { max-height: calc(100dvh - 120px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dialog[open] { animation: none; }
+  .poster, .poster img, .play, .cardFooter > svg, .playerHeader button { transition: none; }
+  .card:hover .poster img, .card:hover .play, .card:active .play, .card:hover .cardFooter > svg { transform: none; }
+}

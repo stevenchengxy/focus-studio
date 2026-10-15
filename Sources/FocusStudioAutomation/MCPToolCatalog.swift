@@ -237,7 +237,7 @@ public struct MCPToolCatalog: Sendable {
         ),
         MCPToolSpec(
             tool: ListProjectsTool(), title: "List projects",
-            description: "List the library's projects, newest first, each with its project_id, title, duration in seconds, source size, creation time and whether it is open in the editor. Returns 30 at a time (limit, at most 100) with the total; when has_more is true, call again with offset to page through older projects, or pass query to find projects whose title contains that text.",
+            description: "List projects newest first: project_id, title, duration (seconds), source size, creation time and editor-open state. Returns total and 30 results by default (limit ≤100). If has_more, paginate with offset. Use query to filter titles by substring.",
             scope: .global, annotations: .reads
         ),
         MCPToolSpec(

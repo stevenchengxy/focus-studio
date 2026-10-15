@@ -6,6 +6,7 @@ import ImageIO
 extension AIAssistantTests {
     @MainActor
     static func demoEditing(root: URL) async throws {
+        try await demoEditingMinimumZoomDuration(root: root)
         try await demoEditingMotionAndReceipts(root: root)
         try await demoEditingRepeatedObservations(root: root)
         let clickA = ClickEvent(time: 1, x: 0.2, y: 0.3, button: .left)
@@ -148,6 +149,66 @@ extension AIAssistantTests {
             _ = try await UpdateZoomTool().run(arguments: ["zoom_id": motionID, "motion_preset": "glitch"], context: motionContext, progress: { _ in })
         }
         check(motionBox.project == beforeBadMotion, "an invalid preset leaves the zoom unchanged")
+    }
+
+    @MainActor
+    static func demoEditingMinimumZoomDuration(root: URL) async throws {
+        let start = 22.75, end = 22.95
+        check(end - start < 0.2, "fixture reproduces timestamp-subtraction roundoff")
+        var project = makeProject(sourceVideoPath: "/zoom-boundary.mp4", duration: end)
+        let other = ZoomSegment(start: 1, end: 2, targetX: 0.2, targetY: 0.3, scale: 1.5, kind: .manual)
+        let boundary = ZoomSegment(start: start, end: end, targetX: 0.5, targetY: 0.5, scale: 1.75)
+        project.zoomSegments = [other, boundary]
+        let box = ProjectBox(project)
+        let context = makeContext(root: root.appendingPathComponent("minimum-zoom-duration"), box: box)
+        let disabled = try await UpdateZoomTool().run(arguments: ["zoom_id": boundary.id.uuidString, "enabled": false], context: context, progress: { _ in })
+        check(disabled.data?["zoom"]?["enabled"]?.boolValue == false
+              && box.project?.zoomSegments[1].isEnabled == false,
+              "a minimum-duration zoom can be disabled without a timing edit")
+        check(box.project?.zoomSegments[0] == other
+              && box.project?.zoomSegments[1].id == boundary.id
+              && box.project?.zoomSegments[1].start == start
+              && box.project?.zoomSegments[1].end == end
+              && box.project?.zoomSegments[1].automaticSource?.originalEnd == end,
+              "disabling preserves exact timestamps, identity, other zooms and automatic provenance")
+        _ = try await UpdateZoomTool().run(arguments: ["zoom_id": boundary.id.uuidString, "enabled": true, "scale": 1.8], context: context, progress: { _ in })
+        _ = try await UpdateZoomTool().run(arguments: ["zoom_id": boundary.id.uuidString, "start": start, "end": end], context: context, progress: { _ in })
+        check(box.project?.zoomSegments[1].isEnabled == true
+              && box.project?.zoomSegments[1].scale == 1.8
+              && box.project?.zoomSegments[1].start == start
+              && box.project?.zoomSegments[1].end == end,
+              "minimum duration also accepts re-enabling, non-time edits and explicit boundary times")
+
+        let beforeInvalid = box.project, writes = box.writeCount
+        for patch: [String: Any] in [
+            ["start": start, "end": end - 0.000001],
+            ["start": end, "end": start],
+            ["start": end, "end": end],
+            ["start": -0.000001],
+            ["end": end + 0.000001],
+            ["start": Double.nan],
+            ["end": Double.infinity],
+        ] {
+            var arguments = patch
+            arguments["zoom_id"] = boundary.id.uuidString
+            arguments["enabled"] = false
+            await expectThrows("invalid timing remains rejected even when disabling") {
+                _ = try await UpdateZoomTool().run(arguments: arguments, context: context, progress: { _ in })
+            }
+        }
+        check(box.project == beforeInvalid && box.writeCount == writes,
+              "rejected timing edits cause no partial changes or project writes")
+
+        let added = try await AddZoomTool().run(arguments: ["start": start, "end": end, "x": 0.5, "y": 0.5], context: context, progress: { _ in })
+        check(added.data?["zoom"]?["start"]?.doubleValue == start
+              && added.data?["zoom"]?["end"]?.doubleValue == end,
+              "add_zoom and update_zoom accept the same exact minimum-duration interval")
+        let afterAdded = box.project, addedWrites = box.writeCount
+        await expectThrows("add_zoom still rejects a genuinely short interval") {
+            _ = try await AddZoomTool().run(arguments: ["start": start, "end": end - 0.000001, "x": 0.5, "y": 0.5], context: context, progress: { _ in })
+        }
+        check(box.project == afterAdded && box.writeCount == addedWrites,
+              "short add_zoom remains atomic")
     }
 
     @MainActor

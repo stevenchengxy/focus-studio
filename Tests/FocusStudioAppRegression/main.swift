@@ -146,6 +146,7 @@ struct AppRegression {
         try await RecordingLifecycleRegression.run()
         try await AssistantControlRegression.run()
         try await DemoPagePreparationRegression.run()
+        try await RecordingWindowFocusRegression.run()
         try await RecordedTextInputRegression.run()
         try await RecordingSessionRegression.run()
         try await RecordingActionRegression.run()

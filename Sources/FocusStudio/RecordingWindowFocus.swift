@@ -40,6 +40,38 @@ enum RecordingWindowFocus {
         var owner: NSRunningApplication
         var element: AXUIElement
     }
+
+    struct OwnedWindow {
+        var number: Int
+        var raise: () -> Void
+    }
+
+    /// The app knows its own NSWindow identity. Do not resolve an auxiliary
+    /// settings/assistant window through AX or substitute the main window.
+    static func raiseOwnedWindow(_ target: CaptureTargetInfo, ownerPID: pid_t,
+                                 currentPID: pid_t, windows: [OwnedWindow],
+                                 activate: () -> Void) throws {
+        guard target.kind == .window, ownerPID == currentPID else { throw FocusError.unavailable }
+        let matches = windows.filter { $0.number == Int(target.nativeID) }
+        guard matches.count == 1, let selected = matches.first else { throw FocusError.unavailable }
+        activate()
+        selected.raise()
+    }
+
+    private static func raiseOwnAppWindow(_ target: CaptureTargetInfo, ownerPID: pid_t) throws {
+        guard let app = NSApp else { throw FocusError.unavailable }
+        try raiseOwnedWindow(target, ownerPID: ownerPID, currentPID: ProcessInfo.processInfo.processIdentifier,
+            windows: app.windows.map { window in
+                OwnedWindow(number: window.windowNumber, raise: {
+                    if window.isMiniaturized { window.deminiaturize(nil) }
+                    window.makeKeyAndOrderFront(nil)
+                })
+            }, activate: {
+                app.unhideWithoutActivation()
+                app.activate(ignoringOtherApps: true)
+            })
+        diagnostic("own_window_raised", target)
+    }
     private static var preparedWindows: [UInt32: CachedWindow] = [:]
 
     static func prepare(_ target: CaptureTargetInfo) {
@@ -136,8 +168,12 @@ enum RecordingWindowFocus {
     private static func beginHandoff(_ target: CaptureTargetInfo) throws {
         guard target.kind == .window, let state = state(of: target.nativeID),
               let owner = NSRunningApplication(processIdentifier: state.ownerPID) else { throw FocusError.unavailable }
-        // Recording Focus Studio itself must leave its window visible.
-        if state.ownerPID == ProcessInfo.processInfo.processIdentifier { return }
+        // Recording an auxiliary Focus Studio window must raise that exact
+        // window, not merely keep the app visible behind its main recorder.
+        if state.ownerPID == ProcessInfo.processInfo.processIdentifier {
+            try raiseOwnAppWindow(target, ownerPID: state.ownerPID)
+            return
+        }
         guard AXIsProcessTrusted() else { throw FocusError.unavailable }
         if isExactWindowFrontmost(target) {
             var liveTarget = target
@@ -200,6 +236,10 @@ enum RecordingWindowFocus {
     /// Reuse its process, open no URL, and retain the exact AX window reference.
     private static func workspaceHandoff(_ target: CaptureTargetInfo) async throws {
         guard let before = state(of: target.nativeID) else { throw FocusError.unavailable }
+        if before.ownerPID == ProcessInfo.processInfo.processIdentifier {
+            try raiseOwnAppWindow(target, ownerPID: before.ownerPID)
+            return
+        }
         let selected = try resolveWindow(target, state: before)
         guard let applicationURL = selected.owner.bundleURL else { throw FocusError.unavailable }
         let configuration = NSWorkspace.OpenConfiguration()
