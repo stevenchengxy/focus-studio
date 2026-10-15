@@ -20,7 +20,7 @@
 | `zsh scripts/test-installation.sh` | **PASS**；日志 `.artifacts/installation-validation/installer.log` | 临时目录 fixture：版本比较、降级/同 build 冲突、签名失败注入、暂存、锁、改名/个人应用目录发现、运行源保留、运行中与检查期间启动保护、多副本回滚、项目文件保留。未替换真实应用。 |
 | 隔离标记专项（同一 installation 测试） | **PASS**；日志明确包含 `quarantine default`、`verified-copy preparation`、`symlink boundary`、`preparation failure/mutation`、`identical-build repair` | 使用真实临时文件扩展属性，验证默认/CLI 路径保留隔离标记，准备只改变暂存副本，原源及外部符号链接目标不变，失败或内容变化阻止替换，运行中修复被拒绝。签名验证以测试依赖注入隔离，不代表 Gatekeeper 实际放行。 |
 | `zsh scripts/test-installation-handoff.sh` | **22 项通过**；`.artifacts/installation-validation/handoff.log` | 启动位置策略、当前 PID 不被请求退出、其它副本正常退出及等待、拒绝/超时/竞态/新副本/取消保护。全部使用进程替身，不启动或结束用户进程。 |
-| `swift scripts/test-localization.swift` | **PASS：1494 个中英文匹配键**，占位符和权限描述通过 | 本次直接复核当前资源目录。先前 `package.log` 中的 1492 是较早候选，不作为最终资源数量。 |
+| `swift scripts/test-localization.swift` | **PASS：1513 个中英文匹配键**，占位符和权限描述通过 | 最终打包直接复核当前资源目录，包含新增社区连接文案。 |
 | Debug 应用编译 | **PASS**；`.artifacts/installation-validation/debug-build.log` 末尾为 `Build complete!` | 验证应用与安装界面编译。最终发布切片以稍后的打包结果为准。 |
 | 完整 app regression | **PASS**；`.artifacts/installation-validation/app-regression.log` 末尾为 `FocusStudioAppRegression: PASS` | 编辑/保存、录制状态机、助手、自动化桥、控制服务、MCP 接入及临时项目的 MCP 端到端导入/编辑/导出。相关录制用例明确不执行真实屏幕捕获，不能据此宣称重新完成真实录屏验收。 |
 | 发布脚本及元数据静态检查 | `git diff --check`、`zsh -n scripts/package-release.sh`、`plutil -lint Resources/Info.plist` 通过 | 补充说明文件、脚本语法及版本元数据；不代替产物验证。 |
@@ -35,7 +35,7 @@
 
 ## 最终 Universal 2 产物
 
-最终发布构建和打包已成功，日志为 `.artifacts/installation-validation/package-final.log`。这次构建覆盖隔离标记处理及 Foundation 架构检查；此前的 `package.log` 不作为最终候选证据。
+最终发布构建和打包已成功，日志为 `.artifacts/installation-validation/package-final.log`。这次构建覆盖隔离标记处理、Foundation 架构检查及新增原生社区连接；此前的 `package.log` 不作为最终候选证据。
 
 | 项目 | 当前状态 |
 | --- | --- |
@@ -49,8 +49,8 @@
 
 | 文件（均位于 `dist/releases/`） | 字节数 | SHA-256 |
 | --- | ---: | --- |
-| `Focus-Studio-1.14.6-universal-local.dmg` | 71,681,629 | `ac75d39da54d8042359553566c7395f0dd72af5bd71944adec8f61f5564f27c1` |
-| `Focus-Studio-1.14.6-universal-local.zip` | 67,813,617 | `dd03a67aa90c0325860349c9ea23bc7ffdbf9d93a25e63f2475182df2c036799` |
+| `Focus-Studio-1.14.6-universal-local.dmg` | 71,786,262 | `b448662c26c222f576808aeb418130b6832fec9e0fef9c2c285002474307ac09` |
+| `Focus-Studio-1.14.6-universal-local.zip` | 67,940,051 | `f801b86f9ccf4d8daa22be6f54aaf6e8682e5271cd3850ed5545fc5f5392592c` |
 
 ## 签名与验收边界
 
