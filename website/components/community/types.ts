@@ -5,7 +5,7 @@ export type CommunityItem = {
   posterUrl?: string | null; license: string | null; publishedAt: number | null;
   createdAt: number; updatedAt: number; isOwner: boolean; hasMedia?: boolean; uploaded?: boolean; moderationHold?: boolean; moderationReason?: string;
 };
-export type CommunityIdentity = { authenticated: boolean; viewerName?: string };
+export type CommunityIdentity = { authenticated: boolean; viewerName?: string; displayName?: string|null; canPublish: boolean; clientConfirmed: boolean };
 export const signInPath = (returnTo: string) => `/signin-with-chatgpt?return_to=${encodeURIComponent(returnTo)}`;
 export class CommunityError extends Error { constructor(public code: string, message: string) { super(message); } }
 export async function communityRequest<T>(path: string, init?: RequestInit): Promise<T> {
@@ -16,6 +16,7 @@ export async function communityRequest<T>(path: string, init?: RequestInit): Pro
 }
 export function errorCopy(error: unknown, t: (en:string,zh:string)=>string) {
   const code = error instanceof CommunityError ? error.code : '';
+  if (code === 'community_client_required') return t('Open the installed Focus Studio app and connect this ChatGPT account before uploading or publishing.', '请先打开安装好的 Focus Studio，在“社区发布”中连接当前 ChatGPT 账户，再上传或发布。');
   if (/auth|sign_in|identity/.test(code)) return t('Sign in with ChatGPT to continue.', '请先使用 ChatGPT 登录。');
   if (/moderator_required/.test(code)) return t('This page is for community moderators.', '此页面仅供社区管理员访问。');
   if (/moderation|hold/.test(code)) return t('This video is under review and cannot be published.', '此视频正在审核，暂时无法发布。');

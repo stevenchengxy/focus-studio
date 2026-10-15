@@ -14,17 +14,16 @@ struct CodexDirectorView: View {
 struct AssistantWorkspaceView: View {
     @ObservedObject var model: StudioModel
     @ObservedObject var session: AIAssistantSession
-    @ObservedObject var director: CodexDirectorService
     @ObservedObject var execution: CodexDirectorService
     @ObservedObject private var coordinator: AssistantDemoController
     var onClose: (() -> Void)?
     var openSettings: (() -> Void)?
-    @State private var showsConnectionSettings = false
+    @Environment(\.openSettings) private var openAppSettings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(model: StudioModel, onClose: (() -> Void)? = nil, openSettings: (() -> Void)? = nil) {
         self.model = model
         self.session = model.assistantSession
-        self.director = model.codexDirector
         self.execution = model.codexAssistant
         self.coordinator = model.assistantDemo
         self.onClose = onClose
@@ -43,10 +42,11 @@ struct AssistantWorkspaceView: View {
                             .font(.caption).foregroundStyle(StudioTheme.secondaryText)
                     }
                     Spacer(minLength: 0)
-                    Button("Connection settings") { showsConnectionSettings = true }.buttonStyle(.link)
+                    Button("Connection settings") { showConnectionSettings() }.buttonStyle(.link)
                     Button { coordinator.error = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain)
                         .accessibilityLabel("Dismiss")
                 }.padding(14).background(StudioTheme.yellow.opacity(0.07))
+                    .transition(.opacity)
             }
             AIAssistantPanel(session: session, gateway: model.aiGateway, modelLabel: model.assistantModelLabel,
                              onClose: onClose, openSettings: openSettings, showsPlan: false,
@@ -56,9 +56,7 @@ struct AssistantWorkspaceView: View {
                              headerAccessory: AnyView(connectionControls))
         }
         .background(StudioTheme.window).foregroundStyle(StudioTheme.text)
-        .sheet(isPresented: $showsConnectionSettings) {
-            AppLocalizedView { AssistantConnectionSettingsView(director: director, assistant: execution) }
-        }
+        .animation(reduceMotion ? nil : StudioMotion.fade, value: coordinator.error != nil)
     }
 
     private var connectionControls: some View {
@@ -68,7 +66,7 @@ struct AssistantWorkspaceView: View {
                     .help("Connecting…")
                     .accessibilityLabel("Connecting…")
             } else if coordinator.isConnected {
-                Button { showsConnectionSettings = true } label: {
+                Button { showConnectionSettings() } label: {
                     HStack(spacing: 5) {
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundStyle(.green)
@@ -88,40 +86,16 @@ struct AssistantWorkspaceView: View {
                     .buttonStyle(AssistantControlButtonStyle())
                     .disabled(session.isRunning)
                     .accessibilityIdentifier("assistant.connectCodex")
-                Button { showsConnectionSettings = true } label: {
-                    Label("Connection settings", systemImage: "gearshape").labelStyle(.iconOnly)
-                }
-                .buttonStyle(AssistantControlButtonStyle())
-                .help("Connection settings")
-                .disabled(session.isRunning)
-                .accessibilityIdentifier("assistant.connection")
             }
+            StudioSettingsButton(accessibilityIdentifier: "assistant.settings")
         }
+        .animation(reduceMotion ? nil : StudioMotion.fade, value: coordinator.isConnecting)
+        .animation(reduceMotion ? nil : StudioMotion.fade, value: coordinator.isConnected)
     }
-}
 
-private struct AssistantConnectionSettingsView: View {
-    @ObservedObject var director: CodexDirectorService
-    @ObservedObject var assistant: CodexDirectorService
-    @Environment(\.dismiss) private var dismiss
-    private let services = AppServices.shared
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Connection settings").font(.headline)
-                Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
-            }.padding(.horizontal, 20).padding(.vertical, 12)
-            Divider()
-            TabView {
-                CodexConnectionSettingsView(director: assistant,
-                                            mirrorPreferencesTo: director,
-                                            showsDoneButton: false)
-                    .tabItem { Label("Codex account", systemImage: "sparkles") }
-                AutomationSettingsView(access: services.accessStore, connector: services.connector, server: services.controlServer)
-                    .tabItem { Label("Control from external Codex", systemImage: "desktopcomputer") }
-            }.padding(12)
-        }.frame(width: 660, height: 780).background(StudioTheme.panel)
+    private func showConnectionSettings() {
+        AppSettingsNavigation.shared.selection = .codex
+        openAppSettings()
     }
 }
 

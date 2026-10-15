@@ -22,11 +22,13 @@ export const exportJobs = sqliteTable('export_jobs', {
 export const deviceGrants = sqliteTable('device_grants', {
   hash: text('hash').primaryKey(), userCode: text('user_code').notNull().unique(),
   accountId: text('account_id').references(() => accounts.id), name: text('name').notNull(),
+  purpose: text('purpose').notNull().default('account'),
   expiresAt: integer('expires_at').notNull(), createdAt: integer('created_at').notNull(),
 });
 export const deviceTokens = sqliteTable('device_tokens', {
   id: text('id').primaryKey(), hash: text('hash').notNull().unique(), accountId: text('account_id').notNull().references(() => accounts.id),
-  name: text('name').notNull(), expiresAt: integer('expires_at').notNull(), createdAt: integer('created_at').notNull(), revokedAt: integer('revoked_at'),
+  name: text('name').notNull(), purpose: text('purpose').notNull().default('account'),
+  expiresAt: integer('expires_at').notNull(), createdAt: integer('created_at').notNull(), revokedAt: integer('revoked_at'),
 });
 export const webhookEvents = sqliteTable('webhook_events', {
   id: text('id').primaryKey(), processedAt: integer('processed_at').notNull(),
@@ -44,6 +46,11 @@ export const oauthRequests = sqliteTable('oauth_requests', {
 });
 export const webSessions = sqliteTable('web_sessions', {
   hash: text('hash').primaryKey(), accountId: text('account_id').notNull().references(() => accounts.id), expiresAt: integer('expires_at').notNull(),
+});
+
+// Once confirmed by a community-purpose device, token expiry does not remove access.
+export const communityClientActivations = sqliteTable('community_client_activations', {
+  ownerId: text('owner_id').primaryKey(), confirmedAt: integer('confirmed_at').notNull(), deviceId: text('device_id').notNull(),
 });
 
 // Community assets stay private in R2; every read checks publication/ownership.

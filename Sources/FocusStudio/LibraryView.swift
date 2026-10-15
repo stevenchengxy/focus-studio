@@ -11,6 +11,7 @@ struct LibraryView: View {
     @State private var confirmsDeletion = false
     @State private var trashedCount: Int?
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var orderedIDs: [UUID] { model.projects.map(\.id) }
     private var selectedProjects: [RecordingProject] {
@@ -31,15 +32,13 @@ struct LibraryView: View {
                 Text("Focus Studio")
                     .font(.system(size: 17, weight: .semibold))
                 Spacer()
-                StudioAppearanceMenu()
-                AppLanguageMenu()
-                    .foregroundStyle(StudioTheme.secondaryText)
+                StudioSettingsButton(accessibilityIdentifier: "library.settings")
                 Button {
                     openWindow(id: AssistantWindow.id)
                 } label: {
                     Label("AI Assistant", systemImage: "sparkles")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(AssistantControlButtonStyle())
                 .foregroundStyle(StudioTheme.purple)
                 .font(.system(size: 12, weight: .semibold))
                 .help("Open the AI assistant")
@@ -87,32 +86,16 @@ struct LibraryView: View {
                                 } label: {
                                     Label("New recording", systemImage: "record.circle")
                                 }
-                                .buttonStyle(.plain)
-                                .font(.system(size: 13, weight: .semibold))
-                                .frame(height: 34)
-                                .padding(.horizontal, 14)
-                                .background(StudioTheme.controlFill)
-                                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                        .stroke(StudioTheme.glassEdge, lineWidth: 1)
-                                )
+                                .buttonStyle(LibrarySecondaryButtonStyle())
 
                                 Button {
-                                    withAnimation { scroll.scrollTo("sharedMedia", anchor: .top) }
+                                    withAnimation(reduceMotion ? nil : StudioMotion.selection) {
+                                        scroll.scrollTo("sharedMedia", anchor: .top)
+                                    }
                                 } label: {
                                     Label("Media library", systemImage: "square.stack.3d.up")
-                                        .font(.system(size: 13, weight: .semibold))
-                                        .frame(height: 34)
-                                        .padding(.horizontal, 14)
                                 }
-                                .buttonStyle(.plain)
-                                .background(StudioTheme.controlFill)
-                                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                        .stroke(StudioTheme.glassEdge, lineWidth: 1)
-                                )
+                                .buttonStyle(LibrarySecondaryButtonStyle())
 
                             }
                             .padding(.top, 5)
@@ -360,6 +343,44 @@ struct LibrarySelectionActions: View {
     }
 }
 
+/// Quiet feedback for the two secondary home actions. Animation runs only
+/// while the pointer or press state changes.
+private struct LibrarySecondaryButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var hovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 13, weight: .semibold))
+            .frame(height: 36)
+            .padding(.horizontal, 14)
+            .background(configuration.isPressed ? StudioTheme.controlPressed : StudioTheme.controlFill,
+                        in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .stroke(hovering && isEnabled
+                            ? AnyShapeStyle(StudioTheme.purple.opacity(0.35))
+                            : AnyShapeStyle(StudioTheme.glassEdge), lineWidth: 1)
+            }
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
+            .opacity(isEnabled ? 1 : 0.45)
+            .onHover { hovering = $0 }
+            .animation(reduceMotion ? nil : StudioMotion.hover, value: hovering)
+            .animation(reduceMotion ? nil : StudioMotion.press, value: configuration.isPressed)
+    }
+}
+
+private struct LibraryCardButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.88 : 1)
+            .animation(reduceMotion ? nil : StudioMotion.press, value: configuration.isPressed)
+    }
+}
+
 private struct ProjectCard: View {
     let project: RecordingProject
     let isSelecting: Bool
@@ -375,7 +396,7 @@ private struct ProjectCard: View {
     var body: some View {
         ZStack(alignment: .top) {
             Button(action: onActivate) { content }
-                .buttonStyle(.plain)
+                .buttonStyle(LibraryCardButtonStyle())
                 .accessibilityIdentifier("library.project.\(project.id)")
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
 
@@ -423,7 +444,7 @@ private struct ProjectCard: View {
                 .allowsHitTesting(false)
         }
         .animation(reduceMotion ? nil : StudioMotion.selection, value: isSelected)
-        .hoverLift()
+        .hoverLift(scale: 1.004, shadowOpacity: 0.10)
         .task(id: project.id) { posters.requestPoster(for: project) }
         .contextMenu {
             Button("Open recording", action: onOpen)
@@ -455,7 +476,7 @@ private struct ProjectCard: View {
                 }
                 .frame(height: 145)
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .animation(StudioMotion.fade, value: posters.poster(for: project) == nil)
+                .animation(reduceMotion ? nil : StudioMotion.fade, value: posters.poster(for: project) == nil)
 
                 VStack(alignment: .leading, spacing: 5) {
                     Text(project.title)

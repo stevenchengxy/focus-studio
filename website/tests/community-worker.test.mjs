@@ -7,8 +7,10 @@ import ts from 'typescript';
 // Exercise actual Workers FixedLengthStream, D1 and R2 implementations, without
 // credentials, paid services, seeded production users or deployed storage.
 test('community workerd upload, range access, transactional moderation trash/restore and author cleanup',async()=>{
- const main=`import {getCommunityProfile,saveCommunityProfile} from './community-profile.mjs';import {createCommunityPost,publishCommunityPost,unpublishCommunityPost,moderateCommunityPost,communityModerationDetail,moderationPost} from './community.mjs';import {uploadCommunityVideo,communityMediaResponse,communityMediaResponseForPost,deleteCommunityPost} from './community-media.mjs';
+ const main=`import {activateCommunityClient,hasCommunityClientActivation} from './community-client.mjs';import {getCommunityProfile,saveCommunityProfile} from './community-profile.mjs';import {createCommunityPost,publishCommunityPost,unpublishCommunityPost,moderateCommunityPost,communityModerationDetail,moderationPost} from './community.mjs';import {uploadCommunityVideo,communityMediaResponse,communityMediaResponseForPost,deleteCommunityPost} from './community-media.mjs';
  export default {async fetch(request,env){try{const url=new URL(request.url),id=url.searchParams.get('id'),owner={id:'worker-fixture'};
+ if(url.pathname==='/client-state')return Response.json({confirmed:await hasCommunityClientActivation(env.DB,owner.id)});
+ if(url.pathname==='/activate')return Response.json(await activateCommunityClient(env.DB,request.headers.get('authorization')));
  if(url.pathname==='/profile')return Response.json(request.method==='GET'?await getCommunityProfile(env.DB,owner.id):await saveCommunityProfile(env.DB,owner.id,await request.json()));
  if(url.pathname==='/draft'){const post=await createCommunityPost(env.DB,owner,await request.json());return Response.json(post)}
  if(url.pathname==='/upload')return Response.json(await uploadCommunityVideo(env.DB,env.BUCKET,id,owner,request));
@@ -21,7 +23,7 @@ test('community workerd upload, range access, transactional moderation trash/res
  if(url.pathname==='/delete'){await deleteCommunityPost(env.DB,env.BUCKET,id,owner);return Response.json({deleted:true})}
  return new Response('Not found',{status:404});}catch(error){return Response.json({code:error.code??'worker_error',message:error.message},{status:error.status??500})}}};`;
  const modules=[{type:'ESModule',path:'worker.mjs',contents:main}];
- for(const name of ['primitives','community-profile','community','community-media']){
+ for(const name of ['primitives','community-client','community-profile','community','community-media']){
   const source=await readFile(new URL(`../lib/server/${name}.ts`,import.meta.url),'utf8');
   let contents=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText;
   for(const dependency of ['primitives','community-profile','community'])contents=contents.replaceAll(`'./${dependency}'`,`'./${dependency}.mjs'`);
@@ -34,6 +36,21 @@ test('community workerd upload, range access, transactional moderation trash/res
   for(const name of (await readdir(sqlDir)).filter(name=>name.endsWith('.sql')).sort()){
    const sql=await readFile(new URL(name,sqlDir),'utf8');for(const statement of sql.split('--> statement-breakpoint').map(s=>s.trim()).filter(Boolean))await db.prepare(statement).run();
   }
+  const token=`fs_${'d'.repeat(64)}`,now=Math.floor(Date.now()/1000);
+  const tokenHash=Buffer.from(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(token))).toString('hex');
+  await db.prepare('INSERT INTO accounts(id,email,created_at) VALUES(?,?,?)').bind('worker-fixture','worker@example.invalid',now).run();
+  await db.prepare('INSERT INTO device_tokens(id,hash,account_id,name,purpose,expires_at,created_at) VALUES(?,?,?,?,?,?,?)').bind('worker-device',tokenHash,'worker-fixture','Focus Studio','account',now+3600,now).run();
+  assert.deepEqual(await (await mf.dispatchFetch('https://fixture.test/client-state')).json(),{confirmed:false});
+  assert.equal((await mf.dispatchFetch('https://fixture.test/activate',{method:'POST',headers:{Authorization:`Bearer ${token}`}})).status,401);
+  await db.prepare("UPDATE device_tokens SET purpose='community' WHERE id=?").bind('worker-device').run();
+  assert.deepEqual(await (await mf.dispatchFetch('https://fixture.test/activate',{method:'POST',headers:{Authorization:`Bearer ${token}`}})).json(),{confirmed:true});
+  const confirmed=await db.prepare('SELECT * FROM community_client_activations').first();
+  assert.equal(confirmed.owner_id,'worker-fixture');assert.equal(confirmed.device_id,'worker-device');
+  assert.deepEqual(await (await mf.dispatchFetch('https://fixture.test/activate',{method:'POST',headers:{Authorization:`Bearer ${token}`}})).json(),{confirmed:true});
+  assert.deepEqual(await db.prepare('SELECT * FROM community_client_activations').first(),confirmed);
+  await db.prepare('UPDATE device_tokens SET revoked_at=?,expires_at=? WHERE id=?').bind(now,now-1,'worker-device').run();
+  assert.equal((await mf.dispatchFetch('https://fixture.test/activate',{method:'POST',headers:{Authorization:`Bearer ${token}`}})).status,401);
+  assert.deepEqual(await (await mf.dispatchFetch('https://fixture.test/client-state')).json(),{confirmed:true});
   const bytes=new Uint8Array(128*1024);new DataView(bytes.buffer).setUint32(0,24);bytes.set(new TextEncoder().encode('ftypisom'),4);bytes.fill(80,24);
   const metadata={title:'Worker upload fixture',authorName:'Test maker',category:'demo',filename:'stream.mp4',mimeType:'video/mp4',sizeBytes:bytes.length};
   let response=await mf.dispatchFetch('https://fixture.test/draft',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(metadata)});assert.equal(response.status,200);const post=await response.json();

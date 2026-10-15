@@ -1,9 +1,10 @@
 import {api,database} from './runtime';
 import {APIError,readBody} from './primitives';
-import {communityBucket,communityJSON,communityReadLimit,communityViewer,communityWriter,isCommunityModerator,requireCommunityModerator} from './community-runtime';
+import {communityBucket,communityJSON,communityReadLimit,communityViewer,communityWriter,communityContributor,isCommunityModerator,requireCommunityModerator} from './community-runtime';
 import {COMMUNITY_ACCOUNT_BYTES,COMMUNITY_ACCOUNT_POSTS,COMMUNITY_MAX_BYTES,communityItem,createCommunityPost,editCommunityPost,getCommunityPost,listCommunityPosts,publishCommunityPost,reportCommunityPost,unpublishCommunityPost,listCommunityModeration,communityModerationDetail,moderateCommunityPost,moderationPost} from './community';
 import {communityMediaResponse,communityMediaResponseForPost,deleteCommunityPost,uploadCommunityPoster,uploadCommunityVideo} from './community-media';
 import {saveCommunityProfile} from './community-profile';
+import {hasCommunityClientActivation} from './community-client';
 
 export const listCommunity=(request: Request,mine=false)=>api(async()=>{
   const viewer=await communityViewer();
@@ -12,7 +13,8 @@ export const listCommunity=(request: Request,mine=false)=>api(async()=>{
 });
 export const communityMe=()=>api(async()=>{
   const viewer=await communityViewer();
-  return communityJSON({authenticated:!!viewer,...(viewer?{viewerId:viewer.id}:{}),displayName:viewer?.displayName??null,isModerator:isCommunityModerator(viewer),...(viewer?.name?{viewerName:viewer.name}:{}),maxUploadBytes:COMMUNITY_MAX_BYTES,maxLibraryBytes:COMMUNITY_ACCOUNT_BYTES,maxLibraryPosts:COMMUNITY_ACCOUNT_POSTS});
+  const clientConfirmed=!!viewer && await hasCommunityClientActivation(database(),viewer.id);
+  return communityJSON({authenticated:!!viewer,clientConfirmed,canPublish:clientConfirmed,...(viewer?{viewerId:viewer.id}:{}),displayName:viewer?.displayName??null,isModerator:isCommunityModerator(viewer),...(viewer?.name?{viewerName:viewer.name}:{}),maxUploadBytes:COMMUNITY_MAX_BYTES,maxLibraryBytes:COMMUNITY_ACCOUNT_BYTES,maxLibraryPosts:COMMUNITY_ACCOUNT_POSTS});
 });
 export const readCommunityProfile=()=>api(async()=>{
   const viewer=await communityViewer();
@@ -24,7 +26,7 @@ export const updateCommunityProfile=(request:Request)=>api(async()=>{
   return communityJSON(await saveCommunityProfile(database(),viewer.id,await readBody(request,2048)));
 });
 export const createCommunity=(request: Request)=>api(async()=>{
-  const viewer=await communityWriter(request,'create',10);
+  const viewer=await communityContributor(request,'create',10);
   communityBucket(); // Do not reserve a draft when media storage is unconfigured.
   const post=await createCommunityPost(database(),viewer,await readBody(request,16384));
   return communityJSON({item:communityItem(post,viewer.id),uploadUrl:`/api/community/${post.id}/media`},201);
@@ -35,7 +37,7 @@ export const detailCommunity=(request: Request,id: string)=>api(async()=>{
   return communityJSON({item:communityItem(await getCommunityPost(database(),id,viewer?.id),viewer?.id),authenticated:!!viewer});
 });
 export const editCommunity=(request: Request,id: string)=>api(async()=>{
-  const viewer=await communityWriter(request,'edit');
+  const viewer=await communityContributor(request,'edit');
   return communityJSON({item:communityItem(await editCommunityPost(database(),id,viewer,await readBody(request,16384)),viewer.id)});
 });
 export const deleteCommunity=(request: Request,id: string)=>api(async()=>{
@@ -44,7 +46,7 @@ export const deleteCommunity=(request: Request,id: string)=>api(async()=>{
   return communityJSON({deleted:true});
 });
 export const publishCommunity=(request: Request,id: string)=>api(async()=>{
-  const viewer=await communityWriter(request,'publish',30);
+  const viewer=await communityContributor(request,'publish',30);
   return communityJSON({item:communityItem(await publishCommunityPost(database(),id,viewer,await readBody(request,1024)),viewer.id)});
 });
 export const unpublishCommunity=(request: Request,id: string)=>api(async()=>{
@@ -72,7 +74,7 @@ export const moderateCommunity=(request:Request,id:string)=>api(async()=>{
   return communityJSON({item:communityItem(post,viewer.id,true)});
 });
 export const uploadCommunity=(request: Request,id: string,poster=false)=>api(async()=>{
-  const viewer=await communityWriter(request,poster?'poster':'upload',20),bucket=communityBucket();
+  const viewer=await communityContributor(request,poster?'poster':'upload',20),bucket=communityBucket();
   const post=poster?await uploadCommunityPoster(database(),bucket,id,viewer,request):await uploadCommunityVideo(database(),bucket,id,viewer,request);
   return communityJSON({item:communityItem(post,viewer.id)});
 });

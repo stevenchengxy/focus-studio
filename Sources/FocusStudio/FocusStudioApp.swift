@@ -144,6 +144,7 @@ struct StudioRootView: View {
             MainWindowPresenter.shared.openMainWindow = { [openWindow] in openWindow(id: MainWindow.id) }
             AssistantWindow.presenter.openMainWindow = { [openWindow] in openWindow(id: AssistantWindow.id) }
         }
+        .onOpenURL(perform: handleSettingsURL)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             // Long-running app sessions still discover releases after the daily
             // interval. The service coalesces activation and startup checks.
@@ -169,6 +170,16 @@ struct StudioRootView: View {
         } message: {
             Text(model.errorMessage)
         }
+    }
+
+    private func handleSettingsURL(_ url: URL) {
+        guard let route = AppSettingsDeepLink(url: url) else { return }
+        switch route {
+        case .community: AppSettingsNavigation.shared.selection = .account
+        case .codex: AppSettingsNavigation.shared.selection = .codex
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        openSettings()
     }
 
 }

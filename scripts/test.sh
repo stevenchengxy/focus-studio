@@ -5,6 +5,7 @@ SCRIPT_DIR="${0:A:h}"
 PROJECT_DIR="${SCRIPT_DIR:h}"
 
 cd "$PROJECT_DIR"
+zsh "$SCRIPT_DIR/test-deep-links.sh"
 swift build
 swift run FocusStudioPermissionTests
 swift run FocusStudioE2E --output-dir "$PROJECT_DIR/.artifacts/e2e"

@@ -6,9 +6,9 @@ import { LocaleToggle } from '@/components/locale/locale-toggle';
 import { useLocale } from '@/components/locale/locale-provider';
 import styles from './style.module.css';
 
-type AccountState = { authenticated: boolean; account?: {email: string | null}; devices?: Array<{id:string;name:string;created_at:number;expires_at:number}> };
+type AccountState = { authenticated: boolean; viewerName?: string; account?: {email: string | null}; devices?: Array<{id:string;name:string;created_at:number;expires_at:number}> };
 type AccountError = 'load' | 'retry' | 'action' | 'code';
-export default function AccountPanel({code,signInUrl,signOutUrl}:{code:string;signInUrl:string;signOutUrl:string}) {
+export default function AccountPanel({code,signInUrl,signOutUrl,communityConnection=false}:{code:string;signInUrl:string;signOutUrl:string;communityConnection?:boolean}) {
   const { locale, t } = useLocale();
   const [account,setAccount] = useState<AccountState|null>(null);
   const [error,setError] = useState<AccountError|null>(null);
@@ -18,12 +18,14 @@ export default function AccountPanel({code,signInUrl,signOutUrl}:{code:string;si
   const [approved,setApproved] = useState(false);
   const load = useCallback(async () => {
     try {
-      const response = await fetch('/api/account',{cache:'no-store'});
+      // Community pairing must show the Sites/ChatGPT identity, even if an
+      // unrelated legacy Google account cookie is also present.
+      const response = await fetch(communityConnection?'/api/community/me':'/api/account',{cache:'no-store'});
       const data = await response.json() as AccountState;
       if ((!response.ok && response.status !== 401) || typeof data.authenticated !== 'boolean') throw new Error('account');
       setAccount(data);
     } catch { setError('load'); }
-  },[]);
+  },[communityConnection]);
   useEffect(() => {
     if(new URLSearchParams(window.location.search).get('auth') === 'retry') setError('retry');
     void load();
@@ -58,7 +60,7 @@ export default function AccountPanel({code,signInUrl,signOutUrl}:{code:string;si
     </section>}
     {account?.authenticated&&<>
       <section className={styles.card}>
-        <div className={styles.row}><div><p className={styles.eyebrow}>{t('ACCOUNT','账户')}</p><h2>{account.account?.email || t('Your ChatGPT account','你的 ChatGPT 账户')}</h2></div><button className={styles.textButton} disabled={!!busy} onClick={()=>void action('logout','/api/auth/logout')}>{t('Sign out','退出登录')}</button></div>
+        <div className={styles.row}><div><p className={styles.eyebrow}>{t('ACCOUNT','账户')}</p><h2>{account.account?.email || account.viewerName || t('Your ChatGPT account','你的 ChatGPT 账户')}</h2></div><button className={styles.textButton} disabled={!!busy} onClick={()=>void action('logout','/api/auth/logout')}>{t('Sign out','退出登录')}</button></div>
         <div className={styles.quickLinks}>
           <a href="/community/mine"><Monitor size={19}/><span>{t('My shared work','我分享的作品')}</span><ArrowUpRight size={16}/></a>
           <a href="/community/new"><Plus size={19}/><span>{t('Share a demo','分享 Demo')}</span><ArrowUpRight size={16}/></a>
@@ -67,9 +69,9 @@ export default function AccountPanel({code,signInUrl,signOutUrl}:{code:string;si
       </section>
       <section className={styles.card}>
         <details className={styles.connection} open={code ? true : undefined}>
-          <summary>{t('Connect your desktop app','连接桌面软件')}</summary>
+          <summary>{communityConnection?t('Confirm community publishing','确认社区发布资格'):t('Connect your desktop app','连接桌面软件')}</summary>
           <p>{t('Enter the code shown in Focus Studio. Only approve a connection you started.','输入 Focus Studio 显示的连接码，仅批准由你发起的连接。')}</p>
-          {approved?<p role="status" className={styles.success}>{t('Device connected. Return to Focus Studio to continue.','设备已批准，请回到 Focus Studio 继续。')}</p>:<form onSubmit={event=>{event.preventDefault();void action('approve','/api/device/approve',{userCode:deviceCode,name:deviceName.trim()});}}>
+          {approved?<p role="status" className={styles.success}>{communityConnection?t('Connection approved. Return to Focus Studio to finish confirmation, then open the community to publish.','连接已批准。请回到 Focus Studio 完成确认，再前往社区发布。'):t('Device connected. Return to Focus Studio to continue.','设备已批准，请回到 Focus Studio 继续。')}</p>:<form onSubmit={event=>{event.preventDefault();void action('approve','/api/device/approve',{userCode:deviceCode,name:deviceName.trim()});}}>
             <div className={styles.fields}>
               <label>{t('Connection code','连接码')}<input value={deviceCode} onChange={e=>setDeviceCode(e.target.value.toUpperCase())} placeholder="A1B2C3-D4E5F6" maxLength={13} autoComplete="off" spellCheck={false} required/></label>
               <label>{t('Device name','设备名称')}<input value={deviceName} onChange={e=>setDeviceName(e.target.value)} maxLength={80} required/></label>
