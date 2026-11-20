@@ -144,7 +144,7 @@ struct AppRegression {
         try await GlobalMediaLibraryRegression.run()
         try await AssistantTranscriptScrollRegression.run()
         try await RecordingLifecycleRegression.run()
-        try await SystemCapturePickerRegression.run()
+        CaptureStopPolicyRegression.run()
         try await AssistantControlRegression.run()
         try await DemoPagePreparationRegression.run()
         try await RecordingWindowFocusRegression.run()

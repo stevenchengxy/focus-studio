@@ -1619,15 +1619,3 @@
 "This connection code expired. Connect again to get a new code." = "连接码已过期，请重新连接以获取新的连接码。";
 "Community connection is temporarily unavailable. Your local recordings and exports are unaffected." = "社区连接暂时不可用，本地录制和导出不受影响。";
 "Your browser could not open. Try connecting again." = "未能打开浏览器，请重新连接。";
-
-// System capture chooser
-"Choose with macOS" = "使用 macOS 选择";
-"Ready to record?" = "准备好录制了吗？";
-"Choose a window or display" = "选择窗口或屏幕";
-"More options" = "更多选项";
-"Record an area" = "录制区域";
-"Could not select a recording source. Try again." = "无法选择录制内容，请重试。";
-"Enable interaction access for automatic click zooms and cursor effects." = "开启交互权限，即可记录点击缩放和鼠标特效。";
-
-"Focus Studio recording" = "Focus Studio 正在录制";
-"Recording controls stay in the menu bar" = "录制控制位于菜单栏";

@@ -346,7 +346,6 @@ public final class CaptureEngine: ObservableObject {
     private var activeTarget: CaptureTargetInfo?
     private var activeOutputSize: (width: Int, height: Int)?
     private var activeContentFilter: SCContentFilter?
-    private var activeSystemSelection: SystemCaptureSelection?
     /// macOS's Stop Sharing is a normal finish, not a corrupt/fatal take.
     public private(set) var wasStoppedByUser = false
     public var onUserStopped: (@MainActor () -> Void)?
@@ -461,8 +460,7 @@ public final class CaptureEngine: ObservableObject {
     public func startRecording(
         target: CaptureTargetInfo,
         outputURL: URL,
-        options: CaptureOptions = .init(),
-        systemSelection: SystemCaptureSelection? = nil
+        options: CaptureOptions = .init()
     ) async throws {
         guard !isRecording, activeStream == nil else {
             throw CaptureEngineError.recordingAlreadyInProgress
@@ -492,8 +490,11 @@ public final class CaptureEngine: ObservableObject {
             let segmentURL = directory.appendingPathComponent("segment-0.mp4")
             activeSegmentURL = segmentURL
 
-            let resolvedTarget = try await resolve(target: target, systemSelection: systemSelection)
-            activeSystemSelection = systemSelection
+            let content = try await SCShareableContent.excludingDesktopWindows(
+                false,
+                onScreenWindowsOnly: false
+            )
+            let resolvedTarget = try resolve(target: target, in: content)
             let outputSize = CaptureOutputGeometry.pixelSize(
                 sourcePointSize: resolvedTarget.sourcePointSize,
                 targetScaleFactor: resolvedTarget.targetInfo.scaleFactor,
@@ -709,7 +710,8 @@ public final class CaptureEngine: ObservableObject {
         defer { isChangingPauseState = false }
         // Resolve the same selected source again; never silently switch windows.
         // If it disappeared, stay safely paused and let Finish save earlier media.
-        let resolved = try await resolve(target: target, systemSelection: activeSystemSelection)
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+        let resolved = try resolve(target: target, in: content)
         let filter = resolved.filter
         let configuration = makeStreamConfiguration(
             resolvedTarget: resolved, outputSize: CapturePixelSize(width: outputSize.width, height: outputSize.height), options: options
@@ -996,11 +998,14 @@ public final class CaptureEngine: ObservableObject {
     /// record instead of asking the model to guess interaction coordinates.
     public func captureScreenshot(
         target: CaptureTargetInfo,
-        to outputURL: URL,
-        systemSelection: SystemCaptureSelection? = nil
+        to outputURL: URL
     ) async throws {
         do {
-            let resolvedTarget = try await resolve(target: target, systemSelection: systemSelection)
+            let content = try await SCShareableContent.excludingDesktopWindows(
+                false,
+                onScreenWindowsOnly: false
+            )
+            let resolvedTarget = try resolve(target: target, in: content)
             var options = CaptureOptions()
             options.frameRate = 30
             options.capturesSystemAudio = false
@@ -1158,24 +1163,6 @@ public final class CaptureEngine: ObservableObject {
             }
 
         return displayTargets + windowTargets
-    }
-
-    private func resolve(target: CaptureTargetInfo, systemSelection: SystemCaptureSelection?) async throws -> ResolvedTarget {
-        if let selection = systemSelection {
-            guard selection.target.id == target.id, selection.target.kind == target.kind,
-                  selection.target.nativeID == target.nativeID else {
-                throw CaptureEngineError.invalidTarget("The recording source changed. Choose it again.")
-            }
-            let current = try selection.currentTarget()
-            return ResolvedTarget(
-                filter: selection.filter, targetInfo: current,
-                sourcePointSize: CGSize(width: current.frame.width, height: current.frame.height), sourceRect: nil,
-                typingProcessID: selection.processID,
-                typingWindowID: current.kind == .window ? current.nativeID : nil
-            )
-        }
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
-        return try resolve(target: target, in: content)
     }
 
     private func resolve(
@@ -1395,7 +1382,6 @@ public final class CaptureEngine: ObservableObject {
         activeTarget = nil
         activeOutputSize = nil
         activeContentFilter = nil
-        activeSystemSelection = nil
         wasStoppedByUser = false
         activeStreamConfiguration = nil
         captureStartedUptime = nil

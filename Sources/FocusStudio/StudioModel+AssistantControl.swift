@@ -58,7 +58,6 @@ final class AssistantAssetsLocator: @unchecked Sendable {
 /// guards apply exactly as for a click.
 extension StudioModel: AppControlling {
     func refreshRecordingSources() async throws -> [AIRecordingSource] {
-        guard !isSelectingSystemContent else { throw AIToolError.failed(Self.selectingSystemSourceRefusal) }
         if captureEngine.isRecording || destination == .countdown {
             // Never leave a live recording; just refresh the list.
             return try await refreshListedSources().map(AIRecordingSource.init)
@@ -68,7 +67,6 @@ extension StudioModel: AppControlling {
         }
         if destination == .editor { closeEditor() }
         if destination == .recorder {
-            useListedCaptureSources()
             do {
                 try await refreshListedSources()
                 capturePermissionDenied = false
@@ -82,7 +80,7 @@ extension StudioModel: AppControlling {
             }
         } else {
             let wasShowingError = isShowingError
-            await showRecorder(useSystemPicker: false)
+            await showRecorder()
             if capturePermissionDenied {
                 if let captureFailureDetails { throw AIToolError.failed(captureFailureDetails) }
                 throw AILocalizedFailure("Screen Recording permission is required.")
@@ -191,7 +189,6 @@ extension StudioModel: AppControlling {
         // choice stay as they are (the in-app assistant comes here without
         // the bridge's navigation check).
         guard !isSelectingArea else { throw AIToolError.failed(Self.drawingAreaRefusal) }
-        guard !isSelectingSystemContent else { throw AIToolError.failed(Self.selectingSystemSourceRefusal) }
         // The person's Record waits for macOS's microphone dialog: its
         // countdown starts when they answer, with the source they chose.
         guard !isWaitingForMicrophoneAccess else { throw AIToolError.failed(Self.waitingForMicrophoneRefusal) }
@@ -199,7 +196,6 @@ extension StudioModel: AppControlling {
             throw AIToolError.invalidArgument("Codex interaction mode requires a window source.")
         }
         if destination == .editor { closeEditor() }
-        useListedCaptureSources()
         selectedTargetID = target.id
         recordingSourceKind = target.kind
         destination = .recorder

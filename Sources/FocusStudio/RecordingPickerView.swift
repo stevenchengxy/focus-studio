@@ -3,7 +3,7 @@ import FocusStudioCapture
 import FocusStudioCore
 import SwiftUI
 
-struct LegacyRecordingPickerView: View {
+struct RecordingPickerView: View {
     @EnvironmentObject private var model: StudioModel
     @ObservedObject private var localization = AppLocalization.shared
     private var kind: CaptureTargetKind {
@@ -62,12 +62,7 @@ struct LegacyRecordingPickerView: View {
                 Text("New recording")
                     .font(.system(size: 14, weight: .semibold))
                 Spacer()
-                if SystemCapturePicker.isSupported {
-                    Button("Choose with macOS") { Task { await model.showRecorder() } }
-                        .buttonStyle(.bordered)
-                } else {
-                    Color.clear.frame(width: 32, height: 30)
-                }
+                Color.clear.frame(width: 32, height: 30)
             }
             .padding(.horizontal, 22)
             .frame(height: 58)
@@ -133,7 +128,7 @@ struct LegacyRecordingPickerView: View {
                                     }
                                     .buttonStyle(.bordered)
                                     Button("Retry") {
-                                        Task { await model.showRecorder(useSystemPicker: false) }
+                                        Task { await model.showRecorder() }
                                     }
                                     .buttonStyle(.bordered)
                                 }
@@ -156,7 +151,7 @@ struct LegacyRecordingPickerView: View {
                                     .multilineTextAlignment(.center)
                                     .frame(maxWidth: 380)
                                 Button("Refresh sources") {
-                                    Task { await model.showRecorder(useSystemPicker: false) }
+                                    Task { await model.showRecorder() }
                                 }
                                 .buttonStyle(.bordered)
                             }
@@ -357,9 +352,6 @@ struct LegacyRecordingPickerView: View {
             areaDisplayID = model.selectedAreaTarget.flatMap { area in
                 displayTargets.first(where: { $0.nativeID == area.nativeID })?.id
             } ?? displayTargets.first?.id
-            // The system-picker setup can explicitly open Area with its
-            // backing display selected; do not turn it back into Display.
-            if kind == .area { return }
             guard let selectedKind = model.selectedTarget?.kind else {
                 model.selectedTargetID = preferredBrowserWindow?.id
                     ?? model.captureEngine.availableTargets.first(where: { $0.kind == .window })?.id

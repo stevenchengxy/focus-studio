@@ -111,8 +111,8 @@ final class RecordingControlPanelCoordinator: ObservableObject {
 
     /// Whether the bar belongs on screen: on the recorder, during a countdown
     /// and while recording, but not while an area is being drawn.
-    static func showsControls(destination: StudioModel.Destination, isSelectingArea: Bool, hidesForSystemCapture: Bool = false) -> Bool {
-        !isSelectingArea && !hidesForSystemCapture && [.recorder, .countdown, .recording].contains(destination)
+    static func showsControls(destination: StudioModel.Destination, isSelectingArea: Bool) -> Bool {
+        !isSelectingArea && [.recorder, .countdown, .recording].contains(destination)
     }
 
     /// Only a countdown or a recording stays on screen when Focus Studio is
@@ -140,7 +140,7 @@ final class RecordingControlPanelCoordinator: ObservableObject {
         followers.removeAll()
         followedModel = model
         // @Published delivers before the value changes; sync on the next pass.
-        model.$destination.combineLatest(model.$isSelectingArea, model.$isSelectingSystemContent, model.$hidesControlsForSystemCapture)
+        model.$destination.combineLatest(model.$isSelectingArea)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in MainActor.assumeIsolated { self?.sync() } }
             .store(in: &followers)
@@ -149,9 +149,7 @@ final class RecordingControlPanelCoordinator: ObservableObject {
     /// Puts the bar on screen for the followed model's page, or takes it away.
     func sync() {
         guard let model = followedModel else { return }
-        SystemRecordingMenuBar.shared.sync(model)
-        if Self.showsControls(destination: model.destination, isSelectingArea: model.isSelectingArea || model.isSelectingSystemContent,
-                             hidesForSystemCapture: model.hidesControlsForSystemCapture) {
+        if Self.showsControls(destination: model.destination, isSelectingArea: model.isSelectingArea) {
             show(model: model)
             // show() early-returns once the panels exist, so this call is what
             // lets the console shrink to the recording bar and expand back.
@@ -810,19 +808,12 @@ struct FloatingRecordingControls: View {
 
     private var readyControls: some View {
         Group {
-            if model.usesSystemCapturePicker {
-                Button { model.chooseSystemCaptureSource() } label: {
-                    Label(model.selectedTarget?.title ?? L10n.tr("Choose a window or display"), systemImage: icon(for: model.recordingSourceKind))
-                        .lineLimit(1).frame(maxWidth: 240)
-                }.buttonStyle(FloatingControlButtonStyle())
+            sourceModePicker
+            if model.recordingSourceKind == .area {
+                if model.areaDisplays.count > 1 { areaDisplayMenu }
+                if let area = drawnArea { areaRedrawChip(area) }
             } else {
-                sourceModePicker
-                if model.recordingSourceKind == .area {
-                    if model.areaDisplays.count > 1 { areaDisplayMenu }
-                    if let area = drawnArea { areaRedrawChip(area) }
-                } else {
-                    sourceChip
-                }
+                sourceChip
             }
             Spacer(minLength: 8)
             settingsMenu
@@ -830,7 +821,7 @@ struct FloatingRecordingControls: View {
             Rectangle().fill(StudioTheme.controlFill).frame(width: 1, height: 22)
             primaryButton
         }
-        .disabled(locked || model.isSelectingArea || model.isSelectingSystemContent)
+        .disabled(locked || model.isSelectingArea)
     }
 
     /// Three icons replace a menu whose "Area" rows were indistinguishable from

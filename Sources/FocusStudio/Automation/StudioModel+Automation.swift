@@ -86,14 +86,12 @@ extension StudioModel {
             return "Focus Studio is showing a dialog, such as a save or open panel. Try again when the person has closed it."
         }
         if isSelectingArea { return Self.drawingAreaRefusal }
-        if isSelectingSystemContent { return Self.selectingSystemSourceRefusal }
         if isWaitingForMicrophoneAccess { return Self.waitingForMicrophoneRefusal }
         return nil
     }
 
     /// For a call that arrives while the person draws a recording area.
     static let drawingAreaRefusal = "The person is drawing a recording area in Focus Studio. Try again when they have finished or cancelled it."
-    static let selectingSystemSourceRefusal = "The person is choosing a recording source in macOS. Try again when they have selected or cancelled it."
 
     /// For a call that arrives while the person's Record waits for macOS's
     /// microphone dialog (``isWaitingForMicrophoneAccess``).
