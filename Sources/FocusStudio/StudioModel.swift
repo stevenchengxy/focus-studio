@@ -22,7 +22,13 @@ final class StudioModel: ObservableObject {
         case editor
     }
 
-    @Published var destination: Destination = .library
+    @Published var destination: Destination = .library {
+        didSet {
+            if ![.recorder, .countdown, .recording].contains(destination) {
+                clearSystemCaptureSelection()
+            }
+        }
+    }
     @Published var projects: [RecordingProject] = []
     @Published private(set) var globalMediaAssets: [DemoMediaAsset] = []
     @Published var activeProject: RecordingProject? {
@@ -38,6 +44,18 @@ final class StudioModel: ObservableObject {
     @Published var selectedTargetID: String?
     @Published private(set) var selectedAreaTarget: CaptureTargetInfo?
     @Published private(set) var isSelectingArea = false
+    @Published private(set) var usesSystemCapturePicker = false
+    @Published private(set) var isSelectingSystemContent = false
+    @Published private(set) var hidesControlsForSystemCapture = false
+    private var systemCapturePicker: SystemCapturePicker?
+    private var systemCaptureSelection: SystemCaptureSelection?
+    private var systemCaptureRequestID: UUID?
+    /// Tests supply only the asynchronous user answer; production presents the
+    /// real system picker. No inventory or screen permission is needed here.
+    var requestSystemCaptureSelection: (@MainActor (@escaping @MainActor (Result<SystemCaptureSelection?, Error>) -> Void) -> Void)?
+    /// An explicit manual-start capability, never implicitly reused for an MCP
+    /// command with the same source ID.
+    private var attemptSystemSelection: (id: UUID, selection: SystemCaptureSelection)?
     /// Bumped whenever the capture engine's source list actually changes.
     /// Views read `captureEngine.availableTargets` but observe this model, and a
     /// change published by the engine alone would never re-render them.
@@ -224,9 +242,15 @@ final class StudioModel: ObservableObject {
                 self?.handleCaptureStateChange(state)
             }
         }
+        captureEngine.onUserStopped = { [weak self] in
+            Task { @MainActor in await self?.stopRecording() }
+        }
     }
 
     var selectedTarget: CaptureTargetInfo? {
+        if usesSystemCapturePicker {
+            return systemCaptureSelection.flatMap { $0.target.id == selectedTargetID ? $0.target : nil }
+        }
         if let selectedAreaTarget, selectedAreaTarget.id == selectedTargetID {
             return selectedAreaTarget
         }
@@ -642,10 +666,86 @@ final class StudioModel: ObservableObject {
         await codexDirector.sendPrompt(prompt, screenshotURL: contextURL)
     }
 
-    func showRecorder() async {
-        guard !isManagingProjects else { return }
+    /// The manual path delegates consent and source choice to macOS. A new
+    /// source invalidates observations tied to the old window immediately.
+    func chooseSystemCaptureSource() {
+        guard SystemCapturePicker.isSupported, destination == .recorder,
+              canBeginRecordingCountdown else { return }
+        clearSystemCaptureSelection()
+        usesSystemCapturePicker = true
+        selectedTargetID = nil
+        recordingActionReceipts.removeAll()
+        recordingObservation = nil
+        recordingInteractionTrace = nil
+        capturePermissionDenied = false
+        captureFailureDetails = nil
+        sourcePreview.stop()
+        let requestID = UUID()
+        systemCaptureRequestID = requestID
+        isSelectingSystemContent = true
+        let completion: @MainActor (Result<SystemCaptureSelection?, Error>) -> Void = { [weak self] result in
+            guard let self, self.systemCaptureRequestID == requestID,
+                  self.isSelectingSystemContent, self.destination == .recorder else { return }
+            self.isSelectingSystemContent = false
+            switch result {
+            case .success(let selection):
+                self.systemCaptureSelection = selection
+                self.selectedTargetID = selection?.target.id
+                if let kind = selection?.target.kind { self.recordingSourceKind = kind }
+            case .failure(let error):
+                self.clearSystemCaptureSelection()
+                self.showMessage(L10n.tr("Could not select a recording source. Try again.") + "\n" + error.localizedDescription)
+            }
+            self.bringToFront()
+        }
+        if let requestSystemCaptureSelection {
+            requestSystemCaptureSelection(completion)
+        } else {
+            let picker = SystemCapturePicker(completion: completion)
+            systemCapturePicker = picker
+            picker.present()
+        }
+    }
+
+    private func clearSystemCaptureSelection() {
+        systemCaptureRequestID = nil
+        systemCapturePicker?.invalidate()
+        systemCapturePicker = nil
+        systemCaptureSelection = nil
+        isSelectingSystemContent = false
+        hidesControlsForSystemCapture = false
+    }
+
+    /// Explicit legacy route for fixed rectangles and authorized source IDs.
+    /// This path may ask for Screen Recording access; the system picker does not.
+    func useListedCaptureSources() {
+        guard !captureEngine.isRecording, destination != .countdown, destination != .recording else { return }
+        clearSystemCaptureSelection()
+        usesSystemCapturePicker = false
+        recordingObservation = nil
+        recordingActionReceipts.removeAll()
+    }
+
+    func showAreaRecorder() async {
+        guard canBeginRecordingCountdown, destination == .recorder else { return }
+        await showRecorder(useSystemPicker: false)
+        recordingSourceKind = .area
+        if let area = selectedAreaTarget { selectedTargetID = area.id }
+        else { selectedTargetID = areaDisplays.first?.id }
+    }
+
+    func showRecorder(useSystemPicker: Bool = true) async {
+        guard !isManagingProjects, !captureEngine.isRecording, !isFinishingRecording,
+              !isWaitingForMicrophoneAccess, !isSelectingArea, !isSelectingSystemContent else { return }
         cancelRecordingCountdown()
         destination = .recorder
+        if useSystemPicker, SystemCapturePicker.isSupported {
+            usesSystemCapturePicker = true
+            chooseSystemCaptureSource()
+            return
+        }
+        clearSystemCaptureSelection()
+        usesSystemCapturePicker = false
         busy("Finding screens and windows…")
         defer { isBusy = false }
 
@@ -695,6 +795,7 @@ final class StudioModel: ObservableObject {
     /// window keeps the title of whatever tab was open when the list was built.
     func refreshRecordingSourcesQuietly() async {
         guard destination == .recorder,
+              !usesSystemCapturePicker,
               !isBusy,
               !isSelectingArea,
               !capturePermissionDenied,
@@ -907,7 +1008,9 @@ final class StudioModel: ObservableObject {
             }
             return
         }
-        beginRecordingCountdown(target: target, settings: recorderSettings, duration: nil, allowUnavailableTracking: allowUnavailableTracking)
+        beginRecordingCountdown(target: target, settings: recorderSettings, duration: nil,
+                                allowUnavailableTracking: allowUnavailableTracking,
+                                systemSelection: usesSystemCapturePicker ? systemCaptureSelection : nil)
     }
 
     /// Whether the person's Record waits for macOS's microphone dialog. Its
@@ -921,7 +1024,7 @@ final class StudioModel: ObservableObject {
     /// microphone dialog), so a new countdown may start.
     private var canBeginRecordingCountdown: Bool {
         recordingCountdownTask == nil && microphoneAccessTask == nil && !captureEngine.isRecording && currentRecording?.isLive != true
-            && !isFinishingRecording && !isSelectingArea && !isBusy && !isManagingProjects
+            && !isFinishingRecording && !isSelectingArea && !isSelectingSystemContent && !isBusy && !isManagingProjects
     }
 
     /// Starts the visible 3-second countdown for a new recording attempt of
@@ -934,7 +1037,8 @@ final class StudioModel: ObservableObject {
         target: CaptureTargetInfo,
         settings: RecordingSettings,
         duration: TimeInterval?,
-        allowUnavailableTracking: Bool = false
+        allowUnavailableTracking: Bool = false,
+        systemSelection: SystemCaptureSelection? = nil
     ) -> UUID? {
         guard canBeginRecordingCountdown else { return nil }
         guard confirmInteractionTrackingBeforeRecording(allowUnavailable: allowUnavailableTracking, automaticZooms: settings.automaticZooms) else { return nil }
@@ -947,6 +1051,7 @@ final class StudioModel: ObservableObject {
         // the AI tool, and can cancel it there.
         attempt.requester = automationRequester?()
         let attemptID = attempt.id
+        attemptSystemSelection = systemSelection.map { (attemptID, $0) }
         currentRecording = attempt
         recordingActionReceipts.removeAll()
         recordingObservation = nil
@@ -1012,6 +1117,9 @@ final class StudioModel: ObservableObject {
     /// a list without displays or windows is left to the capture start,
     /// which reports the real reason.
     private func listedTarget(for target: CaptureTargetInfo) -> CaptureTargetInfo? {
+        if let approved = attemptSystemSelection, approved.id == recordingAttemptID {
+            return approved.selection.target.id == target.id ? target : nil
+        }
         let listed = captureEngine.availableTargets
         if target.kind == .area {
             let displays = listed.filter { $0.kind == .display }
@@ -1067,6 +1175,10 @@ final class StudioModel: ObservableObject {
         attempt.endedAt = Date()
         currentRecording = attempt
         cancelAutomaticStop()
+        if attemptSystemSelection?.id == attempt.id {
+            attemptSystemSelection = nil
+            clearSystemCaptureSelection()
+        }
     }
 
     /// The capture of attempt `id` delivered its first frame at `startUptime`:
@@ -1138,7 +1250,20 @@ final class StudioModel: ObservableObject {
             pendingSourceCropInsets = settings.browserContentOnly
                 ? defaultBrowserCrop(for: target)
                 : nil
-            let startUptime = try await startCapture(captureEngine, target, outputURL, options)
+            let startUptime: TimeInterval
+            if let approved = attemptSystemSelection, approved.id == attemptID {
+                // The system's display filter grants precisely the selected
+                // display. Keep it intact and remove our floating controls
+                // before the first captured frame instead of widening access
+                // to rebuild a filter that excludes the application.
+                hidesControlsForSystemCapture = target.kind == .display
+                RecordingControlPanelCoordinator.shared.sync()
+                try await captureEngine.startRecording(target: target, outputURL: outputURL,
+                                                      options: options, systemSelection: approved.selection)
+                startUptime = captureEngine.recordingStartUptime ?? recordingClock.now()
+            } else {
+                startUptime = try await startCapture(captureEngine, target, outputURL, options)
+            }
             guard recordingAttemptID == attemptID, !Task.isCancelled else {
                 await cancelCapture(captureEngine)
                 pendingSourceCropInsets = nil
@@ -1149,7 +1274,11 @@ final class StudioModel: ObservableObject {
             inputWarning = captureEngine.eventCaptureWarning
             recordingDidStart(attemptID, startUptime: startUptime)
             destination = .recording
-            RecordingControlPanelCoordinator.shared.show(model: self)
+            if captureEngine.wasStoppedByUser {
+                await stopRecording()
+                return
+            }
+            RecordingControlPanelCoordinator.shared.sync()
         } catch {
             if recordingAttemptID != attemptID || Task.isCancelled {
                 if captureEngine.isRecording {
@@ -1379,6 +1508,7 @@ final class StudioModel: ObservableObject {
             show(error)
         }
         syncRecordingIntervals()
+        if captureEngine.wasStoppedByUser { await stopRecording() }
     }
 
     /// Copies the capture's active intervals into the live attempt after a
@@ -1409,7 +1539,7 @@ final class StudioModel: ObservableObject {
     }
 
     func selectToolbarTarget(_ target: CaptureTargetInfo) {
-        guard destination == .recorder, !isBusy, !isSelectingArea else { return }
+        guard destination == .recorder, !isBusy, !isSelectingArea, !usesSystemCapturePicker else { return }
         selectedTargetID = target.id
         recordingSourceKind = target.kind
     }
@@ -1449,7 +1579,7 @@ final class StudioModel: ObservableObject {
         _ kind: CaptureTargetKind,
         preferredDisplayID: UInt32? = nil
     ) {
-        guard destination == .recorder, !isBusy, !isSelectingArea else { return }
+        guard destination == .recorder, !isBusy, !isSelectingArea, !usesSystemCapturePicker else { return }
         recordingSourceKind = kind
         guard selectedTarget?.kind != kind else { return }
         switch kind {
@@ -1470,13 +1600,13 @@ final class StudioModel: ObservableObject {
     }
 
     func beginAreaSelection(preferredDisplayID: UInt32? = nil) async {
-        guard destination == .recorder, !isBusy, !isSelectingArea else { return }
+        guard destination == .recorder, !isBusy, !isSelectingArea, !usesSystemCapturePicker else { return }
         guard let display = areaDrawDisplay(preferring: preferredDisplayID) else { return }
         await beginAreaSelection(on: display)
     }
 
     func beginAreaSelection(on display: CaptureTargetInfo) async {
-        guard destination == .recorder, !isBusy, !isSelectingArea else { return }
+        guard destination == .recorder, !isBusy, !isSelectingArea, !usesSystemCapturePicker else { return }
         recordingSourceKind = .area
         await selectRecordingArea(on: display)
     }
@@ -1502,7 +1632,8 @@ final class StudioModel: ObservableObject {
             let outputURL = directory.appendingPathComponent(filename)
             let crop: SourceCropInsets?
             if destination == .recorder, let target = selectedTarget {
-                try await captureEngine.captureScreenshot(target: target, to: outputURL)
+                try await captureEngine.captureScreenshot(target: target, to: outputURL,
+                                                          systemSelection: usesSystemCapturePicker ? systemCaptureSelection : nil)
                 crop = browserContentOnly ? defaultBrowserCrop(for: target) : nil
             } else {
                 try await captureEngine.captureScreenshot(to: outputURL)

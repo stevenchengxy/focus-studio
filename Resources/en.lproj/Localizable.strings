@@ -1620,3 +1620,15 @@
 "This connection code expired. Connect again to get a new code." = "This connection code expired. Connect again to get a new code.";
 "Community connection is temporarily unavailable. Your local recordings and exports are unaffected." = "Community connection is temporarily unavailable. Your local recordings and exports are unaffected.";
 "Your browser could not open. Try connecting again." = "Your browser could not open. Try connecting again.";
+
+// System capture chooser
+"Choose with macOS" = "Choose with macOS";
+"Ready to record?" = "Ready to record?";
+"Choose a window or display" = "Choose a window or display";
+"More options" = "More options";
+"Record an area" = "Record an area";
+"Could not select a recording source. Try again." = "Could not select a recording source. Try again.";
+"Enable interaction access for automatic click zooms and cursor effects." = "Enable interaction access for automatic click zooms and cursor effects.";
+
+"Focus Studio recording" = "Focus Studio recording";
+"Recording controls stay in the menu bar" = "Recording controls stay in the menu bar";

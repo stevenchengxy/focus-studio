@@ -155,7 +155,11 @@ public struct InteractionTrace: Codable, Hashable, Sendable {
             if event.kind == .discontinuity { continue }
             guard let x = event.x, let y = event.y else { continue }
             if availableSince == nil { availableSince = event.time }
-            let sample = CursorSample(time: event.time, x: x, y: y, cursorKind: event.cursorKind)
+            // The execution protocol currently has complete click actions but
+            // no held-button/drag action. System traces without that metadata
+            // remain unknown, as do scrolling anchors that should not straighten.
+            let sample = CursorSample(time: event.time, x: x, y: y, cursorKind: event.cursorKind,
+                                      isDragging: source == .execution && event.kind != .scroll ? false : nil)
             // A gap has no measured motion. Keep the last known position until
             // new observations arrive instead of inventing a long slow sweep.
             if let previous = current.last, event.time - previous.time > 0.25 {

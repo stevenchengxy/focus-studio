@@ -1071,7 +1071,7 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
         self.timelineSettings = project.settings
         let croppedCursorPath = self.renderCursorSamples.compactMap { sample -> CursorSample? in
             guard let point = sourceCropInsets.croppedPoint(x: sample.x, y: sample.y) else { return nil }
-            return CursorSample(time: sample.time, x: point.x, y: point.y, cursorKind: sample.cursorKind)
+            return CursorSample(time: sample.time, x: point.x, y: point.y, cursorKind: sample.cursorKind, isDragging: sample.isDragging)
         }
         // Pointer pixels can already be embedded in a browser recording. The
         // same measured trace still drives the camera without a second arrow.

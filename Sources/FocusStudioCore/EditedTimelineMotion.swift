@@ -1,7 +1,7 @@
 import Foundation
 
-/// Applies the existing manual motion algorithms independently to each edited
-/// shot. Original recordings never enter this route and keep their old path.
+/// Applies shared motion finishing independently to each edited shot so a cut
+/// never becomes a fabricated pointer sweep or inherits camera momentum.
 public enum EditedTimelineMotion {
     private static let boundaryEpsilon = 0.000_001
 
@@ -17,7 +17,7 @@ public enum EditedTimelineMotion {
         var result: [CursorSample] = []
         for shot in shots(duration: duration, cutTimes: cutTimes) {
             let points = sorted.filter { $0.time >= shot.start && ($0.time < shot.end || shot.end == duration && $0.time == duration) }
-            let shotClicks = clicks.filter { $0.time >= shot.start && $0.time < shot.end }
+            let shotClicks = clicks.filter { $0.time >= shot.start && ($0.time < shot.end || shot.end == duration && $0.time == duration) }
             let rendered = sigma > 0 ? CursorMotion.smoothedPath(samples: points, clicks: shotClicks, sigma: sigma) : points
             result.append(contentsOf: rendered)
             // Interpolation between the old endpoint and next shot must occur
@@ -34,7 +34,7 @@ public enum EditedTimelineMotion {
         var result: [CursorFollow.Sample] = []
         for shot in shots(duration: duration, cutTimes: cutTimes) {
             let localCursor = cursor.filter { $0.time >= shot.start && ($0.time < shot.end || shot.end == duration && $0.time == duration) }.map {
-                CursorSample(time: $0.time - shot.start, x: $0.x, y: $0.y, cursorKind: $0.cursorKind)
+                CursorSample(time: $0.time - shot.start, x: $0.x, y: $0.y, cursorKind: $0.cursorKind, isDragging: $0.isDragging)
             }
             let localZooms = segments.compactMap { zoom -> ZoomSegment? in
                 guard zoom.start < shot.end, zoom.end > shot.start else { return nil }

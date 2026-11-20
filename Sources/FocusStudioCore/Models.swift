@@ -23,17 +23,22 @@ public struct CursorSample: Codable, Hashable, Sendable {
     public var x: Double
     public var y: Double
     public var cursorKind: CursorKind
+    /// Whether a button was held at capture time. Nil means an older recording
+    /// did not observe button state; never infer that such motion is safe to straighten.
+    public var isDragging: Bool?
 
     public init(
         time: Double,
         x: Double,
         y: Double,
-        cursorKind: CursorKind = .arrow
+        cursorKind: CursorKind = .arrow,
+        isDragging: Bool? = nil
     ) {
         self.time = time
         self.x = x
         self.y = y
         self.cursorKind = cursorKind
+        self.isDragging = isDragging
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -41,6 +46,7 @@ public struct CursorSample: Codable, Hashable, Sendable {
         case x
         case y
         case cursorKind
+        case isDragging
     }
 
     public init(from decoder: Decoder) throws {
@@ -49,6 +55,7 @@ public struct CursorSample: Codable, Hashable, Sendable {
         x = try container.decode(Double.self, forKey: .x)
         y = try container.decode(Double.self, forKey: .y)
         cursorKind = try container.decodeIfPresent(CursorKind.self, forKey: .cursorKind) ?? .arrow
+        isDragging = try container.decodeIfPresent(Bool.self, forKey: .isDragging)
     }
 }
 

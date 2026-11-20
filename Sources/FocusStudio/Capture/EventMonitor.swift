@@ -86,6 +86,9 @@ public final class EventMonitor: ObservableObject {
         .leftMouseDown,
         .rightMouseDown,
         .otherMouseDown,
+        .leftMouseUp,
+        .rightMouseUp,
+        .otherMouseUp,
     ]
 
     public init() {}
@@ -289,7 +292,8 @@ public final class EventMonitor: ObservableObject {
                     x: location.x,
                     y: location.y,
                     kind: .movement,
-                    button: nil
+                    button: nil,
+                    isDragging: NSEvent.pressedMouseButtons != 0
                 ),
                 forceCursorSample: true
             )
@@ -336,7 +340,8 @@ public final class EventMonitor: ObservableObject {
         x: Double,
         y: Double,
         button: MouseButton? = nil,
-        cursorKind: CursorKind? = nil
+        cursorKind: CursorKind? = nil,
+        isDragging: Bool? = nil
     ) {
         consume(
             MouseEventPayload(
@@ -345,7 +350,8 @@ public final class EventMonitor: ObservableObject {
                 y: y,
                 kind: button == nil ? .movement : .mouseDown,
                 button: button,
-                cursorKind: cursorKind
+                cursorKind: cursorKind,
+                isDragging: isDragging ?? (button != nil)
             )
         )
     }
@@ -437,6 +443,7 @@ public final class EventMonitor: ObservableObject {
         let shouldStoreCursor = forceCursorSample
             || payload.kind == .mouseDown
             || cursorKind != lastCursorKind
+            || payload.isDragging != cursorSamples.last?.isDragging
             || relativeTime - lastCursorSampleTime >= max(0, minimumSampleInterval)
 
         if shouldStoreCursor {
@@ -444,7 +451,8 @@ public final class EventMonitor: ObservableObject {
                 time: relativeTime,
                 x: point.x,
                 y: point.y,
-                cursorKind: cursorKind
+                cursorKind: cursorKind,
+                isDragging: payload.isDragging
             )
             cursorSamples.append(sample)
             lastCursorSampleTime = relativeTime
@@ -522,6 +530,7 @@ private struct MouseEventPayload: Sendable {
     var kind: Kind
     var button: MouseButton?
     var cursorKind: CursorKind?
+    var isDragging: Bool?
 
     init(
         uptime: TimeInterval,
@@ -529,7 +538,8 @@ private struct MouseEventPayload: Sendable {
         y: Double,
         kind: Kind,
         button: MouseButton?,
-        cursorKind: CursorKind? = nil
+        cursorKind: CursorKind? = nil,
+        isDragging: Bool? = nil
     ) {
         self.uptime = uptime
         self.x = x
@@ -537,6 +547,7 @@ private struct MouseEventPayload: Sendable {
         self.kind = kind
         self.button = button
         self.cursorKind = cursorKind
+        self.isDragging = isDragging
     }
 
     init?(event: NSEvent) {
@@ -548,17 +559,26 @@ private struct MouseEventPayload: Sendable {
         x = location.x
         y = location.y
         cursorKind = nil
+        // Read at event capture, not later on the main-actor delivery queue.
+        isDragging = NSEvent.pressedMouseButtons != 0
 
         switch event.type {
         case .leftMouseDown:
+            isDragging = true
             kind = .mouseDown
             button = .left
         case .rightMouseDown:
+            isDragging = true
             kind = .mouseDown
             button = .right
         case .otherMouseDown:
+            isDragging = true
             kind = .mouseDown
             button = .other
+        case .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
+            isDragging = true
+            kind = .movement
+            button = nil
         default:
             kind = .movement
             button = nil

@@ -494,7 +494,8 @@ public enum TimelineMath {
             ).clamped(to: 0...1),
             // Cursor shape is discrete metadata. Hold the last observed shape
             // until the next sample instead of visually switching mid-flight.
-            cursorKind: raw >= 1 ? rhs.cursorKind : lhs.cursorKind
+            cursorKind: raw >= 1 ? rhs.cursorKind : lhs.cursorKind,
+            isDragging: raw >= 1 ? rhs.isDragging : lhs.isDragging
         )
     }
 

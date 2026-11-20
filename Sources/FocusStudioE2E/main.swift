@@ -56,6 +56,16 @@ enum FocusStudioE2E {
                 try await VoiceoverValidation.run(sourceURL: source, outputDirectory: outputDirectory)
                 return
             }
+            if CommandLine.arguments.contains("--cursor-motion-only") {
+                var spec = SyntheticVideoSpecification(); spec.duration = 7; spec.includesAudio = false
+                let source = outputDirectory.appendingPathComponent("cursor-motion-source.mp4")
+                try? FileManager.default.removeItem(at: source)
+                try await SyntheticGridVideoWriter.write(spec, to: source)
+                try await CursorMotionValidation.run(sourceURL: source,
+                    width: spec.width, height: spec.height, duration: spec.duration,
+                    frameRate: spec.frameRate, outputDirectory: outputDirectory)
+                return
+            }
             try runCoreSelfChecks()
             #if DEBUG
             try await runEventMonitorSelfCheck()

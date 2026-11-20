@@ -5,7 +5,7 @@ import Foundation
 
 /// Pointer smoothing, click anchoring, shape cross-fades and camera follow.
 func cursorMotionFailures() -> [String] {
-    var failures: [String] = []
+    var failures: [String] = cursorStabilityFailures()
     func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
         if !condition() { failures.append(message) }
     }

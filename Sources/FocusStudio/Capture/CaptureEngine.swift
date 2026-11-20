@@ -346,6 +346,10 @@ public final class CaptureEngine: ObservableObject {
     private var activeTarget: CaptureTargetInfo?
     private var activeOutputSize: (width: Int, height: Int)?
     private var activeContentFilter: SCContentFilter?
+    private var activeSystemSelection: SystemCaptureSelection?
+    /// macOS's Stop Sharing is a normal finish, not a corrupt/fatal take.
+    public private(set) var wasStoppedByUser = false
+    public var onUserStopped: (@MainActor () -> Void)?
     private var activeStreamConfiguration: SCStreamConfiguration?
     private var failureCleanupInProgress = false
     private let transitionGate = RecordingTransitionGate()
@@ -457,7 +461,8 @@ public final class CaptureEngine: ObservableObject {
     public func startRecording(
         target: CaptureTargetInfo,
         outputURL: URL,
-        options: CaptureOptions = .init()
+        options: CaptureOptions = .init(),
+        systemSelection: SystemCaptureSelection? = nil
     ) async throws {
         guard !isRecording, activeStream == nil else {
             throw CaptureEngineError.recordingAlreadyInProgress
@@ -479,6 +484,7 @@ public final class CaptureEngine: ObservableObject {
             isPaused = false
             recordedSegments = []
             activeOptions = options
+            wasStoppedByUser = false
             let directory = outputURL.deletingLastPathComponent()
                 .appendingPathComponent(".focusstudio-recording-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
@@ -486,11 +492,8 @@ public final class CaptureEngine: ObservableObject {
             let segmentURL = directory.appendingPathComponent("segment-0.mp4")
             activeSegmentURL = segmentURL
 
-            let content = try await SCShareableContent.excludingDesktopWindows(
-                false,
-                onScreenWindowsOnly: false
-            )
-            let resolvedTarget = try resolve(target: target, in: content)
+            let resolvedTarget = try await resolve(target: target, systemSelection: systemSelection)
+            activeSystemSelection = systemSelection
             let outputSize = CaptureOutputGeometry.pixelSize(
                 sourcePointSize: resolvedTarget.sourcePointSize,
                 targetScaleFactor: resolvedTarget.targetInfo.scaleFactor,
@@ -517,6 +520,14 @@ public final class CaptureEngine: ObservableObject {
                 onFirstCompleteScreenSample: { uptime in
                     Task {
                         await startupGate.complete(with: .ready(uptime))
+                    }
+                },
+                onUserStopped: { [weak self] in
+                    Task { @MainActor in
+                        guard let self, self.activeSegmentGeneration == segmentGeneration else { return }
+                        self.wasStoppedByUser = true
+                        await startupGate.complete(with: .failed("Recording was stopped before it started."))
+                        if self.state == .recording { self.onUserStopped?() }
                     }
                 },
                 onFatalError: { [weak self] message in
@@ -698,8 +709,7 @@ public final class CaptureEngine: ObservableObject {
         defer { isChangingPauseState = false }
         // Resolve the same selected source again; never silently switch windows.
         // If it disappeared, stay safely paused and let Finish save earlier media.
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
-        let resolved = try resolve(target: target, in: content)
+        let resolved = try await resolve(target: target, systemSelection: activeSystemSelection)
         let filter = resolved.filter
         let configuration = makeStreamConfiguration(
             resolvedTarget: resolved, outputSize: CapturePixelSize(width: outputSize.width, height: outputSize.height), options: options
@@ -715,10 +725,19 @@ public final class CaptureEngine: ObservableObject {
         let startupGate = CaptureStartupGate()
         let segmentGeneration = UUID()
         activeSegmentGeneration = segmentGeneration
+        wasStoppedByUser = false
         let queue = DispatchQueue(label: "app.focusstudio.capture.resumed-samples", qos: .userInteractive)
         let bridge = CaptureDelegateBridge(
             sampleHandler: sampleBufferHandler, completion: completion,
             onFirstCompleteScreenSample: { uptime in Task { await startupGate.complete(with: .ready(uptime)) } },
+            onUserStopped: { [weak self] in
+                Task { @MainActor in
+                    guard let self, self.activeSegmentGeneration == segmentGeneration else { return }
+                    self.wasStoppedByUser = true
+                    await startupGate.complete(with: .failed("Recording was stopped before it resumed."))
+                    if !self.isChangingPauseState { self.onUserStopped?() }
+                }
+            },
             onFatalError: { [weak self] message in
                 Task {
                     await startupGate.complete(with: .failed(message))
@@ -857,16 +876,17 @@ public final class CaptureEngine: ObservableObject {
             recordingCompletion = nil
             activeSegmentURL = nil
         }
-        var failure: Error?
-        var removed = false
-        do { try stream.removeRecordingOutput(output); removed = true } catch { failure = error }
-        // Drain the recording output before tearing down its stream. The pause
-        // interval is already closed, so callback frames cannot leak into media.
-        if removed, case let .failure(message) = await completion.wait(timeout: .seconds(15)) {
-            failure = CaptureEngineError.recordingFailed(message)
-        }
-        do { try await stream.stopCapture() } catch { failure = failure ?? error }
-        if let failure { throw failure }
+        let bridge = delegateBridge
+        try await RecordingStreamFinisher.finish(
+            removeOutput: { try stream.removeRecordingOutput(output) },
+            waitForWriter: {
+                if case let .failure(message) = await completion.wait(timeout: .seconds(15)) {
+                    throw CaptureEngineError.recordingFailed(message)
+                }
+            },
+            stopStream: { try await stream.stopCapture() },
+            wasStoppedByUser: { self.wasStoppedByUser || bridge?.didReceiveUserStop == true }
+        )
         let actual = try await RecordingSegmentAssembler.playableDuration(at: url, requested: requestedDuration)
         if actual > 0 { recordedSegments.append(.init(url: url, duration: actual)) }
         return actual
@@ -976,14 +996,11 @@ public final class CaptureEngine: ObservableObject {
     /// record instead of asking the model to guess interaction coordinates.
     public func captureScreenshot(
         target: CaptureTargetInfo,
-        to outputURL: URL
+        to outputURL: URL,
+        systemSelection: SystemCaptureSelection? = nil
     ) async throws {
         do {
-            let content = try await SCShareableContent.excludingDesktopWindows(
-                false,
-                onScreenWindowsOnly: false
-            )
-            let resolvedTarget = try resolve(target: target, in: content)
+            let resolvedTarget = try await resolve(target: target, systemSelection: systemSelection)
             var options = CaptureOptions()
             options.frameRate = 30
             options.capturesSystemAudio = false
@@ -1141,6 +1158,24 @@ public final class CaptureEngine: ObservableObject {
             }
 
         return displayTargets + windowTargets
+    }
+
+    private func resolve(target: CaptureTargetInfo, systemSelection: SystemCaptureSelection?) async throws -> ResolvedTarget {
+        if let selection = systemSelection {
+            guard selection.target.id == target.id, selection.target.kind == target.kind,
+                  selection.target.nativeID == target.nativeID else {
+                throw CaptureEngineError.invalidTarget("The recording source changed. Choose it again.")
+            }
+            let current = try selection.currentTarget()
+            return ResolvedTarget(
+                filter: selection.filter, targetInfo: current,
+                sourcePointSize: CGSize(width: current.frame.width, height: current.frame.height), sourceRect: nil,
+                typingProcessID: selection.processID,
+                typingWindowID: current.kind == .window ? current.nativeID : nil
+            )
+        }
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+        return try resolve(target: target, in: content)
     }
 
     private func resolve(
@@ -1360,6 +1395,8 @@ public final class CaptureEngine: ObservableObject {
         activeTarget = nil
         activeOutputSize = nil
         activeContentFilter = nil
+        activeSystemSelection = nil
+        wasStoppedByUser = false
         activeStreamConfiguration = nil
         captureStartedUptime = nil
     }
@@ -1458,6 +1495,9 @@ private final class CaptureDelegateBridge: NSObject, SCStreamOutput, SCStreamDel
     private let completion: RecordingCompletion
     private let onFirstCompleteScreenSample: @Sendable (TimeInterval) -> Void
     private let onFatalError: @Sendable (String) -> Void
+    private let onUserStopped: @Sendable () -> Void
+    private let stopSignalLock = NSLock()
+    private var userStopReceived = false
     private let firstFrameLock = NSLock()
     private var hasDeliveredFirstFrame = false
     private let latestFrameLock = NSLock()
@@ -1468,12 +1508,14 @@ private final class CaptureDelegateBridge: NSObject, SCStreamOutput, SCStreamDel
         sampleHandler: CaptureEngine.SampleBufferHandler?,
         completion: RecordingCompletion,
         onFirstCompleteScreenSample: @escaping @Sendable (TimeInterval) -> Void,
+        onUserStopped: @escaping @Sendable () -> Void,
         onFatalError: @escaping @Sendable (String) -> Void
     ) {
         self.sampleHandler = sampleHandler
         self.completion = completion
         self.onFirstCompleteScreenSample = onFirstCompleteScreenSample
         self.onFatalError = onFatalError
+        self.onUserStopped = onUserStopped
     }
 
     func stream(
@@ -1511,6 +1553,11 @@ private final class CaptureDelegateBridge: NSObject, SCStreamOutput, SCStreamDel
     }
 
     func stream(_ stream: SCStream, didStopWithError error: any Error) {
+        if SystemCaptureStopPolicy.isUserStop(error) {
+            markUserStop()
+            onUserStopped()
+            return
+        }
         onFatalError(error.localizedDescription)
     }
 
@@ -1524,6 +1571,14 @@ private final class CaptureDelegateBridge: NSObject, SCStreamOutput, SCStreamDel
         _ recordingOutput: SCRecordingOutput,
         didFailWithError error: any Error
     ) {
+        if SystemCaptureStopPolicy.isUserStop(error) {
+            markUserStop()
+            // Some OS releases report the user's stop as the output's terminal
+            // callback. The actual MP4 is still checked before it can be saved.
+            Task { await completion.complete(.success) }
+            onUserStopped()
+            return
+        }
         let message = error.localizedDescription
         Task {
             await completion.complete(.failure(message))
@@ -1535,6 +1590,18 @@ private final class CaptureDelegateBridge: NSObject, SCStreamOutput, SCStreamDel
         Task {
             await completion.complete(.success)
         }
+    }
+
+    var didReceiveUserStop: Bool {
+        stopSignalLock.lock()
+        defer { stopSignalLock.unlock() }
+        return userStopReceived
+    }
+
+    private func markUserStop() {
+        stopSignalLock.lock()
+        userStopReceived = true
+        stopSignalLock.unlock()
     }
 
     private func markFirstFrameIfNeeded() -> Bool {
