@@ -12,6 +12,12 @@ APP_DIR="${REQUESTED_APP_DIR:A}"
     exit 1
 }
 NOTARY_PROFILE="${FOCUS_STUDIO_NOTARY_PROFILE:-}"
+RELEASE_CHANNEL="$(/usr/libexec/PlistBuddy -c 'Print :FocusStudioUpdateChannel' "$PROJECT_DIR/Resources/Info.plist")"
+# Stable downloads must contain the signed, notarized distribution requested
+# for public release. Fail before building instead of silently shipping local.
+if [[ "$RELEASE_CHANNEL" == "stable" ]]; then
+    "$SCRIPT_DIR/check-notarization.sh"
+fi
 
 case "${1:-}" in
     --skip-build) ;;
@@ -69,6 +75,7 @@ if [[ -n "$NOTARY_PROFILE" ]]; then
     xcrun notarytool submit "$PACKAGE_STAGE/notary-app.zip" --keychain-profile "$NOTARY_PROFILE" --wait
     xcrun stapler staple "$PAYLOAD/Focus Studio.app"
     xcrun stapler validate "$PAYLOAD/Focus Studio.app"
+    spctl --assess --type execute --verbose=2 "$PAYLOAD/Focus Studio.app"
 fi
 
 STATUS_FILE="$PAYLOAD/Release-Status.plist"
@@ -91,6 +98,7 @@ if [[ -n "$NOTARY_PROFILE" ]]; then
     xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
     xcrun stapler staple "$DMG"
     xcrun stapler validate "$DMG"
+    spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
 fi
 ditto -c -k --sequesterRsrc --keepParent "$PAYLOAD" "$ZIP"
 hdiutil verify "$DMG"
