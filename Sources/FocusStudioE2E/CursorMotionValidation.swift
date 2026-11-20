@@ -86,7 +86,8 @@ enum CursorMotionValidation {
             x = 0.2 + 0.58 * progress + 0.006 * sin(time * 41) * envelope
             y = 0.32 + 0.021 * sin(time * 23) * envelope
         case ..<2.8:
-            x = 0.78; y = 0.32 // A short hover and a click must stay still.
+            x = 0.78 + 0.0018 * sin(time * 75)
+            y = 0.32 + 0.0018 * cos(time * 75) // Tremor while hovering, with an exact click anchor.
         case ..<3.2:
             let progress = (time - 2.8) / 0.4
             x = 0.78 - 0.28 * progress; y = 0.32 + 0.18 * progress
@@ -98,9 +99,14 @@ enum CursorMotionValidation {
             x = 0.5 + 0.2 * progress
             y = 0.5 + 0.18 * sin(.pi * progress)
             dragging = true // Preserve this deliberate selection arc.
+        case ..<6.2:
+            x = 0.7 + 0.0018 * sin(time * 75)
+            y = 0.5 + 0.0018 * cos(time * 75)
+            kind = .pointingHand // A link hover needs the same stable motion as an arrow.
         default:
-            x = 0.7; y = 0.5
-            kind = .iBeam // Semantic hover must not drift away from text.
+            x = 0.7 + 0.0018 * sin(time * 75)
+            y = 0.5 + 0.0018 * cos(time * 75)
+            kind = .iBeam
         }
         return CursorSample(time: time, x: x, y: y, cursorKind: kind, isDragging: dragging)
     }

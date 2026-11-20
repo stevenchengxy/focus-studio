@@ -33,13 +33,17 @@ func cursorStabilityFailures() -> [String] {
     let legacyFinished = finish(legacy)
     expect(point(0.7, legacyFinished).y > 0.518, "unknown legacy button state is not treated as free movement")
 
-    // Larger intentional turns are not replaced by a click-to-click diagonal.
+    // Free travel is replanned between action/hover anchors, rather than merely
+    // deleting sub-threshold wiggles from an otherwise winding polyline.
     let corner = (0...168).map { index -> CursorSample in
         let time = Double(index) / 120
         let u = time / 1.4
         return CursorSample(time: time, x: 0.2 + 0.6 * u, y: 0.5 + 0.18 * sin(.pi * u), isDragging: false)
     }
-    expect(point(0.7, finish(corner)).y > 0.65, "large intentional corners survive simplification")
+    let cornerFinished = finish(corner)
+    expect(abs(point(0.7, cornerFinished).y - 0.5) < 0.001, "uninterrupted free-arrow detours become a direct glide")
+    expect(zip(cornerFinished, cornerFinished.dropFirst()).allSatisfy { $1.x >= $0.x - 1e-10 },
+           "a direct glide cannot overshoot or reverse between endpoints")
 
     let actions = (0...140).map { index -> CursorSample in
         let time = Double(index) / 100
@@ -49,12 +53,77 @@ func cursorStabilityFailures() -> [String] {
                             isDragging: time >= 0.35 && time < 0.9)
     }
     let actionFinished = finish(actions)
-    for sample in actions where sample.isDragging == true || sample.cursorKind == .pointingHand {
+    for sample in actions where sample.isDragging == true {
         let rendered = point(sample.time, actionFinished)
         expect(hypot(rendered.x - sample.x, rendered.y - sample.y) < 1e-9,
-               "drag/semantic-hover path must be exact at \(sample.time)")
+               "drag path must be exact at \(sample.time)")
     }
     expect(point(0.9, actionFinished).isDragging == false, "release state survives interpolation")
+    // The previous implementation explicitly disabled its filter inside every
+    // stationary cluster and hand/I-beam span. These are its counterexamples.
+    func rms(_ values: [CursorSample], axis: (CursorSample) -> Double, target: Double) -> Double {
+        sqrt(values.reduce(0) { $0 + pow(axis($1) - target, 2) } / Double(max(1, values.count)))
+    }
+    let tremor = (0...240).map { i -> CursorSample in
+        let t = Double(i) / 120
+        return CursorSample(time: t, x: 0.5 + 0.002 * sin(2 * .pi * 12 * t),
+                            y: 0.5 + 0.001 * cos(2 * .pi * 10 * t), isDragging: false)
+    }
+    let settled = finish(tremor)
+    let settledInterior = settled.filter { $0.time > 0.2 && $0.time < 1.8 }
+    expect(rms(settledInterior, axis: { $0.x }, target: 0.5) < 0.0002,
+           "a stationary cluster removes tremor instead of bypassing de-jitter")
+    expect((settledInterior.map(\.x).max()! - settledInterior.map(\.x).min()!) < 0.0003,
+           "stationary pointer is locked to one spatial target")
+    for kind in [CursorKind.pointingHand, .iBeam] {
+        let hand = (0...240).map { i -> CursorSample in
+            let t = Double(i) / 120
+            return CursorSample(time: t, x: 0.2 + 0.2 * t, y: 0.5 + 0.004 * sin(2 * .pi * 9 * t),
+                                cursorKind: kind, isDragging: false)
+        }
+        let cleaned = finish(hand).filter { $0.time > 0.25 && $0.time < 1.75 }
+        expect(rms(cleaned, axis: { $0.y }, target: 0.5) < 0.0007,
+               "\(kind) movement is gently de-jittered rather than pinned at every raw point")
+        expect(cleaned.allSatisfy { $0.cursorKind == kind }, "trajectory finishing retains semantic cursor shape")
+    }
+    let slow = (0...240).map { i -> CursorSample in
+        let t = Double(i) / 120
+        return CursorSample(time: t, x: 0.4 + 0.004 * t, y: 0.5, isDragging: false)
+    }
+    let slowFinished = finish(slow)
+    for t in stride(from: 0.3, through: 1.5, by: 0.2) {
+        expect(point(t + 0.2, slowFinished).x - point(t, slowFinished).x > 0.0006,
+               "a slow intentional adjustment never becomes linked stationary windows")
+    }
+    expect(abs(point(1, slowFinished).x - 0.404) < 0.0003, "slow intentional movement keeps its timing")
+
+    // A menu hover is an intermediate destination even when the shape stays arrow.
+    let menu = (0...240).map { i -> CursorSample in
+        let t = Double(i) / 120
+        if t < 0.7 { return .init(time: t, x: 0.2 + 0.5 * t / 0.7, y: 0.25, isDragging: false) }
+        if t < 1 { return .init(time: t, x: 0.7, y: 0.25, isDragging: false) }
+        return .init(time: t, x: 0.7, y: 0.25 + 0.5 * (t - 1), isDragging: false)
+    }
+    let menuFinished = finish(menu)
+    expect(hypot(point(0.85, menuFinished).x - 0.7, point(0.85, menuFinished).y - 0.25) < 0.001,
+           "a real dropdown hover is never skipped by one start-to-finish diagonal")
+    expect(point(0.9, menuFinished).cursorKind == .arrow, "a real hover needs no hand shape to remain an anchor")
+
+    let sparse = [CursorSample(time: 0, x: 0.2, y: 0.3, isDragging: false),
+                  CursorSample(time: 0.1, x: 0.22, y: 0.3, isDragging: false),
+                  CursorSample(time: 5.658, x: 0.7, y: 0.8, isDragging: false),
+                  CursorSample(time: 5.75, x: 0.72, y: 0.8, isDragging: false)]
+    let held = finish(sparse)
+    for t in [0.5, 2, 5.5, 5.657] {
+        expect(abs(point(t, held).x - 0.22) < 1e-9 && abs(point(t, held).y - 0.3) < 1e-9,
+               "event-driven 5.558s gap holds its last observation without fabricated motion")
+    }
+    expect(abs(point(5.658, held).x - 0.7) < 1e-12, "re-entry starts at the new observed coordinate")
+    let cleanFirst = finish(Array(sparse.prefix(2)))
+    expect(hypot(point(0.05, held).x - point(0.05, cleanFirst).x,
+                 point(0.05, held).y - point(0.05, cleanFirst).y) < 1e-12,
+           "Gaussian cannot borrow future observations across a gap")
+
     let presses = [ClickEvent(time: 0.413, x: 0.343, y: 0.5, button: .left),
                    ClickEvent(time: 0.431, x: 0.351, y: 0.503, button: .left)]
     let pressed = finish(winding, clicks: presses)
@@ -100,6 +169,57 @@ func cursorStabilityFailures() -> [String] {
     expect(CursorFollow.offset(at: 1.4, samples: hiddenOffsets).dx > 0.2, "follow still moves for targets outside the viewport centre")
     expect(CursorFollow.offset(at: 2.4, samples: hiddenOffsets).dx == 0, "hidden interval resets camera inertia")
     expect(CursorFollow.offset(at: 2.5, samples: hiddenOffsets).dx < 0.01, "reappearance cannot inherit a previous shot's framing")
+
+    // Validate the visible result, not only independent source-space curves.
+    let stableZoom = [ZoomSegment(start: 0, end: 4, targetX: 0.5, targetY: 0.5, scale: 2)]
+    let framingPath = (0...240).map { i -> CursorSample in
+        let t = Double(i) / 60
+        let x = t < 0.5 ? 0.5 : t < 1 ? 0.5 + 0.45 * (t - 0.5) / 0.5 : t < 1.8 ? 0.95 : 0.8
+        return .init(time: t, x: x, y: 0.5, isDragging: false)
+    }
+    let framing = CursorFollow.offsets(duration: 4, segments: stableZoom, settings: settings, cursor: framingPath, strength: 1)
+    let heldFrame = CursorFollow.offset(at: 1.7, samples: framing).dx
+    let readingFrame = CursorFollow.offset(at: 3, samples: framing).dx
+    expect(abs(readingFrame - heldFrame) < 0.002,
+           "returning the pointer inside the shifted viewport does not pull the camera back")
+    func visiblePointer(_ time: Double) -> Double {
+        var camera = TimelineMath.zoomState(at: time, segments: stableZoom, settings: settings)
+        camera.centerX += CursorFollow.offset(at: time, samples: framing).dx
+        let position = point(time, framingPath)
+        return Double(ZoomFrameTransform(state: camera, width: 1920, height: 1080).mappedPoint(x: position.x, y: position.y).x)
+    }
+    expect(abs(visiblePointer(2.2) - visiblePointer(3)) < 0.001,
+           "the rendered pointer stays still after it settles inside the final composition")
+    let entering = CursorFollow.offsets(duration: 3, segments: zooms, settings: settings, cursor: away, strength: 1)
+    expect(abs(CursorFollow.offset(at: 0.05, samples: entering).dx) < 1e-12,
+           "an authored zoom entrance cannot simultaneously chase an unrelated pointer target")
+    expect(abs(CursorFollow.offset(at: 3, samples: entering).dx) < 1e-12,
+           "camera following returns fully to overview after the authored exit")
+
+    // Event-driven capture stores no samples while the pointer is still. The
+    // tiny hold/jump inserted into its rendered path must not masquerade as a
+    // navigation cut and snap a shifted camera back to its original centre.
+    var resumeAfterPause = (0...96).map { i -> CursorSample in
+        let t = Double(i) / 60
+        let x = t < 0.4 ? 0.5 : t < 1.2 ? 0.5 + 0.38 * (t - 0.4) / 0.8 : 0.88
+        return .init(time: t, x: x, y: 0.5, isDragging: false)
+    }
+    resumeAfterPause += [CursorSample(time: 2, x: 0.885, y: 0.5, isDragging: false),
+                         CursorSample(time: 2.1, x: 0.89, y: 0.5, isDragging: false),
+                         CursorSample(time: 2.2, x: 0.895, y: 0.5, isDragging: false)]
+    let resumedPointer = finish(resumeAfterPause)
+    let resumedFraming = CursorFollow.offsets(duration: 4, segments: stableZoom, settings: settings,
+                                              cursor: resumedPointer, strength: 1)
+    let beforeResume = CursorFollow.offset(at: 2 - 1.0 / 60, samples: resumedFraming).dx
+    let atResume = CursorFollow.offset(at: 2, samples: resumedFraming).dx
+    let afterResume = CursorFollow.offset(at: 2 + 1.0 / 60, samples: resumedFraming).dx
+    expect(beforeResume > 0.15, "gap regression starts from an already shifted composition")
+    expect(abs(atResume - beforeResume) < 0.003 && abs(afterResume - atResume) < 0.003,
+           "a 400ms sampling pause followed by a small move cannot reset camera framing")
+    let explicitCutFraming = CursorFollow.offsets(duration: 4, segments: stableZoom, settings: settings,
+                                                  cursor: resumedPointer, strength: 1, discontinuities: [2])
+    expect(abs(CursorFollow.offset(at: 2, samples: explicitCutFraming).dx) < 1e-12,
+           "an explicit source cut still clears old camera framing at the same timestamp")
 
     let beforeCut = winding.map { sample -> CursorSample in var sample = sample; sample.time *= 0.7; return sample }
     let afterCut = winding.map { sample -> CursorSample in var sample = sample; sample.time += 1; sample.x = 1 - sample.x; return sample }

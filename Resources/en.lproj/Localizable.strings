@@ -810,6 +810,9 @@
 
 /* zoom transition boundaries */
 "Zoom in ends" = "Zoom in ends";
+"Apply relaxed pacing" = "Apply relaxed pacing";
+"Retimes automatic zooms. Manual edits stay as they are. You can undo this change." = "Retimes automatic zooms. Manual edits stay as they are. You can undo this change.";
+"Timeline position. Moving this boundary keeps the clip's start and end fixed." = "Timeline position. Moving this boundary keeps the clip's start and end fixed.";
 "Zoom out starts" = "Zoom out starts";
 "Drag to change when the zoom-in finishes" = "Drag to change when the zoom-in finishes";
 "Drag to change when the zoom-out starts" = "Drag to change when the zoom-out starts";

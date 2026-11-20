@@ -810,6 +810,9 @@
 
 /* zoom transition boundaries */
 "Zoom in ends" = "放大完成于";
+"Apply relaxed pacing" = "应用舒缓节奏";
+"Retimes automatic zooms. Manual edits stay as they are. You can undo this change." = "调整自动缩放节奏，保留手动剪辑，可随时撤销。";
+"Timeline position. Moving this boundary keeps the clip's start and end fixed." = "时间轴上的绝对时刻；移动此边界不会改变片段起止时间。";
 "Zoom out starts" = "缩小开始于";
 "Drag to change when the zoom-in finishes" = "拖动以改变放大完成的时刻";
 "Drag to change when the zoom-out starts" = "拖动以改变缩小开始的时刻";

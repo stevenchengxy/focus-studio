@@ -59,16 +59,16 @@ public enum CursorArtwork {
         case .system:
             return systemGraphic(for: kind)
         case .dot:
-            return Graphic(image: dot, hotSpot: CGPoint(x: 28, y: 28), supersample: 2)
+            return drawnGraphic(dot, hotSpot: CGPoint(x: 28, y: 28))
         case .elevated, .highContrast, .light, .accent:
             let palette = palette(for: appearance, tint: tint)
             switch kind {
             case .arrow:
-                return Graphic(image: arrow(palette), hotSpot: arrowHotSpot, supersample: 2)
+                return drawnGraphic(arrow(palette), hotSpot: arrowHotSpot)
             case .iBeam:
-                return Graphic(image: iBeam(palette), hotSpot: iBeamHotSpot, supersample: 2)
+                return drawnGraphic(iBeam(palette), hotSpot: iBeamHotSpot)
             case .pointingHand:
-                return Graphic(image: hand(palette), hotSpot: handHotSpot, supersample: 2)
+                return drawnGraphic(hand(palette), hotSpot: handHotSpot)
             }
         }
     }
@@ -122,9 +122,9 @@ public enum CursorArtwork {
             // artwork keeps tests and command-line renders meaningful.
             let palette = palette(for: fallbackAppearance, tint: .white)
             switch kind {
-            case .arrow: return Graphic(image: arrow(palette), hotSpot: arrowHotSpot, supersample: 2)
-            case .iBeam: return Graphic(image: iBeam(palette), hotSpot: iBeamHotSpot, supersample: 2)
-            case .pointingHand: return Graphic(image: hand(palette), hotSpot: handHotSpot, supersample: 2)
+            case .arrow: return drawnGraphic(arrow(palette), hotSpot: arrowHotSpot)
+            case .iBeam: return drawnGraphic(iBeam(palette), hotSpot: iBeamHotSpot)
+            case .pointingHand: return drawnGraphic(hand(palette), hotSpot: handHotSpot)
             }
         }
         let pixelsPerPoint = CGFloat(cgImage.width) / image.size.width
@@ -160,9 +160,17 @@ public enum CursorArtwork {
 
     // MARK: - Shapes
     //
-    // Authored in a 64x80 box at twice the reference cursor grid, so every drawn
-    // style matches the on-screen size of the system arrow while carrying enough
-    // resolution for a 3x cursor size.
+    // Author at twice the reference grid, then rasterize at four times that
+    // density. Large cursors and 4K exports keep crisp edges without changing
+    // the displayed size or the click hot spot. Generated once, not per frame.
+
+    private static let artworkDensity: CGFloat = 4
+
+    private static func drawnGraphic(_ image: CGImage, hotSpot: CGPoint) -> Graphic {
+        Graphic(image: image,
+                hotSpot: CGPoint(x: hotSpot.x * artworkDensity, y: hotSpot.y * artworkDensity),
+                supersample: 2 * artworkDensity)
+    }
 
     private static let canvas = CGSize(width: 64, height: 80)
     private static let arrowHotSpot = CGPoint(x: 8, y: 6)
@@ -217,7 +225,7 @@ public enum CursorArtwork {
     }
 
     static func arrow(_ palette: Palette) -> CGImage {
-        drawImage(size: canvas) { context in
+        drawImage(size: canvas, density: artworkDensity) { context in
             context.setLineJoin(.round)
             context.setLineCap(.round)
             withShadow(context, palette.shadow) {
@@ -233,7 +241,7 @@ public enum CursorArtwork {
     }
 
     static func iBeam(_ palette: Palette) -> CGImage {
-        drawImage(size: canvas) { context in
+        drawImage(size: canvas, density: artworkDensity) { context in
             context.setLineJoin(.round)
             context.setLineCap(.round)
             withShadow(context, palette.shadow) {
@@ -252,7 +260,7 @@ public enum CursorArtwork {
     @MainActor
     static func hand(_ palette: Palette) -> CGImage {
         let rect = CGRect(x: 6, y: 5, width: 54, height: 68)
-        return drawImage(size: canvas) { context in
+        return drawImage(size: canvas, density: artworkDensity) { context in
             withShadow(context, palette.shadow) {
                 draw(symbol: "hand.point.up.left.fill", color: palette.stroke,
                      in: rect.insetBy(dx: -4, dy: -4), context: context)
@@ -265,7 +273,7 @@ public enum CursorArtwork {
     @MainActor
     private static func draw(symbol name: String, color: NSColor, in rect: CGRect, context: CGContext) {
         guard let symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
-            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 62, weight: .semibold))
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 62 * artworkDensity, weight: .semibold))
         else { return }
         let tinted = NSImage(size: symbol.size, flipped: false) { drawRect in
             symbol.draw(in: drawRect)
@@ -278,7 +286,7 @@ public enum CursorArtwork {
         context.draw(cgImage, in: rect)
     }
 
-    static let dot: CGImage = drawImage(size: CGSize(width: 56, height: 56)) { context in
+    static let dot: CGImage = drawImage(size: CGSize(width: 56, height: 56), density: artworkDensity) { context in
         context.setShadow(
             offset: CGSize(width: 0, height: -2),
             blur: 5,
@@ -293,9 +301,9 @@ public enum CursorArtwork {
 
     // MARK: - Drawing
 
-    static func drawImage(size: CGSize, drawing: (CGContext) -> Void) -> CGImage {
-        let width = max(1, Int(size.width))
-        let height = max(1, Int(size.height))
+    static func drawImage(size: CGSize, density: CGFloat = 1, drawing: (CGContext) -> Void) -> CGImage {
+        let width = max(1, Int(size.width * density))
+        let height = max(1, Int(size.height * density))
         guard let context = CGContext(
             data: nil,
             width: width,
@@ -307,6 +315,7 @@ public enum CursorArtwork {
         ) else {
             return blank
         }
+        context.scaleBy(x: density, y: density)
         context.clear(CGRect(origin: .zero, size: size))
         context.setAllowsAntialiasing(true)
         context.setShouldAntialias(true)

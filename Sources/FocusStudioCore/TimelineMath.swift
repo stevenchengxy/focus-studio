@@ -27,9 +27,9 @@ public enum TimelineMath {
             min(duration, max(0, value.isFinite ? value : fallback))
         }
         let leadIn = bounded(settings.zoomLeadIn, fallback: 0.1)
-        let easeIn = bounded(settings.zoomEaseIn, fallback: 0.42)
-        let easeOut = bounded(settings.zoomEaseOut, fallback: 0.52)
-        let hold = bounded(settings.zoomHold, fallback: 0.9)
+        let easeIn = bounded(settings.zoomEaseIn, fallback: ProjectSettings.defaultZoomEaseIn)
+        let easeOut = bounded(settings.zoomEaseOut, fallback: ProjectSettings.defaultZoomEaseOut)
+        let hold = bounded(settings.zoomHold, fallback: ProjectSettings.defaultZoomHold)
         let scale = settings.zoomScale.isFinite ? max(1, settings.zoomScale) : 1.75
         func distance(_ x: Double, _ y: Double, _ otherX: Double, _ otherY: Double) -> Double {
             guard let a = crop.croppedPoint(x: x, y: y),
@@ -85,7 +85,11 @@ public enum TimelineMath {
             var typing: [TypingActivity]
         }
         var intents = sorted.map {
-            Intent(time: $0.time, x: $0.x, y: $0.y, end: min(duration, $0.time + hold + easeOut), clickIDs: [$0.id], typing: [])
+            // Hold starts after the camera arrives, including when lead-in is
+            // clipped by the beginning of the recording.
+            Intent(time: $0.time, x: $0.x, y: $0.y,
+                   end: min(duration, max(0, $0.time - leadIn) + easeIn + hold + easeOut),
+                   clickIDs: [$0.id], typing: [])
         }
         intents += bursts.map {
             Intent(time: $0.first.time, x: $0.first.x, y: $0.first.y,
@@ -134,14 +138,18 @@ public enum TimelineMath {
                     previous.automaticSource?.originalEnd = previous.end
                     result[result.count - 1] = previous
                 }
-                result.append(ZoomSegment(
+                var segment = ZoomSegment(
                     start: start, end: intent.end,
                     targetX: intent.x, targetY: intent.y, scale: scale,
                     automaticSource: ZoomAutomaticSource(
                         start: start, targetX: intent.x, targetY: intent.y, eventTime: intent.time,
                         clickIDs: intent.clickIDs, typingActivity: intent.typing, originalEnd: intent.end
                     )
-                ))
+                )
+                if !isTyping, intent.end - start < easeIn + hold + easeOut {
+                    segment = ZoomTiming.paced(segment, easeIn: easeIn, hold: hold, easeOut: easeOut, endLimit: intent.end)
+                }
+                result.append(segment)
             }
             previousIntentTime = intent.time
         }
@@ -405,6 +413,109 @@ public enum TimelineMath {
             let drift = driftSine * driftSine
             return (0, direction * 0.012 * drift, -0.007 * drift)
         }
+    }
+
+    /// Speed edits cannot run past a hard edit join into a different shot.
+    public static func zoomTimingLimit(for segment: ZoomSegment, in project: RecordingProject) -> Double {
+        let nextCut = (project.editCutTimes ?? []).filter {
+            $0.isFinite && $0 > segment.start + 0.000_001
+        }.min() ?? project.duration
+        return min(project.duration, nextCut)
+    }
+
+    /// Explicit global timing edits shared by the Inspector and MCP. Existing
+    /// projects are never migrated on load. Manual blocks keep their geometry
+    /// and effective timings even if they previously inherited project speeds.
+    public static func setAutomaticZoomTiming(
+        in project: inout RecordingProject,
+        easeIn: Double? = nil,
+        hold: Double? = nil,
+        easeOut: Double? = nil
+    ) {
+        guard project.duration.isFinite, project.duration > 0,
+              easeIn?.isFinite != false, hold?.isFinite != false, easeOut?.isFinite != false,
+              easeIn != nil || hold != nil || easeOut != nil else { return }
+        let oldSettings = project.settings
+        let original = project.zoomSegments
+        let order = original.indices.filter { original[$0].kind == .automatic && original[$0].isEnabled }
+            .sorted { original[$0].start < original[$1].start }
+        let handedOff = Set(zip(order, order.dropFirst()).compactMap { index, nextIndex -> Int? in
+            original[nextIndex].start < original[index].end
+                && original[nextIndex].start < zoomTimingLimit(for: original[index], in: project) ? index : nil
+        })
+        if let easeIn { project.settings.zoomEaseIn = max(0, easeIn) }
+        if let hold { project.settings.zoomHold = max(0, hold) }
+        if let easeOut { project.settings.zoomEaseOut = max(0, easeOut) }
+        let typing = project.settings.resolvedTypingZoom.enabled ? project.resolvedTypingActivity : []
+        for index in project.zoomSegments.indices {
+            let segment = original[index]
+            let timing = ZoomTiming.resolve(segment, settings: oldSettings)
+            if segment.kind == .manual {
+                if easeIn != nil, segment.zoomEaseIn == nil, !segment.isInstant {
+                    project.zoomSegments[index].zoomEaseIn = oldSettings.zoomEaseIn.isFinite
+                        ? max(0, oldSettings.zoomEaseIn) : ProjectSettings.defaultZoomEaseIn
+                }
+                if easeOut != nil, segment.zoomEaseOut == nil, !segment.isInstant {
+                    project.zoomSegments[index].zoomEaseOut = oldSettings.zoomEaseOut.isFinite
+                        ? max(0, oldSettings.zoomEaseOut) : ProjectSettings.defaultZoomEaseOut
+                }
+                continue
+            }
+            guard !segment.isInstant else { continue }
+            let isTyping = segment.automaticSource?.typingActivity?.isEmpty == false || typing.contains {
+                $0.time >= segment.start && $0.time <= segment.end
+                    && hypot($0.x - segment.targetX, $0.y - segment.targetY) <= 0.12
+            }
+            var timingSource = segment
+            if handedOff.contains(index) {
+                // A successor may have truncated this cue before its declared
+                // transitions fit. Keep their original intent while retiming;
+                // repeatedly editing one speed must not compress the other.
+                let incoming = segment.zoomEaseIn ?? oldSettings.zoomEaseIn
+                let outgoing = segment.zoomEaseOut ?? oldSettings.zoomEaseOut
+                if incoming.isFinite, outgoing.isFinite {
+                    timingSource.end = segment.start + max(0, incoming) + timing.hold + max(0, outgoing)
+                }
+            }
+            project.zoomSegments[index] = ZoomTiming.retimed(
+                timingSource,
+                easeIn: easeIn,
+                hold: isTyping ? nil : hold,
+                easeOut: easeOut,
+                settings: oldSettings,
+                endLimit: zoomTimingLimit(for: segment, in: project)
+            )
+        }
+        // Work backwards so an earlier focus cannot reappear after its successor.
+        for pair in zip(order, order.dropFirst()).reversed() {
+            let (index, nextIndex) = pair
+            guard !original[index].isInstant else { continue }
+            let old = ZoomTiming.resolve(original[index], settings: oldSettings)
+            let oldNext = ZoomTiming.resolve(original[nextIndex], settings: oldSettings)
+            var segment = project.zoomSegments[index]
+            let timing = ZoomTiming.resolve(segment, settings: project.settings)
+            let next = ZoomTiming.resolve(project.zoomSegments[nextIndex], settings: project.settings)
+            let handoff = min(zoomTimingLimit(for: segment, in: project), next.end, next.fullZoomStart + timing.easeOut)
+            if old.zoomOutStart >= oldNext.fullZoomStart - 0.000_001 {
+                // Preserve an already committed nearby-click handoff.
+                segment.end = max(segment.end, handoff)
+            }
+            if segment.end > handoff, handoff > segment.start {
+                // A new focus ends the readable hold. Keep the declared speeds
+                // so another identical API request does not refit them again.
+                segment.end = handoff
+            }
+            project.zoomSegments[index] = segment
+        }
+        for index in project.zoomSegments.indices where project.zoomSegments[index].kind == .automatic {
+            let end = project.zoomSegments[index].end
+            project.zoomSegments[index].automaticSource?.originalEnd = end
+        }
+    }
+
+    public static func applyRelaxedZoomPacing(in project: inout RecordingProject) {
+        setAutomaticZoomTiming(in: &project, easeIn: ProjectSettings.defaultZoomEaseIn,
+                               hold: ProjectSettings.defaultZoomHold, easeOut: ProjectSettings.defaultZoomEaseOut)
     }
 
     /// Retimes existing automatic zooms when the global Hold control changes.

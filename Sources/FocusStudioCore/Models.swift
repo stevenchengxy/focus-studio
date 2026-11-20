@@ -738,19 +738,23 @@ public struct CaptionStyle: Codable, Hashable, Sendable {
 }
 
 public struct ProjectSettings: Codable, Hashable, Sendable {
+    public static let defaultZoomEaseIn = 0.7
+    public static let defaultZoomHold = 1.4
+    public static let defaultZoomEaseOut = 0.8
     public var autoZoomEnabled = true
     public var zoomScale = 1.75
     public var zoomLeadIn = 0.10
-    public var zoomEaseIn = 0.42
-    public var zoomHold = 0.90
-    public var zoomEaseOut = 0.52
+    public var zoomEaseIn = Self.defaultZoomEaseIn
+    /// Readable time at full magnification, after the incoming transition.
+    public var zoomHold = Self.defaultZoomHold
+    public var zoomEaseOut = Self.defaultZoomEaseOut
     /// Missing in older projects; only newly captured typing metadata uses it.
     public var typingZoom: TypingZoomSettings?
     public var cursorScale = 1.35
     public var cursorAnimation: CursorAnimationStyle = .smooth
-    /// Optional so projects saved before cursor themes were introduced decode
-    /// with the native system cursor instead of failing migration.
-    public var cursorAppearance: CursorAppearance?
+    /// New projects use our crisp outlined arrow. Optional so projects saved
+    /// before cursor themes decode with the native system cursor unchanged.
+    public var cursorAppearance: CursorAppearance? = .elevated
     /// Non-destructive pointer visibility. Missing in older recordings means
     /// visible; click feedback, cursor metadata and automatic zoom are separate.
     public var showCursor: Bool?

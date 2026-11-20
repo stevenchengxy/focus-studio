@@ -11,6 +11,17 @@ func cursorStyleFailures() -> [String] {
     }
 
     // --- Settings decode without the new keys ----------------------------------
+    expect(ProjectSettings().resolvedCursorAppearance == .elevated,
+           "new recordings use Focus Studio's drawn arrow")
+    if let data = try? JSONEncoder().encode(ProjectSettings()),
+       var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+        object.removeValue(forKey: "cursorAppearance")
+        if let oldData = try? JSONSerialization.data(withJSONObject: object),
+           let restored = try? JSONDecoder().decode(ProjectSettings.self, from: oldData) {
+            expect(restored.resolvedCursorAppearance == .system,
+                   "opening old projects without a theme must retain their original appearance")
+        } else { failures.append("legacy cursor appearance decoding must succeed") }
+    }
     let legacyClickJSON = """
     {"style":"ripple","colorHex":"#8B7BFF","size":1,"duration":0.65,"intensity":0.85,"pressCursor":true}
     """.data(using: .utf8)!
@@ -199,6 +210,10 @@ func cursorStyleFailures() -> [String] {
                 // style must land within a stone's throw of the system pointer
                 // so switching style is not a size change in disguise.
                 let renderedHeight = CGFloat(graphic.image.height) / graphic.supersample
+                if appearance != .system {
+                    expect(graphic.supersample >= 6,
+                           "drawn cursors must support a 3x pointer in a 2x-resolution export without upscaling")
+                }
                 expect(renderedHeight > 20 && renderedHeight < 60,
                        "\(appearance.rawValue)/\(kind.rawValue) renders at a comparable size (\(renderedHeight))")
             }
@@ -223,6 +238,9 @@ func cursorStyleFailures() -> [String] {
                "the Accent pointer takes its colour from the click colour")
         let elevatedCool = CursorArtwork.graphic(for: .arrow, appearance: .elevated, tint: tint)
         let elevatedWarm = CursorArtwork.graphic(for: .arrow, appearance: .elevated, tint: warmTint)
+        expect(abs(elevatedCool.hotSpot.x / elevatedCool.supersample - 4) < 0.001
+               && abs(elevatedCool.hotSpot.y / elevatedCool.supersample - 3) < 0.001,
+               "higher resolution artwork preserves the arrow's reference hot spot")
         expect(fingerprint(elevatedCool.image) == fingerprint(elevatedWarm.image),
                "the other styles ignore the click colour")
 

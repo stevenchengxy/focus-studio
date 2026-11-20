@@ -204,14 +204,14 @@ func zoomMotionFailures() -> [String] {
     var noChain = chainSettings
     noChain.zoomChainGap = 0
     let separate = TimelineMath.generateZoomSegments(from: clicks, duration: 10, settings: noChain)
-    expect(separate.count == 2 && abs(separate[0].end - 2.42) < 1e-9,
+    expect(separate.count == 2 && abs(separate[0].end - 2.74) < 1e-9,
            "a zero chain gap restores independent cues")
     let farClicks = [
         ClickEvent(time: 1, x: 0.1, y: 0.1, button: .left),
         ClickEvent(time: 2.9, x: 0.9, y: 0.9, button: .left),
     ]
     let far = TimelineMath.generateZoomSegments(from: farClicks, duration: 10, settings: chainSettings)
-    expect(far.count == 2 && abs(far[0].end - 2.42) < 1e-9,
+    expect(far.count == 2 && abs(far[0].end - 2.74) < 1e-9,
            "distant clicks are not chained so the pan never races across the frame")
 
     // --- Event ordering and focus ownership ----------------------------------
@@ -324,6 +324,97 @@ func zoomMotionFailures() -> [String] {
     let sanitized = TimelineMath.generateZoomSegments(from: rapidClicks, duration: 8, settings: malformed, typingActivity: typed)
     expect(!sanitized.isEmpty && sanitized.allSatisfy { $0.start.isFinite && $0.end.isFinite && $0.end > $0.start && $0.scale.isFinite },
            "malformed timing settings must not create NaN or empty camera intervals")
+
+    // --- Readable hold and explicit pacing ------------------------------------
+    let defaults = ProjectSettings()
+    let pacedClicks = [ClickEvent(time: 1, x: 0.5, y: 0.5, button: .left)]
+    let defaultZooms = TimelineMath.generateZoomSegments(from: pacedClicks, duration: 10, settings: defaults)
+    let defaultTiming = ZoomTiming.resolve(defaultZooms[0], settings: defaults)
+    expect(abs(defaultTiming.easeIn - 0.7) < 1e-9 && abs(defaultTiming.hold - 1.4) < 1e-9
+           && abs(defaultTiming.easeOut - 0.8) < 1e-9,
+           "new clicks get 0.7 seconds in, 1.4 seconds of actual full zoom, and 0.8 seconds out")
+    let edgeClicks = [0.02, 9.8].map { ClickEvent(time: $0, x: 0.5, y: 0.5, button: .left) }
+    let edgeZooms = TimelineMath.generateZoomSegments(from: edgeClicks, duration: 10, settings: defaults)
+    expect(abs(ZoomTiming.resolve(edgeZooms[0], settings: defaults).hold - 1.4) < 1e-9,
+           "a lead-in clipped at zero does not consume any full-zoom hold")
+    let tailTiming = ZoomTiming.resolve(edgeZooms[1], settings: defaults)
+    expect(tailTiming.hold > 0 && tailTiming.easeIn > 0 && tailTiming.easeOut > 0 && tailTiming.end <= 10,
+           "a final click fits a readable three-phase zoom within the remaining footage")
+
+    var legacySettings = ProjectSettings()
+    legacySettings.zoomEaseIn = 0.42
+    legacySettings.zoomHold = 0.9
+    legacySettings.zoomEaseOut = 0.52
+    let oldAutomatic = ZoomSegment(start: 1, end: 2.52, targetX: 0.5, targetY: 0.5, scale: 1.75)
+    let manual = ZoomSegment(start: 5, end: 5.5, targetX: 0.7, targetY: 0.4, scale: 2.3,
+                             kind: .manual, zoomEaseIn: 0.4, motionPreset: .tiltReveal)
+    var pacingProject = RecordingProject(title: "Explicit pacing", sourceVideoPath: "synthetic.mp4", duration: 10,
+        sourceWidth: 960, sourceHeight: 540, zoomSegments: [oldAutomatic, manual], settings: legacySettings)
+    let manualTiming = ZoomTiming.resolve(manual, settings: legacySettings)
+    TimelineMath.setAutomaticZoomTiming(in: &pacingProject, easeIn: 0.8)
+    expect(abs(ZoomTiming.resolve(pacingProject.zoomSegments[0], settings: pacingProject.settings).hold - 0.58) < 1e-9,
+           "global incoming speed preserves a saved project's actual hold")
+    TimelineMath.setAutomaticZoomTiming(in: &pacingProject, hold: 1.4)
+    expect(abs(ZoomTiming.resolve(pacingProject.zoomSegments[0], settings: pacingProject.settings).hold - 1.4) < 1e-9,
+           "an explicit global hold is full-zoom time, not a delta from legacy click timing")
+    TimelineMath.applyRelaxedZoomPacing(in: &pacingProject)
+    let updatedManual = pacingProject.zoomSegments[1]
+    expect(ZoomTiming.resolve(updatedManual, settings: pacingProject.settings) == manualTiming
+           && updatedManual.id == manual.id && updatedManual.start == manual.start && updatedManual.end == manual.end
+           && updatedManual.scale == manual.scale && updatedManual.motionPreset == manual.motionPreset
+           && updatedManual.zoomEaseIn == manual.zoomEaseIn,
+           "explicit relaxed pacing preserves manual geometry, styling, overrides and inherited effective timing")
+    let once = pacingProject
+    TimelineMath.applyRelaxedZoomPacing(in: &pacingProject)
+    expect(pacingProject == once, "applying the same relaxed pacing twice is idempotent")
+    var cutProject = RecordingProject(title: "Cut boundary", sourceVideoPath: "synthetic.mp4", duration: 10,
+        sourceWidth: 960, sourceHeight: 540, editCutTimes: [2], zoomSegments: [oldAutomatic], settings: legacySettings)
+    TimelineMath.applyRelaxedZoomPacing(in: &cutProject)
+    expect(abs(cutProject.zoomSegments[0].end - 2) < 1e-9
+           && ZoomTiming.resolve(cutProject.zoomSegments[0], settings: cutProject.settings).hold > 0,
+           "explicit pacing stays inside the shot and retains a hold at a close edit boundary")
+    TimelineMath.setAutomaticZoomTiming(in: &cutProject, easeIn: 0.9)
+    let tailOnce = cutProject
+    TimelineMath.setAutomaticZoomTiming(in: &cutProject, easeIn: 0.9)
+    expect(cutProject == tailOnce, "repeating an incoming-only edit at a cut cannot shrink the other phases")
+    TimelineMath.setAutomaticZoomTiming(in: &cutProject, hold: 3)
+    let holdOnce = cutProject
+    TimelineMath.setAutomaticZoomTiming(in: &cutProject, hold: 3)
+    expect(cutProject == holdOnce, "repeating a hold-only edit at a cut is idempotent")
+    var handoffProject = RecordingProject(title: "Short handoff", sourceVideoPath: "synthetic.mp4", duration: 10,
+        sourceWidth: 960, sourceHeight: 540,
+        zoomSegments: [ZoomSegment(start: 1, end: 2, targetX: 0.3, targetY: 0.5, scale: 1.75, zoomEaseIn: 0.7),
+                       ZoomSegment(start: 1.05, end: 2.57, targetX: 0.7, targetY: 0.5, scale: 1.75)], settings: legacySettings)
+    TimelineMath.setAutomaticZoomTiming(in: &handoffProject, easeOut: 0.8)
+    let handoffOnce = handoffProject
+    TimelineMath.setAutomaticZoomTiming(in: &handoffProject, easeOut: 0.8)
+    expect(handoffProject == handoffOnce,
+           "repeating a speed edit during a truncated focus handoff preserves the declared transitions")
+    expect(handoffProject.zoomSegments[0].end <= handoffProject.zoomSegments[1].end,
+           "an earlier automatic focus cannot reappear after its successor ends")
+    var disabledSuccessor = RecordingProject(title: "Disabled focus", sourceVideoPath: "synthetic.mp4", duration: 10,
+        sourceWidth: 960, sourceHeight: 540,
+        zoomSegments: [oldAutomatic, ZoomSegment(start: 1.05, end: 2.57, targetX: 0.7, targetY: 0.5, scale: 1.75)],
+        settings: legacySettings)
+    disabledSuccessor.zoomSegments[1].isEnabled = false
+    TimelineMath.applyRelaxedZoomPacing(in: &disabledSuccessor)
+    let enabledTiming = ZoomTiming.resolve(disabledSuccessor.zoomSegments[0], settings: disabledSuccessor.settings)
+    expect(abs(enabledTiming.end - 3.9) < 1e-9 && abs(enabledTiming.hold - 1.4) < 1e-9,
+           "a disabled successor cannot truncate the enabled cue's readable hold")
+    var typingProject = RecordingProject(title: "Typing hold", sourceVideoPath: "synthetic.mp4", duration: 10,
+        sourceWidth: 960, sourceHeight: 540, typingActivity: [TypingActivity(time: 2, x: 0.5, y: 0.5)],
+        zoomSegments: [ZoomSegment(start: 1, end: 8, targetX: 0.5, targetY: 0.5, scale: 1.75)], settings: legacySettings)
+    let typingHold = ZoomTiming.resolve(typingProject.zoomSegments[0], settings: legacySettings).hold
+    TimelineMath.applyRelaxedZoomPacing(in: &typingProject)
+    expect(abs(ZoomTiming.resolve(typingProject.zoomSegments[0], settings: typingProject.settings).hold - typingHold) < 1e-9,
+           "the relaxed preset never shortens a longer typing hold")
+    if let data = try? JSONEncoder().encode(RecordingProject(title: "Saved timings", sourceVideoPath: "synthetic.mp4",
+        duration: 10, sourceWidth: 960, sourceHeight: 540, zoomSegments: [oldAutomatic], settings: legacySettings)),
+       let decoded = try? JSONDecoder().decode(RecordingProject.self, from: data) {
+        expect(decoded.settings == legacySettings && decoded.zoomSegments == [oldAutomatic]
+               && abs(ZoomTiming.resolve(decoded.zoomSegments[0], settings: decoded.settings).hold - 0.58) < 1e-9,
+               "loading a saved project never silently adopts the new pace")
+    } else { failures.append("saved timing fixture must decode") }
 
     // --- Compatibility --------------------------------------------------------
     // A project saved by 1.1.x has every legacy key but no chain gap and a

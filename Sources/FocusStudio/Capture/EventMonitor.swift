@@ -5,6 +5,21 @@ import CoreGraphics
 import Foundation
 import FocusStudioCore
 
+/// NSEvent timestamps and the first captured frame share the system-uptime
+/// clock. Preserve the event time even when AppKit delivers a delayed batch.
+public enum CaptureEventTimestamp {
+    public static func resolve(nativeUptime: TimeInterval, receiptUptime: TimeInterval) -> TimeInterval? {
+        guard receiptUptime.isFinite, receiptUptime >= 0 else { return nil }
+        guard nativeUptime.isFinite, nativeUptime > 0,
+              nativeUptime <= receiptUptime + 0.001 else { return receiptUptime }
+        // Do not turn an old timestamp into a new event: it may belong before
+        // the first video frame or inside a pause. The recording clock rejects
+        // those events after delivery. Tiny clock-rounding differences are safe
+        // to clamp; epoch/future timestamps above are not in the uptime clock.
+        return min(nativeUptime, receiptUptime)
+    }
+}
+
 /// Collects mouse movement and click metadata while a recording is in progress.
 ///
 /// ScreenCaptureKit and `CGEvent.location` both use the Quartz global display
@@ -356,6 +371,21 @@ public final class EventMonitor: ObservableObject {
         )
     }
 
+    /// Exercises native-event timing through the same storage and pause gates
+    /// without posting input or consulting a live mouse event.
+    public func injectNativeEventForTesting(
+        nativeUptime: TimeInterval,
+        receiptUptime: TimeInterval,
+        x: Double,
+        y: Double,
+        button: MouseButton? = nil
+    ) {
+        guard let uptime = CaptureEventTimestamp.resolve(
+            nativeUptime: nativeUptime, receiptUptime: receiptUptime
+        ) else { return }
+        injectEventForTesting(uptime: uptime, x: x, y: y, button: button, cursorKind: .arrow)
+    }
+
     public func injectTypingAnchorForTesting(x: Double, y: Double, context: TypingFocusContext) {
         typingResolver?.noteClick(x: x, y: y, context: context)
     }
@@ -423,6 +453,10 @@ public final class EventMonitor: ObservableObject {
             return
         }
 
+        // Validate the event's native time before it can influence the pointer,
+        // a click ring or the typing-focus anchor. A paused event may be delivered
+        // after resume, when isPaused alone can no longer reject it.
+        guard let relativeTime = pauseClock.mediaTime(at: payload.uptime) else { return }
         if payload.kind == .mouseDown {
             typingResolver?.noteClick(
                 x: payload.x, y: payload.y,
@@ -433,9 +467,6 @@ public final class EventMonitor: ObservableObject {
             eventDiagnostics.mouseEventsOutsideCapture += 1
             return
         }
-
-        guard let relativeTime = pauseClock.mediaTime(at: payload.uptime) else { return }
-        guard payload.uptime >= start else { return }
         let cursorKind = payload.cursorKind ?? cursorKindDetector.kind(
             at: CGPoint(x: payload.x, y: payload.y),
             uptime: payload.uptime
@@ -555,7 +586,11 @@ private struct MouseEventPayload: Sendable {
             return nil
         }
 
-        uptime = ProcessInfo.processInfo.systemUptime
+        guard let timestamp = CaptureEventTimestamp.resolve(
+            nativeUptime: event.timestamp,
+            receiptUptime: ProcessInfo.processInfo.systemUptime
+        ) else { return nil }
+        uptime = timestamp
         x = location.x
         y = location.y
         cursorKind = nil

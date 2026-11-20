@@ -1757,7 +1757,7 @@ struct RemoveZoomTool: AIAssistantTool {
 
 struct SetZoomStyleTool: AIAssistantTool {
     let name = "set_zoom_style"
-    let summary = "Tune how zooms move: screen animation, zoom scale, click hold, ease in/out durations, how nearby clicks are chained, and whether automatic zooms are on. Only the given keys change."
+    let summary = "Tune how zooms move: screen animation, zoom scale, readable hold at full zoom, ease in/out durations, how nearby clicks are chained, and whether automatic zooms are on. Timing edits preserve manual cues; automatic cues keep their hold when transition speeds change."
 
     static let allowedKeys = ["screenAnimation", "zoomScale", "zoomHold", "zoomEaseIn", "zoomEaseOut", "zoomChainGap", "autoZoomEnabled"]
     static let ranges: [String: ClosedRange<Double>] = [
@@ -1772,11 +1772,11 @@ struct SetZoomStyleTool: AIAssistantTool {
             "type": "object",
             "properties": [
                 "screenAnimation": ["type": "string", "enum": ScreenAnimationStyle.allCases.map(\.rawValue)],
-                "zoomScale": ["type": "number", "minimum": 1.1, "maximum": 3, "description": "Default magnification for automatic zooms and new manual zooms, from 1.1 to 3."],
-                "zoomHold": ["type": "number", "minimum": 0.2, "maximum": 3, "description": "Seconds an automatic zoom stays on a click, from 0.2 to 3."],
-                "zoomEaseIn": ["type": "number", "minimum": 0.05, "maximum": 1, "description": "Seconds to zoom in, from 0.05 to 1."],
-                "zoomEaseOut": ["type": "number", "minimum": 0.05, "maximum": 1.4, "description": "Seconds to zoom out, from 0.05 to 1.4."],
-                "zoomChainGap": ["type": "number", "minimum": 0, "maximum": ProjectSettings.maximumZoomChainGap, "description": "Clicks closer than this many seconds (from 0 to \(ProjectSettings.maximumZoomChainGap)) pan within one zoom instead of zooming out."],
+                "zoomScale": ["type": "number", "minimum": 1.1, "maximum": 3, "description": "Magnification for automatic and new manual zooms."],
+                "zoomHold": ["type": "number", "minimum": 0.2, "maximum": 3, "description": "Seconds at full zoom after entry. Preserves typing holds and manual cues; limited by the shot or next focus."],
+                "zoomEaseIn": ["type": "number", "minimum": 0.05, "maximum": 1, "description": "Entry seconds. Preserves hold, extending automatic cues within the shot."],
+                "zoomEaseOut": ["type": "number", "minimum": 0.05, "maximum": 1.4, "description": "Exit seconds. Preserves hold where the shot permits."],
+                "zoomChainGap": ["type": "number", "minimum": 0, "maximum": ProjectSettings.maximumZoomChainGap, "description": "Clicks within this many seconds pan inside one zoom."],
                 "autoZoomEnabled": ["type": "boolean"],
             ],
         ]
@@ -1821,17 +1821,8 @@ struct SetZoomStyleTool: AIAssistantTool {
         // One write for every key, so a parallel edit never lands between halves.
         let (count, settings) = try await AIToolSupport.edit(context, projectID: project.id) { project -> (Int, ProjectSettings) in
             try sharedUpdate?.apply(&project.settings)
-            if let hold = values["zoomHold"] {
-                let delta = hold - project.settings.zoomHold
-                project.settings.zoomHold = hold
-                TimelineMath.adjustAutomaticClickHold(in: &project, by: delta)
-            }
-            if let easeIn = values["zoomEaseIn"] { project.settings.zoomEaseIn = easeIn }
-            if let easeOut = values["zoomEaseOut"] {
-                let delta = easeOut - project.settings.zoomEaseOut
-                project.settings.zoomEaseOut = easeOut
-                TimelineMath.adjustAutomaticHold(in: &project.zoomSegments, by: delta, duration: project.duration)
-            }
+            TimelineMath.setAutomaticZoomTiming(in: &project, easeIn: values["zoomEaseIn"],
+                                               hold: values["zoomHold"], easeOut: values["zoomEaseOut"])
             var regenerate = false
             if let gap = values["zoomChainGap"] {
                 project.settings.zoomChainGap = gap

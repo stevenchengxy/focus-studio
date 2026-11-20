@@ -440,7 +440,7 @@ public struct MCPToolCatalog: Sendable {
         ),
         MCPToolSpec(
             tool: SetZoomStyleTool(), title: "Set zoom style",
-            description: "Tune how a project's zooms move: screen animation, zoom scale, how long an automatic zoom holds on a click, ease-in and ease-out durations in seconds, how close clicks are chained into one zoom, and whether automatic zooms are on. Only the given keys change; a new chain gap or turning automatic zooms back on regenerates the automatic zooms. Focus Studio opens the project in its editor.",
+            description: "Set zoom style, scale, entry/hold/exit seconds and click chaining. Hold means time at full zoom. Timing edits preserve manual cues and unedited phases, bounded by footage and later focus. A changed chain gap or re-enabling auto zoom regenerates automatic cues. Only supplied keys change. Opens the project in the editor.",
             scope: .project, annotations: MCPToolAnnotations(readOnly: false, destructive: true, idempotent: true)
         ),
         MCPToolSpec(

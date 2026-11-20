@@ -1556,9 +1556,8 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
                 ])
                 .cropped(to: canvasRect)
         }
-        // A shape change (arrow ↔ I-beam over an input) cross-fades with a small
-        // scale pop instead of swapping on one frame, which also hides flicker
-        // from rapid focus changes.
+        // Shape transitions are resolved independently from click feedback.
+        // Crossing a link must not pulse the pointer size or move its hot spot.
         let transition = CursorMotion.kindTransition(
             at: seconds,
             samples: sortedCursorSamples,
@@ -1574,11 +1573,7 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
         else {
             return RegionEffectOverlay(image: placed(current, scaleMultiplier: 1, alpha: 1), anchor: canvasPoint)
         }
-        // "None" means the pointer never changes size, shape swaps included.
-        let pop: CGFloat = project.settings.resolvedClickAnimation.resolvedPressStyle == .none
-            ? 1
-            : CGFloat(0.9 + 0.1 * transition.progress)
-        let incoming = placed(current, scaleMultiplier: pop, alpha: transition.progress)
+        let incoming = placed(current, scaleMultiplier: 1, alpha: transition.progress)
         let outgoing = placed(previous, scaleMultiplier: 1, alpha: 1 - transition.progress)
         return RegionEffectOverlay(image: incoming.composited(over: outgoing), anchor: canvasPoint)
     }

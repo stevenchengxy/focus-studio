@@ -1,6 +1,6 @@
 # Focus Studio 正式版签名与 Apple 公证
 
-**1.14.9 / build 72** 用于恢复应用内选屏的预览更新，频道为 `preview`。Apple 公证仍待开发者会员和签名凭据就绪；正式版必须使用高于已发布预览版的新版本号（下一候选为 1.14.10 / build 73），并将更新频道设为 `stable`。
+**1.14.10 / build 73** 为光标与缩放节奏优化的预览更新，频道为 `preview`，保留应用内选屏。Apple 公证仍待开发者会员和签名凭据就绪；正式版必须使用高于已发布预览版的新版本号（下一候选为 1.14.11 / build 74），并将更新频道设为 `stable`。
 
 2026-11-20 本机检查结果：`security find-identity -v -p codesigning` 返回 **0 valid identities**；没有查到 Developer ID Application 证书，也未指定 `FOCUS_STUDIO_NOTARY_PROFILE`。因此尚未向 Apple 提交公证。
 
@@ -27,11 +27,11 @@ zsh scripts/check-notarization.sh
 
 ## 构建、公证与发布
 
-凭据就绪后，先在 `Resources/Info.plist` 更新正式版本号、build 和 `stable` 频道，再使用独立构建目录（以下以 1.14.10 为例）：
+凭据就绪后，先在 `Resources/Info.plist` 更新正式版本号、build 和 `stable` 频道，再使用独立构建目录（以下以 1.14.11 为例）：
 
 ```sh
 FOCUS_STUDIO_NOTARY_PROFILE='focus-studio-notary' \
-FOCUS_STUDIO_APP_DIR="$PWD/dist/stable-1.14.10/Focus Studio.app" \
+FOCUS_STUDIO_APP_DIR="$PWD/dist/stable-1.14.11/Focus Studio.app" \
 zsh scripts/package-release.sh
 ```
 
@@ -39,6 +39,6 @@ zsh scripts/package-release.sh
 
 发布前仍需验证应用内屏幕／窗口／区域选源、首次权限、暂停恢复和停止，并从下载的安装包测试安装/升级。Apple 公证是分发安全检查，不代表功能验收或 App Store 审核。原来的本地签名切换为 Developer ID 后，macOS 或 MCP 客户端可能要求重新确认权限。
 
-通过上述检查后使用新的正式 tag（例如 `v1.14.10`）发布对应的 `Focus-Studio-1.14.10-universal-notarized.dmg`，不替换已经发布的预览文件。同步官网 Mac 正式版文案和下载 fallback，刷新 `release-feed`，验证 `channel=stable`、网站实际下载和旧客户端更新提示。Windows/Linux 仍保留其预览状态。
+通过上述检查后使用新的正式 tag（例如 `v1.14.11`）发布对应的 `Focus-Studio-1.14.11-universal-notarized.dmg`，不替换已经发布的预览文件。同步官网 Mac 正式版文案和下载 fallback，刷新 `release-feed`，验证 `channel=stable`、网站实际下载和旧客户端更新提示。Windows/Linux 仍保留其预览状态。
 
 官方参考：[公证要求](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)、[命令行公证流程](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow)、[会员费用](https://developer.apple.com/help/account/membership/program-enrollment/)。

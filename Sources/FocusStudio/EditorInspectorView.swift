@@ -250,7 +250,9 @@ struct EditorInspectorView: View {
                 NumberField(title: "Total duration", value: segmentTimingBinding(zoom, value: \.duration, edit: ZoomTimingEdit.duration), range: 0...max(0, project.duration), suffix: "s")
                 NumberField(title: "Hold at full zoom", value: segmentTimingBinding(zoom, value: \.hold, edit: ZoomTimingEdit.hold), range: 0...max(0, project.duration), suffix: "s")
                 NumberField(title: "Zoom in ends", value: segmentTimingBinding(zoom, value: \.fullZoomStart, edit: ZoomTimingEdit.fullZoomAt), range: 0...max(0, project.duration), suffix: "s")
+                    .help("Timeline position. Moving this boundary keeps the clip's start and end fixed.")
                 NumberField(title: "Zoom out starts", value: segmentTimingBinding(zoom, value: \.zoomOutStart, edit: ZoomTimingEdit.zoomOutAt), range: 0...max(0, project.duration), suffix: "s")
+                    .help("Timeline position. Moving this boundary keeps the clip's start and end fixed.")
                 Toggle("Instant animation", isOn: zoom.isInstant)
                     .font(.system(size: 11))
                 Toggle("Enabled", isOn: zoom.isEnabled)
@@ -279,7 +281,7 @@ struct EditorInspectorView: View {
                 )
                 HStack(spacing: 8) {
                     transitionPreset("Fast", incoming: 0.18, outgoing: 0.22, zoom: zoom)
-                    transitionPreset("Natural", incoming: 0.36, outgoing: 0.52, zoom: zoom)
+                    transitionPreset("Natural", incoming: ProjectSettings.defaultZoomEaseIn, outgoing: ProjectSettings.defaultZoomEaseOut, zoom: zoom)
                     transitionPreset("Gentle", incoming: 0.8, outgoing: 1.0, zoom: zoom)
                 }
                 .controlSize(.small)
@@ -288,7 +290,8 @@ struct EditorInspectorView: View {
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundStyle(StudioTheme.secondaryText)
                 Button("Use project speeds") {
-                    zoom.wrappedValue = ZoomTiming.applying(.resetTransitions, to: zoom.wrappedValue, projectDuration: project.duration, settings: project.settings)
+                    zoom.wrappedValue = ZoomTiming.applying(.resetTransitions, to: zoom.wrappedValue,
+                        projectDuration: TimelineMath.zoomTimingLimit(for: zoom.wrappedValue, in: project), settings: project.settings)
                 }
                 .font(.system(size: 10))
             }
@@ -334,17 +337,23 @@ struct EditorInspectorView: View {
         Binding(
             get: { ZoomTiming.resolve(zoom.wrappedValue, settings: project.settings)[keyPath: value] },
             set: { requested in
-                zoom.wrappedValue = ZoomTiming.applying(edit(requested), to: zoom.wrappedValue, projectDuration: project.duration, settings: project.settings)
+                let operation = edit(requested)
+                let limit: Double
+                switch operation {
+                case .easeIn, .easeOut, .pacing:
+                    limit = TimelineMath.zoomTimingLimit(for: zoom.wrappedValue, in: project)
+                default:
+                    limit = project.duration
+                }
+                zoom.wrappedValue = ZoomTiming.applying(operation, to: zoom.wrappedValue, projectDuration: limit, settings: project.settings)
             }
         )
     }
 
     private func transitionPreset(_ title: String, incoming: Double, outgoing: Double, zoom: Binding<ZoomSegment>) -> some View {
         Button(LocalizedStringKey(title)) {
-            var segment = zoom.wrappedValue
-            segment = ZoomTiming.applying(.easeIn(incoming), to: segment, projectDuration: project.duration, settings: project.settings)
-            segment = ZoomTiming.applying(.easeOut(outgoing), to: segment, projectDuration: project.duration, settings: project.settings)
-            zoom.wrappedValue = segment
+            zoom.wrappedValue = ZoomTiming.applying(.pacing(easeIn: incoming, hold: nil, easeOut: outgoing),
+                to: zoom.wrappedValue, projectDuration: TimelineMath.zoomTimingLimit(for: zoom.wrappedValue, in: project), settings: project.settings)
         }
     }
 
@@ -1087,13 +1096,21 @@ struct EditorInspectorView: View {
     private var animationInspector: some View {
         Group {
             InspectorSection("Screen animation") {
+                Button("Apply relaxed pacing") {
+                    var updated = project
+                    TimelineMath.applyRelaxedZoomPacing(in: &updated)
+                    project = updated
+                }
+                .controlSize(.small)
+                .help("Retimes automatic zooms. Manual edits stay as they are. You can undo this change.")
+                .accessibilityIdentifier("animation.relaxedPacing")
                 Picker("Style", selection: $project.settings.screenAnimation) {
                     ForEach(ScreenAnimationStyle.allCases, id: \.self) { style in
                         Text(LocalizedStringKey(style.title)).tag(style)
                     }
                 }
                 LabeledSlider(value: zoomTimingBinding(\.zoomEaseIn), range: 0.05...1, label: "Zoom in", suffix: "s", decimals: 2)
-                LabeledSlider(value: zoomHoldBinding, range: 0.2...3, label: "Click hold", suffix: "s", decimals: 2)
+                LabeledSlider(value: zoomHoldBinding, range: 0.2...3, label: "Hold at full zoom", suffix: "s", decimals: 2)
                 LabeledSlider(value: zoomTimingBinding(\.zoomEaseOut), range: 0.05...1.4, label: "Zoom out", suffix: "s", decimals: 2)
                 LabeledSlider(value: zoomChainGapBinding, range: 0...ProjectSettings.maximumZoomChainGap, label: "Link nearby clicks", suffix: "s", decimals: 1)
                 LabeledSlider(value: zoomFollowBinding, range: 0...1, label: "Follow cursor", suffix: "%", multiplier: 100, decimals: 0)
@@ -1301,9 +1318,9 @@ struct EditorInspectorView: View {
         Binding(
             get: { project.settings.zoomHold },
             set: { newValue in
-                let oldValue = project.settings.zoomHold
-                project.settings.zoomHold = newValue
-                TimelineMath.adjustAutomaticClickHold(in: &project, by: newValue - oldValue)
+                var updated = project
+                TimelineMath.setAutomaticZoomTiming(in: &updated, hold: newValue)
+                project = updated
             }
         )
     }
@@ -1331,17 +1348,11 @@ struct EditorInspectorView: View {
         Binding(
             get: { project.settings[keyPath: keyPath] },
             set: { value in
-                let previous = project.settings[keyPath: keyPath]
-                project.settings[keyPath: keyPath] = value
-                if keyPath == \ProjectSettings.zoomEaseOut {
-                    // Keep the hold's release time and the user's retiming intact;
-                    // only the outgoing envelope gains/loses this duration.
-                    TimelineMath.adjustAutomaticHold(
-                        in: &project.zoomSegments,
-                        by: value - previous,
-                        duration: project.duration
-                    )
-                }
+                var updated = project
+                TimelineMath.setAutomaticZoomTiming(in: &updated,
+                    easeIn: keyPath == \ProjectSettings.zoomEaseIn ? value : nil,
+                    easeOut: keyPath == \ProjectSettings.zoomEaseOut ? value : nil)
+                project = updated
             }
         )
     }

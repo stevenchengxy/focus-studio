@@ -38,5 +38,28 @@ func zoomBoundaryFailures() -> [String] {
            "the zoom-out start cannot pass the zoom-in end")
     let unchanged = ZoomTiming.applying(.fullZoomAt(.nan), to: segment, projectDuration: 10, settings: settings)
     expect(unchanged == segment, "a non-finite boundary edit is ignored")
+
+    // Speed controls differ from absolute boundary controls: slowing the camera
+    // keeps its readable hold rather than consuming it inside a fixed block.
+    let short = ZoomSegment(start: 1, end: 2.52, targetX: 0.5, targetY: 0.5, scale: 1.75,
+                            zoomEaseIn: 0.42, zoomEaseOut: 0.52)
+    let relaxed = ZoomTiming.applying(.pacing(easeIn: 0.8, hold: nil, easeOut: 1.0),
+                                     to: short, projectDuration: 10, settings: settings)
+    let relaxedTiming = ZoomTiming.resolve(relaxed, settings: settings)
+    expect(abs(relaxedTiming.hold - 0.58) < 1e-9 && abs(relaxedTiming.end - 3.38) < 1e-9,
+           "Gentle preserves the old hold and extends the block instead of eliminating the hold")
+    let slower = ZoomTiming.applying(.easeIn(0.9), to: short, projectDuration: 10, settings: settings)
+    expect(abs(ZoomTiming.resolve(slower, settings: settings).hold - 0.58) < 1e-9
+           && abs(slower.end - 3.0) < 1e-9,
+           "changing incoming duration preserves hold and the outgoing duration")
+    let tail = ZoomTiming.applying(.pacing(easeIn: 0.7, hold: 1.4, easeOut: 0.8),
+                                  to: short, projectDuration: 1.5, settings: settings)
+    let tailTiming = ZoomTiming.resolve(tail, settings: settings)
+    expect(abs(tail.end - 1.5) < 1e-9 && tailTiming.easeIn > 0 && tailTiming.easeOut > 0
+           && abs(tailTiming.hold - 0.5 * 1.4 / 2.9) < 1e-9,
+           "a short remainder fits all three phases proportionally, including readable hold")
+    let invalidPacing = ZoomTiming.applying(.pacing(easeIn: .nan, hold: 1, easeOut: 0.8),
+                                           to: short, projectDuration: 10, settings: settings)
+    expect(invalidPacing == short, "a non-finite pacing preset changes nothing")
     return failures
 }

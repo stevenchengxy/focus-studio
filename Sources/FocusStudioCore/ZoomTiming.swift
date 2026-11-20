@@ -22,6 +22,8 @@ public enum ZoomTimingEdit: Sendable {
     case hold(Double)
     case easeIn(Double)
     case easeOut(Double)
+    /// A speed preset preserves readable hold unless explicitly replaced.
+    case pacing(easeIn: Double, hold: Double?, easeOut: Double)
     /// Absolute time when the zoom-in should be complete (moves the inner
     /// boundary; start and end stay fixed).
     case fullZoomAt(Double)
@@ -47,8 +49,8 @@ public enum ZoomTiming {
         guard duration > 0, !segment.isInstant else {
             return ResolvedZoomTiming(start: start, end: end, easeIn: 0, hold: duration, easeOut: 0)
         }
-        var easeIn = finiteDuration(segment.zoomEaseIn, fallback: settings.zoomEaseIn, default: 0.42)
-        var easeOut = finiteDuration(segment.zoomEaseOut, fallback: settings.zoomEaseOut, default: 0.52)
+        var easeIn = finiteDuration(segment.zoomEaseIn, fallback: settings.zoomEaseIn, default: ProjectSettings.defaultZoomEaseIn)
+        var easeOut = finiteDuration(segment.zoomEaseOut, fallback: settings.zoomEaseOut, default: ProjectSettings.defaultZoomEaseOut)
         if easeIn > duration || easeOut > duration - easeIn {
             // Normalize before adding, avoiding overflow for malformed settings.
             // Both curves meet at 1, so even a very short clip reaches its scale.
@@ -85,6 +87,8 @@ public enum ZoomTiming {
             guard value.isFinite else { return segment }
         case .resetTransitions:
             break
+        case let .pacing(incoming, hold, outgoing):
+            guard incoming.isFinite, outgoing.isFinite, hold?.isFinite != false else { return segment }
         }
         var result = segment
         let minimum = min(minimumDuration, projectDuration)
@@ -112,11 +116,11 @@ public enum ZoomTiming {
             let hold = max(0, value).clamped(to: 0...max(0, available - transitions))
             result.end = result.start + max(minimum, transitions + hold)
         case .easeIn(let value):
-            result.zoomEaseIn = max(0, value)
-            result.isInstant = false
+            result = retimed(result, easeIn: value, settings: settings, endLimit: projectDuration)
         case .easeOut(let value):
-            result.zoomEaseOut = max(0, value)
-            result.isInstant = false
+            result = retimed(result, easeOut: value, settings: settings, endLimit: projectDuration)
+        case let .pacing(incoming, hold, outgoing):
+            result = retimed(result, easeIn: incoming, hold: hold, easeOut: outgoing, settings: settings, endLimit: projectDuration)
         case .fullZoomAt(let value):
             // The zoom-out keeps its current length; the zoom-in fills what is left.
             let available = max(0, timing.duration - timing.easeOut)
@@ -133,8 +137,14 @@ public enum ZoomTiming {
             result.start = value.clamped(to: 0...max(0, projectDuration - length))
             result.end = min(projectDuration, result.start + length)
         case .resetTransitions:
-            result.zoomEaseIn = nil
-            result.zoomEaseOut = nil
+            result = retimed(result,
+                easeIn: finiteDuration(nil, fallback: settings.zoomEaseIn, default: ProjectSettings.defaultZoomEaseIn),
+                easeOut: finiteDuration(nil, fallback: settings.zoomEaseOut, default: ProjectSettings.defaultZoomEaseOut),
+                settings: settings, endLimit: projectDuration)
+            // Keep fitted overrides at the video boundary; otherwise inherit.
+            let fitted = resolve(result, settings: settings)
+            if fitted.easeIn == max(0, settings.zoomEaseIn) { result.zoomEaseIn = nil }
+            if fitted.easeOut == max(0, settings.zoomEaseOut) { result.zoomEaseOut = nil }
             result.isInstant = false
         }
         if result.kind == .automatic, result.automaticSource == nil {
@@ -150,6 +160,71 @@ public enum ZoomTiming {
             result.automaticSource?.originalEnd = segment.end
         }
         result.kind = .manual
+        return result
+    }
+
+    /// Only the requested phases change. If there is not enough footage, keep
+    /// unedited phases and fit the requested phases into the remaining time.
+    /// Repeating a speed-only or hold-only call therefore cannot progressively
+    /// compress the other phases at a short shot boundary.
+    public static func retimed(
+        _ segment: ZoomSegment,
+        easeIn: Double? = nil,
+        hold: Double? = nil,
+        easeOut: Double? = nil,
+        settings: ProjectSettings,
+        endLimit: Double
+    ) -> ZoomSegment {
+        guard segment.start.isFinite, endLimit.isFinite, endLimit > max(0, segment.start),
+              easeIn?.isFinite != false, hold?.isFinite != false, easeOut?.isFinite != false else { return segment }
+        let timing = resolve(segment, settings: settings)
+        var phases = [max(0, easeIn ?? timing.easeIn), max(0, hold ?? timing.hold), max(0, easeOut ?? timing.easeOut)]
+        let edited = [easeIn != nil, hold != nil, easeOut != nil]
+        let available = endLimit - max(0, segment.start)
+        let fixed = phases.indices.filter { !edited[$0] }.reduce(0) { $0 + phases[$1] }
+        if fixed <= available {
+            let requested = phases.indices.filter { edited[$0] }
+            let largest = requested.map { phases[$0] }.max() ?? 0
+            if largest > 0 {
+                let weight = requested.reduce(0) { $0 + phases[$1] / largest }
+                let remaining = max(0, available - fixed)
+                if largest > remaining / weight {
+                    for index in requested { phases[index] = remaining * (phases[index] / largest) / weight }
+                }
+            }
+        }
+        return paced(segment, easeIn: phases[0], hold: phases[1], easeOut: phases[2], endLimit: endLimit)
+    }
+
+    /// Repace without taking ownership of an automatic cue. A short remainder
+    /// scales all three phases together, retaining readable hold instead of
+    /// spending its entire budget on an entrance immediately followed by exit.
+    public static func paced(
+        _ segment: ZoomSegment,
+        easeIn: Double,
+        hold: Double,
+        easeOut: Double,
+        endLimit: Double
+    ) -> ZoomSegment {
+        guard segment.start.isFinite, endLimit.isFinite, endLimit > segment.start,
+              easeIn.isFinite, hold.isFinite, easeOut.isFinite else { return segment }
+        let available = endLimit - max(0, segment.start)
+        var incoming = max(0, easeIn), readable = max(0, hold), outgoing = max(0, easeOut)
+        let largest = max(incoming, readable, outgoing)
+        if largest > 0 {
+            let weight = incoming / largest + readable / largest + outgoing / largest
+            if largest > available / weight {
+                incoming = available * (incoming / largest) / weight
+                readable = available * (readable / largest) / weight
+                outgoing = max(0, available - incoming - readable)
+            }
+        }
+        var result = segment
+        result.start = max(0, segment.start)
+        result.end = min(endLimit, result.start + max(min(minimumDuration, available), incoming + readable + outgoing))
+        result.zoomEaseIn = incoming
+        result.zoomEaseOut = outgoing
+        result.isInstant = false
         return result
     }
 

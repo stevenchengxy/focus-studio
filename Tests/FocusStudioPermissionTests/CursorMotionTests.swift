@@ -3,7 +3,7 @@ import FocusStudioCapture
 import FocusStudioCore
 import Foundation
 
-/// Pointer smoothing, click anchoring, shape cross-fades and camera follow.
+/// Pointer smoothing, click anchoring, stable semantic shapes and camera follow.
 func cursorMotionFailures() -> [String] {
     var failures: [String] = cursorStabilityFailures()
     func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
@@ -41,7 +41,7 @@ func cursorMotionFailures() -> [String] {
     expect(CursorMotion.smoothingSigma(for: .none) == 0 && CursorMotion.smoothingSigma(for: .smooth) > CursorMotion.smoothingSigma(for: .rapid),
            "smoothing widths are ordered by style")
 
-    // --- Shape cross-fade -------------------------------------------------------
+    // --- Stable cursor shapes -------------------------------------------------------
     let shapes = [
         CursorSample(time: 0, x: 0.5, y: 0.5, cursorKind: .arrow),
         CursorSample(time: 0.5, x: 0.5, y: 0.5, cursorKind: .arrow),
@@ -54,12 +54,22 @@ func cursorMotionFailures() -> [String] {
     let before = CursorMotion.kindTransition(at: 0.7, samples: shapes, changeIndices: changes)
     expect(before.to == .arrow && before.progress == 1, "no transition before the first change")
     let mid = CursorMotion.kindTransition(at: 1.07, samples: shapes, changeIndices: changes)
-    expect(mid.from == .arrow && mid.to == .iBeam && abs(mid.progress - 0.5) < 0.01,
-           "half-way through the fade both shapes are visible (\(mid.progress))")
+    expect(mid.from == .arrow && mid.to == .arrow && mid.progress == 1,
+           "the previous stable shape remains during confirmation")
     let done = CursorMotion.kindTransition(at: 1.4, samples: shapes, changeIndices: changes)
-    expect(done.to == .iBeam && done.progress == 1, "the fade completes after its duration")
+    expect(done.to == .iBeam && done.progress == 1, "a sustained I-beam appears after confirmation")
     let back = CursorMotion.kindTransition(at: 2.05, samples: shapes, changeIndices: changes)
-    expect(back.from == .iBeam && back.to == .arrow && back.progress < 1, "returning to the arrow fades as well")
+    expect(back.from == .iBeam && back.to == .iBeam && back.progress == 1, "a short return waits for confirmation")
+    let fastShapes = [CursorSample(time: 0, x: 0.5, y: 0.5),
+                      CursorSample(time: 1, x: 0.5, y: 0.5, cursorKind: .pointingHand),
+                      CursorSample(time: 1.06, x: 0.5, y: 0.5),
+                      CursorSample(time: 2, x: 0.5, y: 0.5)]
+    let fastChanges = CursorMotion.kindChangeIndices(fastShapes)
+    for t in stride(from: 0.95, through: 1.25, by: 0.005) {
+        let value = CursorMotion.kindTransition(at: t, samples: fastShapes, changeIndices: fastChanges)
+        expect(value.from == .arrow && value.to == .arrow && value.progress == 1,
+               "a 60ms arrow/hand/arrow round trip never flashes either overlapping artwork")
+    }
 
     // --- Camera follow ----------------------------------------------------------
     var settings = ProjectSettings()

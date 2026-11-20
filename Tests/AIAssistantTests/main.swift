@@ -1599,6 +1599,32 @@ struct AIAssistantTests {
         check(box.project!.settings == settings, "failed calls change nothing")
         _ = try await SetZoomStyleTool().run(arguments: ["autoZoomEnabled": "no"], context: context, progress: { _ in })
         check(!box.project!.settings.autoZoomEnabled, "automatic zooms can be turned off")
+
+        // The API uses the same real hold and speed semantics as the Inspector.
+        var legacy = project
+        legacy.settings.zoomEaseIn = 0.42
+        legacy.settings.zoomHold = 0.9
+        legacy.settings.zoomEaseOut = 0.52
+        let automatic = ZoomSegment(start: 1, end: 2.52, targetX: 0.5, targetY: 0.5, scale: 1.75)
+        let manual = ZoomSegment(start: 5, end: 6, targetX: 0.3, targetY: 0.4, scale: 2.2, kind: .manual)
+        legacy.zoomSegments = [automatic, manual]
+        box.project = legacy
+        let manualTiming = ZoomTiming.resolve(manual, settings: legacy.settings)
+        _ = try await SetZoomStyleTool().run(arguments: ["zoomEaseIn": 0.8], context: context, progress: { _ in })
+        let slowed = box.project!
+        check(abs(ZoomTiming.resolve(slowed.zoomSegments[0], settings: slowed.settings).hold - 0.58) < 1e-9,
+              "MCP incoming speed preserves the existing full-zoom hold")
+        _ = try await SetZoomStyleTool().run(arguments: ["zoomEaseIn": 0.7, "zoomHold": 1.4, "zoomEaseOut": 0.8], context: context, progress: { _ in })
+        let paced = box.project!
+        let timing = ZoomTiming.resolve(paced.zoomSegments[0], settings: paced.settings)
+        check(abs(timing.easeIn - 0.7) < 1e-9 && abs(timing.hold - 1.4) < 1e-9 && abs(timing.easeOut - 0.8) < 1e-9,
+              "MCP holds for the requested readable duration after the incoming transition")
+        check(ZoomTiming.resolve(paced.zoomSegments[1], settings: paced.settings) == manualTiming
+              && paced.zoomSegments[1].id == manual.id && paced.zoomSegments[1].start == manual.start
+              && paced.zoomSegments[1].end == manual.end && paced.zoomSegments[1].scale == manual.scale,
+              "MCP timing changes preserve manual cue placement and inherited timing")
+        _ = try await SetZoomStyleTool().run(arguments: ["zoomEaseIn": 0.7, "zoomHold": 1.4, "zoomEaseOut": 0.8], context: context, progress: { _ in })
+        check(box.project == paced, "repeating the same MCP pacing call is idempotent")
     }
 
     @MainActor
