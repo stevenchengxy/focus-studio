@@ -3,7 +3,6 @@ import FocusStudioAutomation
 import SwiftUI
 
 struct AppUpdateCommands: Commands {
-    @ObservedObject var model: StudioModel
     @ObservedObject private var updates = AppUpdateService.shared
     @ObservedObject private var localization = AppLocalization.shared
     @Environment(\.openSettings) private var openSettings
@@ -15,12 +14,13 @@ struct AppUpdateCommands: Commands {
                 openSettings()
                 Task { await updates.check() }
             }
-            .disabled(updates.isChecking || model.isInstallationBusy)
         }
     }
 }
 
 struct AppUpdateSettingsSection: View {
+    let isBusy: Bool
+    let isBusyNow: @MainActor () -> Bool
     @ObservedObject private var updates = AppUpdateService.shared
     @ObservedObject private var localization = AppLocalization.shared
 
@@ -28,19 +28,33 @@ struct AppUpdateSettingsSection: View {
         Section("Software updates") {
             HStack {
                 Text(verbatim: statusText)
-                    .foregroundStyle(isFailure ? .orange : .primary)
+                    .foregroundStyle(checkFailed ? .orange : .primary)
                     .textSelection(.enabled)
                 Spacer()
-                if updates.isChecking { ProgressView().controlSize(.small) }
-                Button("Check for Updates…") { Task { await updates.check() } }
-                    .disabled(updates.isChecking)
-                    .accessibilityIdentifier("updates.check")
+                if updates.isChecking {
+                    ProgressView().controlSize(.small)
+                } else {
+                    action
+                }
+            }
+            if case let .downloading(percent) = updates.phase {
+                if let percent {
+                    ProgressView(value: Double(percent), total: 100)
+                        .accessibilityLabel("Download update")
+                        .accessibilityValue(Text(percent, format: .percent.scale(1)))
+                } else {
+                    ProgressView().progressViewStyle(.linear)
+                }
+            }
+            if let error = updates.operationError {
+                Text(verbatim: error.components(separatedBy: "\n").map { L10n.tr($0) }.joined(separator: "\n"))
+                    .font(.callout).foregroundStyle(.orange).textSelection(.enabled)
+            } else if isBusy && updates.phase == .ready {
+                Text("Return to the library and finish active tasks to install the update.")
+                    .font(.callout).foregroundStyle(.secondary)
             }
             if let release = updates.availableRelease {
-                HStack(spacing: 12) {
-                    Button("Download update") { openDownload(release) }
-                        .disabled(!release.supports(updates.operatingSystem))
-                        .accessibilityIdentifier("updates.download")
+                HStack {
                     Link("Release notes", destination: release.releaseURL)
                     if !release.supports(updates.operatingSystem) {
                         Text(verbatim: L10n.format("Requires macOS %@ or later.", release.minimumOS))
@@ -53,25 +67,63 @@ struct AppUpdateSettingsSection: View {
                     Text(LocalizedStringKey(channel.title)).tag(channel)
                 }
             }
-            .disabled(updates.isChecking)
+            .disabled(updates.isChecking || updates.isUpdating)
             .accessibilityIdentifier("updates.channel")
             .onChange(of: updates.channel) { _, _ in Task { await updates.check() } }
             Toggle("Check automatically once a day", isOn: $updates.automaticallyChecks)
                 .accessibilityIdentifier("updates.automatic")
-            if let date = updates.lastCheckedAt {
-                LabeledContent("Last checked") { Text(date, style: .date) + Text(" ") + Text(date, style: .time) }
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Text("Updates open in your browser. Install when you are ready; your projects and settings stay in place.")
-                .font(.caption).foregroundStyle(.secondary)
         }
     }
 
-    private var isFailure: Bool {
-        if case .failed = updates.status { return true }
+    @ViewBuilder private var action: some View {
+        switch updates.phase {
+        case .idle:
+            if let release = updates.availableRelease, release.supports(updates.operatingSystem), !checkFailed {
+                Button(updates.operationError == nil ? "Download update" : "Retry download") { updates.startDownload() }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("updates.download")
+            } else {
+                Button("Check for Updates…") { Task { await updates.check() } }
+                    .accessibilityIdentifier("updates.check")
+            }
+        case .downloading, .verifying:
+            Button("Cancel") { updates.cancelDownload() }
+                .accessibilityIdentifier("updates.cancel")
+        case .ready:
+            Button("Install and restart") {
+                Task {
+                    await updates.install(isBusyNow: isBusyNow, prepare: { package, release in
+                        let prepared = try await AppUpdateInstaller.prepare(verifiedDMG: package.file,
+                            expectedVersion: release.version, expectedBuild: package.build)
+                        return { try prepared.beginHandoff() }
+                    }, flushEdits: { await AppServices.shared.model.flushProjectEdits() },
+                       restart: { NSApp.terminate(nil) })
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(isBusy)
+            .accessibilityIdentifier("updates.install")
+        case .installing, .restarting:
+            ProgressView().controlSize(.small)
+        }
+    }
+
+    private var checkFailed: Bool {
+        if case .failed = updates.status, updates.phase == .idle { return true }
         return false
     }
+
     private var statusText: String {
+        switch updates.phase {
+        case let .downloading(percent):
+            if let percent { return L10n.format("Downloading update · %d%%", percent) }
+            return L10n.tr("Downloading update…")
+        case .verifying: return L10n.tr("Verifying update…")
+        case .ready: return L10n.format("Focus Studio %@ is ready to install.", updates.availableRelease?.version ?? "")
+        case .installing: return L10n.tr("Preparing update…")
+        case .restarting: return L10n.tr("Restarting Focus Studio…")
+        case .idle: break
+        }
         switch updates.status {
         case .idle: return L10n.tr("Check for a newer version.")
         case .checking: return L10n.tr("Checking for updates…")
@@ -84,8 +136,6 @@ struct AppUpdateSettingsSection: View {
     }
 }
 
-/// Available updates stay visible in the idle library without a modal dialog,
-/// taking focus from a recording, or interrupting an export/assistant task.
 struct AppUpdateNoticeView: View {
     @ObservedObject private var updates = AppUpdateService.shared
     @ObservedObject private var localization = AppLocalization.shared
@@ -96,15 +146,16 @@ struct AppUpdateNoticeView: View {
             HStack(spacing: 12) {
                 Image(systemName: "arrow.down.circle")
                     .foregroundStyle(StudioTheme.purple)
-                Text(verbatim: L10n.format("Focus Studio %@ is available.", release.version))
+                Text(verbatim: updates.phase == .ready
+                     ? L10n.format("Focus Studio %@ is ready to install.", release.version)
+                     : L10n.format("Focus Studio %@ is available.", release.version))
                     .font(.system(size: 12, weight: .medium))
                 Spacer()
-                Button("Download update") { openDownload(release) }
-                    .accessibilityIdentifier("updates.notice.download")
-                Button("Details") {
+                Button("View update") {
                     AppSettingsNavigation.shared.selection = .installation
                     openSettings()
                 }
+                .accessibilityIdentifier("updates.notice.details")
                 Button { updates.dismissNotice() } label: {
                     Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
                 }
@@ -116,12 +167,4 @@ struct AppUpdateNoticeView: View {
             .background(StudioTheme.purple.opacity(0.1))
         }
     }
-}
-
-@MainActor
-private func openDownload(_ release: AppUpdateRelease) {
-    // Revalidate even though every feed/cache entry passed validation. Opening a
-    // download is an explicit user action; there is no updater installer here.
-    guard (try? release.validate(expectedChannel: AppUpdateService.shared.channel)) != nil else { return }
-    NSWorkspace.shared.open(release.downloadURL)
 }

@@ -445,13 +445,13 @@ public struct MCPToolCatalog: Sendable {
         ),
         MCPToolSpec(
             tool: UpdateSettingsTool(), title: "Update settings",
-            description: "Edit background, frame, camera, captions, product description and export settings. backgroundStyle none shows the cropped source without decoration; stored frame settings return when restored. zoomFollowsCursor: 0 locks authored targets, 1 follows the cursor. Only supplied keys change; bounded values are clamped and reported. Opens the editor.",
+            description: "Edit background, frame, camera, product description and export settings. backgroundStyle none shows the cropped source without decoration; stored frame settings return when restored. zoomFollowsCursor: 0 locks authored targets, 1 follows the cursor. Only supplied keys change; bounded values are clamped and reported. Opens the editor.",
             scope: .project, annotations: MCPToolAnnotations(readOnly: false, destructive: true, idempotent: true),
             propertyDescriptions: ["backgroundImagePath": "An image file: an absolute path, or relative to your working directory."]
         ),
         MCPToolSpec(
             tool: SetChaptersTool(), title: "Set chapters",
-            description: "Replace a project's chapters, or add to them with append: true. Each chapter is a time range in seconds with a short title and a one-line caption drawn on the video; it needs at least 0.5 s and a title or caption, and invalid ones are dropped and counted. Focus Studio opens the project in its editor.",
+            description: "Replace a project's chapters, or add to them with append: true. Each chapter is a time range in seconds with a short title on the editing timeline; it needs at least 0.5 s and a title, and invalid ones are dropped and counted. Focus Studio opens the project in its editor.",
             scope: .project, annotations: MCPToolAnnotations(readOnly: false, destructive: true)
         ),
         MCPToolSpec(
@@ -496,7 +496,7 @@ public struct MCPToolCatalog: Sendable {
         ),
         MCPToolSpec(
             tool: ExportProjectTool(), title: "Export project",
-            description: "Render a project with its look, zooms, captions and audio to an MP4 and return its absolute path. Rendering and export are free and local; no Focus Studio login, subscription or network authorization is required. Third-party AI generation is separate and may incur provider charges. An existing file is replaced only with overwrite: true, and the project's own recording and media are never written. Optional width (1280, 1920, 2560 or 3840) and frame_rate (24, 30 or 60) apply to this export only. Reports progress; an export still running after about 200 seconds returns a job_id for wait_for_job. Focus Studio opens the project in its editor.",
+            description: "Render a project with its look, zooms and audio to an MP4 and return its absolute path. Rendering and export are free and local; no Focus Studio login, subscription or network authorization is required. Third-party AI generation is separate and may incur provider charges. An existing file is replaced only with overwrite: true, and the project's own recording and media are never written. Optional width (1280, 1920, 2560 or 3840) and frame_rate (24, 30 or 60) apply to this export only. Reports progress; an export still running after about 200 seconds returns a job_id for wait_for_job. Focus Studio opens the project in its editor.",
             scope: .project, annotations: MCPToolAnnotations(readOnly: false, destructive: true),
             propertyDescriptions: ["path": "The .mp4 file or a folder for it: an absolute path, or relative to your working directory. Default: export-<timestamp>.mp4 in the project's assets folder. Not inside the Focus Studio library except the project's ai folder."]
         ),

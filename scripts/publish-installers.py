@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import plistlib
 import re
 import subprocess
 import tempfile
@@ -73,6 +74,44 @@ def validate_installers(tag, paths):
     if len(desktop_versions) > 1:
         raise ValueError("All desktop installers must have the same version")
     return {path.name: validate_asset(path) for path in sorted(paths, key=lambda p: p.name)}
+
+
+def signed_updates(folder, tag, paths, digests, info, key):
+    """Bind each binary to its platform, channel and release before the draft becomes public."""
+    if not key.is_file() or key.stat().st_mode & 0o077:
+        raise ValueError("A private release signing key with owner-only permissions is required")
+    public = subprocess.check_output(["openssl", "pkey", "-in", str(key), "-pubout", "-outform", "DER"])
+    # RFC 8410 SubjectPublicKeyInfo for an Ed25519 public key.
+    if public != bytes.fromhex("302a300506032b6570032100") + base64.b64decode(info["FocusStudioUpdatePublicKey"], validate=True):
+        raise ValueError("Signing key does not match the app's trusted update key")
+    channel = "preview" if "-preview." in tag else "stable"
+    manifests = []
+    for path in paths:
+        family, version = asset_identity(path.name)
+        count, digest = path.stat().st_size, digests[path.name]
+        fields = dict(tag=tag, version=version, channel=channel, assetName=path.name, byteCount=count, sha256=digest)
+        if family == "native":
+            build = info["CFBundleVersion"]
+            if (info["CFBundleShortVersionString"] != version or info["FocusStudioUpdateChannel"] != channel
+                    or not re.fullmatch(r"[0-9]{1,19}", build)):
+                raise ValueError("Update signing requires the matching Mac build and channel")
+            fields["build"] = build
+            header = ["Focus Studio macOS update v1", tag, version, build]
+            manifest = folder / "mac-update.json"
+        else:
+            platform = "windows" if path.suffix == ".exe" else "linux"
+            fields["platform"] = platform
+            header = ["Focus Studio desktop update v1", tag, platform, version]
+            manifest = folder / (path.name + ".update.json")
+        if manifest in manifests:
+            raise ValueError("Ambiguous installer for in-app update")
+        message = folder / "signed-update-payload"
+        message.write_bytes("\n".join(header + [channel, path.name, str(count), digest, ""]).encode("ascii"))
+        signature = subprocess.check_output(["openssl", "pkeyutl", "-sign", "-rawin", "-inkey", str(key), "-in", str(message)])
+        fields["signature"] = base64.b64encode(signature).decode()
+        manifest.write_text(json.dumps(fields, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+        manifests.append(manifest)
+    return manifests
 
 
 class APIError(RuntimeError):
@@ -291,7 +330,7 @@ def refresh_after_publish(tag, sha, api_call):
         raise RuntimeError("Release is published, but catalog refresh failed. Run --refresh-catalog to retry; do not replace release assets.") from error
 
 
-def publish_release(tag, body, sha, paths, digests, api_call=api):
+def publish_release(tag, body, sha, paths, digests, api_call=api, manifests=()):
     if not SHA.fullmatch(sha):
         raise ValueError("Expected an exact Git commit SHA")
     resolved = tag_commit(tag, api_call)
@@ -308,6 +347,7 @@ def publish_release(tag, body, sha, paths, digests, api_call=api):
         checksum = Path(folder) / "SHA256SUMS.txt"
         checksum.write_text("".join(f"{digests[name]}  {name}\n" for name in sorted(digests)), encoding="utf-8")
         files = {path.name: path for path in [*paths, checksum]}
+        files.update({manifest.name: manifest for manifest in manifests})
         expected = {name: {"digest": digests.get(name) or sha256(path), "size": path.stat().st_size} for name, path in files.items()}
         existing = list(list_items(f"releases/{release['id']}/assets", api_call)) if release else []
         missing = preflight_assets(existing, expected, require_complete=bool(release and not release["draft"]))
@@ -365,12 +405,17 @@ def main(argv=None):
     digests = validate_installers(args.tag, args.asset)
     body = args.notes.read_text(encoding="utf-8")
     sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    if not args.publish:
-        print(json.dumps({"tag": args.tag, "commit": sha, "sha256": digests, "published": False}, indent=2))
-        return
-    if subprocess.check_output(["git", "status", "--porcelain"], text=True).strip():
-        raise ValueError("Commit and test the release source before publishing")
-    publish_release(args.tag, body, sha, args.asset, digests)
+    with tempfile.TemporaryDirectory(prefix="focus-update-signing-") as folder:
+        source_plist = Path(__file__).resolve().parents[1] / "Resources" / "Info.plist"
+        key = Path(os.environ.get("FOCUS_UPDATE_SIGNING_KEY", Path.home() / ".config/focus-studio/update-signing-v1.pem"))
+        manifests = signed_updates(Path(folder), args.tag, args.asset, digests, plistlib.loads(source_plist.read_bytes()), key)
+        if not args.publish:
+            print(json.dumps({"tag": args.tag, "commit": sha, "sha256": digests,
+                              "update_manifests": [item.name for item in manifests], "published": False}, indent=2))
+            return
+        if subprocess.check_output(["git", "status", "--porcelain"], text=True).strip():
+            raise ValueError("Commit and test the release source before publishing")
+        publish_release(args.tag, body, sha, args.asset, digests, manifests=manifests)
 
 
 if __name__ == "__main__":

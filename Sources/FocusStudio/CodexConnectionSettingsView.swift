@@ -34,11 +34,7 @@ struct CodexConnectionSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Codex connection").font(.system(size: 20, weight: .semibold))
-                    Text("Connect the AI assistant in Focus Studio.")
-                        .font(.system(size: 11)).foregroundStyle(StudioTheme.secondaryText)
-                }
+                Text("Codex connection").font(.system(size: 20, weight: .semibold))
                 Spacer()
                 if showsDoneButton {
                     Button("Done") { apiKey = ""; dismiss() }

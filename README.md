@@ -65,7 +65,7 @@ Focus Studio 是一个面向各类产品的原生 macOS Demo 录制与编辑器�
 
 ## 让 Claude Code / Codex 直接使用 Focus Studio（MCP，1.12）
 
-应用内附带 MCP server `Focus Studio.app/Contents/MacOS/focus-studio-mcp`（stdio，基于官方 MCP Swift SDK 0.12.1）。接入后，在 Claude Code 或 Codex 里一句话即可完成"列出录制源 → 录制 → 加缩放、字幕、配乐 → 导出到当前目录"，例如：
+应用内附带 MCP server `Focus Studio.app/Contents/MacOS/focus-studio-mcp`（stdio，基于官方 MCP Swift SDK 0.12.1）。接入后，在 Claude Code 或 Codex 里一句话即可完成"列出录制源 → 录制 → 加缩放、旁白、配乐 → 导出到当前目录"，例如：
 
 > 录制 Chrome 里 localhost:3000 的窗口 20 秒（我来操作），配上 Calm Loop，导出 1920 宽 60 fps 的 MP4 到 ./demo.mp4
 
@@ -106,7 +106,7 @@ codex mcp add focus-studio -- "/Applications/Focus Studio.app/Contents/MacOS/foc
 
 ## 可操控应用的 AI 助手、Codex 大脑与语音
 
-- **助手可以操控 Focus Studio**：独立的 AI 助手窗口跨页面存活。对话可完成录制、剪辑、镜头调整、章节字幕、音频与导出；录完也可以分析停顿与节奏，再建议保留或裁掉的部分。编辑器选中单个片段后，可用 **AI 优化此片段** 将准确的片段 ID 送入对话，先准备首末帧及短参考视频，再讨论镜头方案；生成和替换不会因点击该按钮而自动发生。
+- **助手可以操控 Focus Studio**：独立的 AI 助手窗口跨页面存活。对话可完成录制、剪辑、镜头调整、章节标记、音频与导出；录完也可以分析停顿与节奏，再建议保留或裁掉的部分。编辑器选中单个片段后，可用 **AI 优化此片段** 将准确的片段 ID 送入对话，先准备首末帧及短参考视频，再讨论镜头方案；生成和替换不会因点击该按钮而自动发生。
 - **两种大脑**：设置 → AI 模型里选择"默认文本模型"（任意已配置的 API Key 提供商，含 OpenRouter）或 **Codex（ChatGPT 登录）**，后者复用本机 Codex app-server，无需 API Key。工具始终在本地执行，付费生成前必须确认。
 - **开箱即用**：启动时若 `~/.config/focus-studio/ark.env` 里有火山方舟密钥而应用尚未配置，会自动导入、测试并选定默认模型；设置页也有"从 ark.env 导入"。
 - **语音**：麦克风按钮按下即说话（本地语音识别，跟随界面语言，静音自动停止），可选让助手朗读回复。
@@ -116,8 +116,7 @@ codex mcp add focus-studio -- "/Applications/Focus Studio.app/Contents/MacOS/foc
 ## AI 模型网关与 AI 编辑（1.3）
 
 - **设置 → AI 模型**：为 OpenAI、Anthropic、DeepSeek、GLM（智谱）、Kimi（Moonshot）、OpenRouter、火山方舟或任意 OpenAI 兼容端点填入密钥（保存在 `~/Library/Application Support/FocusStudio/secrets.json`，仅本用户可读，不进入项目或安装包），一键测试并拉取模型列表，选择一个"默认文本模型"。OpenRouter 用一把密钥即可访问多家厂商模型。Codex Director 仍走本机 Codex。
-- **章节与字幕**：时间线新增 Chapters 泳道，检查器新增 Captions 工具；字幕条在预览与导出中一致渲染（可选位置、大小、章节编号），支持导出 SRT。
-- **AI 编辑**：填写"这个 demo 展示什么"，AI 依据录制的点击、缩放与输入时间生成章节与字幕，也可一键润色；所有结果都可以手动修改。没有配置 AI 模型时，这些按钮禁用，其余功能不受影响。
+- **章节标记** 可在时间线上添加、移动或命名。AI 助手也可以根据录制的点击、缩放与输入时间为演示划分章节。
 - **AI 助手（对话式）**：编辑器顶栏 **AI** 按钮打开面板。助手可准备真实产品画面的参考帧，写分镜与提示词，再用用户所选且已配置的 Seedance 或 Veo 视频模型生成片头、片尾或空景；付费前会展示模型、参数和预估费用。生成结果可在应用内预览，进入通用素材库后由用户明确加入某个项目，再放上时间线。设置方法见 [AI 模型配置](docs/AI-MODEL-SETUP.md)。
 - **界面**：说明性文字改为工具提示，保留控件与状态，降低信息密度。
 
@@ -177,6 +176,8 @@ Focus Studio 会通过本机 [`codex app-server`](https://developers.openai.com/
 ## 安装到其他 Mac
 
 使用官网或 `dist/releases/` 中的 DMG 或 ZIP。打开 DMG（或解压 ZIP）后，双击 **Focus Studio.app**，在首次启动引导中点击 **安装并打开**；检测到旧版时点击 **更新并打开**。应用会检查系统和个人“应用程序”文件夹中的旧安装，完成验证和替换后打开 `/Applications/Focus Studio.app`，并退出本次下载的副本。旧版备份和项目数据会保留；旧版有未完成工作时，先完成工作再重试。支持 macOS 15+ 的 Apple 芯片和 Intel Mac；录屏、编辑、导出不要求安装 Swift、Node.js、Homebrew 或 FFmpeg。
+
+从 macOS 版 1.14.12 起，打开 **设置 → 安装 → 软件更新**，点击 **下载更新**。验证完成后，结束录制、导出或助手任务，返回项目库，点击 **安装并重启**。1.14.11 及更早版本需要先通过安装包升级一次。
 
 每台机器分别授予录屏权限；需要外部应用点击跟踪时授予输入监控。安装包内的 `INSTALL-FIRST.txt` 提供简短指引，完整步骤（包括接入 Claude Code / Codex）见 [安装与首次使用](docs/INSTALL.md)。标记为 `local` 的包采用本地签名，尚未 Apple 公证；安装引导不改变 Gatekeeper 的检查结果。正式签名、公证命令见 [发布指南](docs/RELEASE.md)。
 

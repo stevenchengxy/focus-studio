@@ -1,6 +1,6 @@
 # Focus Studio 正式版签名与 Apple 公证
 
-**1.14.11 / build 74** 为可关闭录屏背景的预览更新，频道为 `preview`，保留应用内选屏。Apple 公证仍待开发者会员和签名凭据就绪；正式版必须使用高于已发布预览版的新版本号（下一候选为 1.14.12 / build 75），并将更新频道设为 `stable`。
+**1.14.12 / build 75** 为应用内更新预览版，频道为 `preview`。Apple 公证仍待开发者会员和签名凭据就绪。正式版请使用高于已发布预览版的版本号，并将更新频道设为 `stable`。
 
 2026-11-20 本机检查结果：`security find-identity -v -p codesigning` 返回 **0 valid identities**；没有查到 Developer ID Application 证书，也未指定 `FOCUS_STUDIO_NOTARY_PROFILE`。因此尚未向 Apple 提交公证。
 

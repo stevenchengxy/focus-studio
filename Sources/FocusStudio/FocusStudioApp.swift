@@ -37,7 +37,7 @@ struct FocusStudioApp: App {
         .commands {
             AppLanguageCommands()
             StudioAppearanceCommands()
-            AppUpdateCommands(model: model)
+            AppUpdateCommands()
         }
 
         // The assistant lives in its own window so it can drive the app

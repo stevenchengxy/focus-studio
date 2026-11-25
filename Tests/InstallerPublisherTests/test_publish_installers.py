@@ -7,6 +7,7 @@ import importlib.util
 import io
 import json
 import os
+import subprocess
 from pathlib import Path
 import tempfile
 import types
@@ -116,6 +117,35 @@ class PublisherTests(unittest.TestCase):
                 return publisher.publish_release(TAG, NOTES, COMMIT, paths or self.paths, self.digests, api_call=fixture)
             finally:
                 self.refresh_calls = refresh.call_args_list
+
+    def test_sign_installer_manifests_and_reject_wrong_key(self):
+        folder = Path(self.temp.name)
+        key = folder / "test-key.pem"
+        subprocess.run(["openssl", "genpkey", "-algorithm", "ed25519", "-out", str(key)], check=True)
+        key.chmod(0o600)
+        public = folder / "test-public.pem"
+        subprocess.run(["openssl", "pkey", "-in", str(key), "-pubout", "-out", str(public)], check=True)
+        der = subprocess.check_output(["openssl", "pkey", "-in", str(key), "-pubout", "-outform", "DER"])
+        info = {"CFBundleShortVersionString": "1.14.3", "CFBundleVersion": "70", "FocusStudioUpdateChannel": "preview",
+                "FocusStudioUpdatePublicKey": base64.b64encode(der[-32:]).decode()}
+        manifests = publisher.signed_updates(folder, TAG, self.paths, self.digests, info, key)
+        self.assertEqual(len(manifests), 4)
+        for manifest in manifests:
+            item = json.loads(manifest.read_text())
+            header = (["Focus Studio macOS update v1", TAG, "1.14.3", "70"] if manifest.name == "mac-update.json"
+                      else ["Focus Studio desktop update v1", TAG, item["platform"], "0.1.1"])
+            fields = ["preview", item["assetName"], str((folder / item["assetName"]).stat().st_size), self.digests[item["assetName"]], ""]
+            payload = folder / "verify-payload"
+            payload.write_bytes("\n".join(header + fields).encode("ascii"))
+            signature = folder / "verify-sig"
+            signature.write_bytes(base64.b64decode(item["signature"], validate=True))
+            subprocess.run(["openssl", "pkeyutl", "-verify", "-rawin", "-pubin", "-inkey", str(public),
+                            "-in", str(payload), "-sigfile", str(signature)], check=True, capture_output=True)
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            publisher.signed_updates(folder, TAG, self.paths, self.digests, {**info, "FocusStudioUpdatePublicKey": ""}, key)
+        key.chmod(0o644)
+        with self.assertRaisesRegex(ValueError, "owner-only"):
+            publisher.signed_updates(folder, TAG, self.paths, self.digests, info, key)
 
     def test_installer_signatures_and_actual_debian_amd64_name(self):
         self.assertEqual(len(self.digests), 4)

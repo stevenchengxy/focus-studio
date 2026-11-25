@@ -108,3 +108,9 @@ No signing identity was present on the current build machine during initial setu
 ## Verification boundaries
 
 `./scripts/verify-release.sh 'dist/Focus Studio.app' --require-universal` checks binary packaging. Run `./scripts/test.sh` and exercise the packaged app separately for recording, editing and exporting; the live MCP checks (background launch, approval prompt, one-click connect, recording through Claude Code and Codex) are listed in `docs/MCP-QA.md`. A universal executable provides both architectures, but compilation and structural checks are not a substitute for Intel hardware testing. First-run permissions must be granted independently on each destination Mac; they cannot be shipped inside a package.
+
+### In-app update signatures
+
+Mac 1.14.12 and Desktop 0.1.4 pin the Ed25519 update public key. The publisher signs the exact installer name, digest, byte length, version, platform and channel, together with the release tag and Mac build number. It uploads the manifests with the installers before advertising the release. Every later installer needs its corresponding manifest. Keep the same signing key for releases accepted by these clients.
+
+On the release machine the private PEM is stored outside the repository with mode 0600 at `~/.config/focus-studio/update-signing-v1.pem`. Securely back it up. For another release machine supply the same key via a protected file and set `FOCUS_UPDATE_SIGNING_KEY` to its path. Signing uses OpenSSL 3. If the key is lost, existing clients require a manually installed trust upgrade. On macOS, Apple distribution signing and notarization remain separate release steps.

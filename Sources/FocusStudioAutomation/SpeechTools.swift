@@ -33,38 +33,38 @@ public struct ListSpeechModelsTool: AIAssistantTool {
                 "available_providers": .array([SpeechProviderKind.minimax, .openAI, .openAICompatible].map {
                     ["id": AIJSONValue($0.rawValue), "title": AIJSONValue($0.title)]
                 }),
-                "subtitle_timing": "Measured duration of each generated segment; not word alignment.",
                 "requires_app_approval": true,
             ])
     }
 }
 
 /// Narration is synthesized in a staging directory, validated against the current
-/// picture, then imported by the app and committed with its captions in one edit.
+/// picture, then imported by the app and committed in one edit.
 /// Runtime approval is inside this shared tool, so external MCP cannot bypass it.
 public struct GenerateVoiceoverTool: AIAssistantTool {
     public let name = "generate_voiceover"
-    public let summary = "Generate narration after picture edits. Uses configured provider and exact model/voice. App approval of provider, model, voice and script precedes network access. Measured segment durations set captions; existing content is preserved. Overlap, overflow and caption fit are validated. Never automatically retry a provider request."
+    public let summary = "Generate narration after picture edits. Uses configured provider and exact model/voice. App approval of provider, model, voice and script precedes network access. Checks narration timing and preserves existing audio. Never automatically retry a provider request."
     public init() {}
     public var parametersSchema: [String: Any] { ["type": "object", "required": ["segments"], "properties": [
         "project_id": DemoEditingSupport.projectProperty,
         "segments": ["type": "array", "minItems": 1, "maxItems": 24, "description": "1–24 short sentences; at most 4,000 characters total.", "items": [
             "type": "object", "required": ["text", "start_time"], "properties": [
-                "text": ["type": "string", "description": "1–240 characters for speech/caption; split sentences that exceed the caption safe area."],
-                "start_time": ["type": "number", "minimum": 0, "description": "Output start in seconds, before the video ends."],
+                "text": ["type": "string", "description": "Narration text, 1–240 characters."],
+                "start_time": ["type": "number", "minimum": 0, "description": "Output start in seconds, from 0 up to but before the end of the video."],
             ]]],
         "provider": ["type": "string", "enum": [SpeechProviderKind.minimax, .openAI, .openAICompatible].map(\.rawValue), "description": "Must match Settings; omit to use selection."],
         "model": ["type": "string", "description": "Exact model ID. Omit to use the configured model."],
         "voice": ["type": "string", "description": "Exact voice ID. Omit to use the configured voice."],
         "speed": ["type": "number", "minimum": 0.5, "maximum": 2, "default": 1, "description": "Speech speed from 0.5 to 2 times normal; default 1."],
-        "add_captions": ["type": "boolean", "default": true, "description": "Append matching captions; preserve existing chapters."],
     ]] }
 
     public func run(arguments raw: [String: Any], context: AIAssistantContext,
                     progress: @escaping @Sendable (String) -> Void) async throws -> AIToolResult {
         let segments = try SpeechToolSupport.segments(raw)
         let speed = try VoiceoverToolSupport.number(raw, "speed", range: 0.5...2) ?? 1
-        let captions = try SpeechToolSupport.boolean(raw, "add_captions") ?? true
+        if try SpeechToolSupport.boolean(raw, "add_captions") == true {
+            throw AIToolError.invalidArgument("Video subtitles have been removed. Generate narration without add_captions.")
+        }
         guard let resolve = context.speechConfiguration, let keyResolver = context.speechAPIKey else {
             throw AIToolError.failed("Configure a speech provider, model, voice and API key in Focus Studio Settings → AI models → AI narration.")
         }
@@ -81,11 +81,11 @@ public struct GenerateVoiceoverTool: AIAssistantTool {
         }
         let project = try await DemoEditingSupport.project(raw, context: context)
         let app = try AIToolSupport.requireApp(context)
-        try SpeechToolSupport.validateStarts(segments, project: project, captions: captions)
+        try SpeechToolSupport.validateStarts(segments, project: project)
         guard let confirm = context.confirmSpeechGeneration else {
             throw AIToolError.failed("Speech generation needs the approval dialog in Focus Studio. No request was sent.")
         }
-        let summary = SpeechToolSupport.approval(configuration, segments: segments, speed: speed, captions: captions, chinese: context.isChinese)
+        let summary = SpeechToolSupport.approval(configuration, segments: segments, speed: speed, chinese: context.isChinese)
         guard await confirm(summary) else {
             throw AIToolFailure("Speech generation was declined or cancelled. No request was sent.",
                                 data: ["status": "declined", "requests_sent": 0, "retry": false])
@@ -121,11 +121,11 @@ public struct GenerateVoiceoverTool: AIAssistantTool {
                     throw AIToolError.failed("The speech provider returned an unreadable audio file.")
                 }
                 let duration = try await track.load(.timeRange).duration.seconds
-                guard duration.isFinite, duration >= (captions ? ChapterMath.minimumDuration : 0.02) else {
-                    throw AIToolError.failed("Generated speech is too short for a usable narration/caption segment.")
+                guard duration.isFinite, duration >= 0.02 else {
+                    throw AIToolError.failed("Generated speech is too short for a usable narration segment.")
                 }
                 staged.append(.init(segment: segment, url: url, duration: duration))
-                try SpeechToolSupport.validateIntervals(staged, project: project, captions: captions)
+                try SpeechToolSupport.validateIntervals(staged, project: project)
                 if index + 1 < segments.count, segment.start + duration > segments[index + 1].start + 0.000_001 {
                     throw AIToolError.invalidArgument("Generated speech would overlap the next sentence. Shorten its script or increase spacing before generating the remaining segments.")
                 }
@@ -146,39 +146,33 @@ public struct GenerateVoiceoverTool: AIAssistantTool {
                 imported[imported.count - 1] = try clip.validated()
             }
             try Task.checkCancellation()
-            let finalClips = imported, finalStaged = staged, finalConfiguration = configuration
+            let finalClips = imported, finalConfiguration = configuration
             let receipt = try await AIToolSupport.edit(context, projectID: project.id) { current -> AIJSONValue in
                 try Task.checkCancellation()
                 guard current == project else {
-                    throw AIToolError.failed("The project changed before insertion. Narration and captions were not changed.")
+                    throw AIToolError.failed("The project changed before insertion. Narration was not changed.")
                 }
                 var audio = current.settings.resolvedProductDemoAudio
                 audio.voiceovers = (audio.voiceovers ?? []) + finalClips
                 current.settings.productDemoAudio = audio
-                let newChapters = captions ? finalStaged.map { item in
-                    DemoChapter(start: item.segment.start, end: item.end, title: "", caption: item.segment.text)
-                } : []
-                if captions { current.chapters = (current.chapters ?? []) + newChapters }
                 return ["project_id": AIJSONValue(current.id.uuidString),
                         "provider": AIJSONValue(finalConfiguration.provider.rawValue),
                         "model": AIJSONValue(finalConfiguration.model), "voice": AIJSONValue(finalConfiguration.voice),
                         "voiceovers": .array(finalClips.map(VoiceoverToolSupport.data)),
-                        "captions": .array(newChapters.map { ["id": AIJSONValue($0.id.uuidString), "start": .rounded($0.start), "end": .rounded($0.end), "text": AIJSONValue($0.caption)] }),
-                        "subtitle_timing": "measured_segment_duration", "word_aligned": false,
                         "billing": "Provider usage applies; exact price is reported by the provider."]
             }
-            return AIToolResult(text: context.isChinese ? "已添加 \(imported.count) 段 AI 旁白\(captions ? "及同步句子字幕" : "")。" : "Added \(imported.count) AI narration segments\(captions ? " with matching sentence captions" : "").", data: receipt)
+            return AIToolResult(text: context.isChinese ? "已添加 \(imported.count) 段 AI 旁白。" : "Added \(imported.count) AI narration segments.", data: receipt)
         } catch {
             await app.discardImportedVoiceovers(imported, projectID: project.id)
             if error is CancellationError || Task.isCancelled {
                 let usage = requestsSent > 0
                     ? " Provider requests may have incurred usage; do not automatically retry."
                     : " No provider request was sent and no generation usage was incurred."
-                throw AIToolFailure("Narration generation was cancelled. No narration or captions were inserted." + usage,
+                throw AIToolFailure("Narration generation was cancelled. No narration was inserted." + usage,
                                     data: ["status": "cancelled", "requests_sent": AIJSONValue(requestsSent),
                                            "project_modified_by_tool": false, "retry": false])
             }
-            throw AIToolFailure(error.localizedDescription + (requestsSent > 0 ? " No narration/captions were inserted. Provider requests may have incurred usage; do not automatically retry." : ""),
+            throw AIToolFailure(error.localizedDescription + (requestsSent > 0 ? " No narration was inserted. Provider requests may have incurred usage; do not automatically retry." : ""),
                                 data: ["status": "generation_failed", "requests_sent": AIJSONValue(requestsSent), "project_modified_by_tool": false, "retry": false])
         }
     }
@@ -228,30 +222,18 @@ enum SpeechToolSupport {
         return result
     }
 
-    static func validateStarts(_ segments: [Segment], project: RecordingProject, captions: Bool) throws {
+    static func validateStarts(_ segments: [Segment], project: RecordingProject) throws {
         guard (project.settings.resolvedProductDemoAudio.voiceovers?.count ?? 0) + segments.count <= 64 else {
             throw AIToolError.invalidArgument("A project supports up to 64 voiceover clips.")
         }
         guard segments.allSatisfy({ $0.start < project.duration }) else {
             throw AIToolError.invalidArgument("Every narration segment must start before the video ends.")
         }
-        if captions {
-            let canvas = ProjectVideoRenderer.geometry(for: project).outputSize
-            let style = project.settings.resolvedCaptionStyle
-            // Existing captions may sort before or between these segments. Use
-            // the largest possible chapter number for the same safe-area budget.
-            let number = style.showsChapterNumber ? (project.chapters?.count ?? 0) + segments.count : nil
-            for (index, segment) in segments.enumerated() {
-                guard CaptionRenderer.canRenderFullText(text: segment.text, number: number, canvasSize: canvas, style: style) else {
-                    throw AIToolError.invalidArgument("Caption segment \(index + 1) does not fit the video's safe area at the current text size. Split this sentence into shorter segments before generating narration; no request was sent.")
-                }
-            }
-        }
-        let minimal = segments.map { Staged(segment: $0, url: URL(fileURLWithPath: "/"), duration: captions ? ChapterMath.minimumDuration : 0.02) }
-        try validateIntervals(minimal, project: project, captions: captions)
+        let minimal = segments.map { Staged(segment: $0, url: URL(fileURLWithPath: "/"), duration: 0.02) }
+        try validateIntervals(minimal, project: project)
     }
 
-    static func validateIntervals(_ items: [Staged], project: RecordingProject, captions: Bool) throws {
+    static func validateIntervals(_ items: [Staged], project: RecordingProject) throws {
         for (index, item) in items.enumerated() {
             guard item.end <= project.duration + 0.000_001 else {
                 throw AIToolError.invalidArgument("Narration segment \(index + 1) ends at \(AIToolSupport.seconds(item.end)) s, beyond the video's \(AIToolSupport.seconds(project.duration)) s. Shorten its script or leave more picture time; audio was not truncated.")
@@ -263,17 +245,15 @@ enum SpeechToolSupport {
             if (project.settings.resolvedProductDemoAudio.voiceovers ?? []).contains(where: { $0.isEnabled && overlaps($0.timelineStart, $0.timelineEnd) }) {
                 throw AIToolError.invalidArgument("Generated narration overlaps an existing voiceover. Existing speech was preserved; choose an empty interval.")
             }
-            if captions, (project.chapters ?? []).contains(where: { $0.isEnabled && overlaps($0.start, $0.end) }) {
-                throw AIToolError.invalidArgument("Generated captions overlap existing chapters. Existing captions were preserved; choose an empty interval or add_captions false.")
-            }
+
         }
     }
 
-    static func approval(_ configuration: SpeechGenerationConfiguration, segments: [Segment], speed: Double, captions: Bool, chinese: Bool) -> String {
+    static func approval(_ configuration: SpeechGenerationConfiguration, segments: [Segment], speed: Double, chinese: Bool) -> String {
         let characters = segments.reduce(0) { $0 + $1.text.count }
         let heading = chinese ? "生成付费 AI 旁白" : "Generate paid AI narration"
         let warning = chinese ? "文稿将发送给此语音服务。按提供商用量计费，确切价格未知；不会自动重试。" : "The script is sent to this speech service. Provider usage is billed; exact price is unknown. No automatic retries."
         let lines = segments.map { "\(AIToolSupport.seconds($0.start)) s — \($0.text)" }.joined(separator: "\n")
-        return "\(heading)\n\(configuration.provider.title) · \(configuration.model) · \(configuration.voice)\n\(configuration.baseURL)\n\(characters) characters · \(segments.count) segments · \(speed)×\n\(captions ? (chinese ? "添加句子字幕" : "Add sentence captions") : (chinese ? "不添加字幕" : "No captions"))\n\(warning)\n\n\(lines)"
+        return "\(heading)\n\(configuration.provider.title) · \(configuration.model) · \(configuration.voice)\n\(configuration.baseURL)\n\(characters) characters · \(segments.count) segments · \(speed)×\n\(warning)\n\n\(lines)"
     }
 }

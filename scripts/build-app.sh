@@ -119,7 +119,7 @@ mkdir -p "$CONTENTS_DIR/MacOS" "$CONTENTS_DIR/Resources"
 MINIMUM_MACOS="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$PROJECT_DIR/Resources/Info.plist")"
 source_digest() {
     {
-        shasum -a 256 "$PROJECT_DIR/Package.swift" "$PROJECT_DIR/Package.resolved" "$PROJECT_DIR/Resources/Info.plist" "$PROJECT_DIR/Resources/FocusStudio.entitlements"
+        shasum -a 256 "$SCRIPT_DIR/UpdateHelperMain.swift" "$PROJECT_DIR/Package.swift" "$PROJECT_DIR/Package.resolved" "$PROJECT_DIR/Resources/Info.plist" "$PROJECT_DIR/Resources/FocusStudio.entitlements"
         find "$PROJECT_DIR/Sources/FocusStudio" "$PROJECT_DIR/Sources/FocusStudioCore" "$PROJECT_DIR/Sources/FocusStudioAutomation" "$PROJECT_DIR/Sources/FocusStudioMCP" -type f -name '*.swift' -print | LC_ALL=C sort | while IFS= read -r source_file; do
             shasum -a 256 "$source_file"
         done
@@ -131,6 +131,7 @@ source_digest() {
 SOURCE_DIGEST_BEFORE="$(source_digest)"
 SLICE_PATHS=()
 HELPER_SLICE_PATHS=()
+UPDATE_HELPER_SLICES=()
 HELPER_LINK_LISTS=()
 # The MCP helper (focus-studio-mcp) is built exactly like the app, per
 # architecture, from the versions pinned in Package.resolved.
@@ -142,6 +143,11 @@ for architecture in "${ARCHITECTURES[@]}"; do
     binary_directory="$(swift build -c release --triple "$triple" --scratch-path "$scratch_path" --show-bin-path)"
     SLICE_PATHS+=("$binary_directory/FocusStudio")
     HELPER_SLICE_PATHS+=("$binary_directory/focus-studio-mcp")
+    update_slice="$BUILD_STAGE/focus-studio-update-$architecture"
+    xcrun swiftc -parse-as-library -O -target "$triple" \
+        "$PROJECT_DIR/Sources/FocusStudio/AppInstallation.swift" "$PROJECT_DIR/Sources/FocusStudio/AppUpdateInstaller.swift" \
+        "$SCRIPT_DIR/UpdateHelperMain.swift" -o "$update_slice"
+    UPDATE_HELPER_SLICES+=("$update_slice")
     HELPER_LINK_LISTS+=("$binary_directory/focus-studio-mcp.product/Objects.LinkFileList")
 done
 [[ "$(source_digest)" == "$SOURCE_DIGEST_BEFORE" ]] || {
@@ -150,12 +156,16 @@ done
 }
 HELPER="$CONTENTS_DIR/MacOS/focus-studio-mcp"
 HELPER_IDENTIFIER="com.local.focusstudio.mcp"
+UPDATE_HELPER="$CONTENTS_DIR/MacOS/focus-studio-update"
+UPDATE_IDENTIFIER="com.local.focusstudio.update"
 if (( ${#SLICE_PATHS[@]} > 1 )); then
     lipo -create "${SLICE_PATHS[@]}" -output "$CONTENTS_DIR/MacOS/FocusStudio"
     lipo -create "${HELPER_SLICE_PATHS[@]}" -output "$HELPER"
+    lipo -create "${UPDATE_HELPER_SLICES[@]}" -output "$UPDATE_HELPER"
 else
     cp "${SLICE_PATHS[1]}" "$CONTENTS_DIR/MacOS/FocusStudio"
     cp "${HELPER_SLICE_PATHS[1]}" "$HELPER"
+    cp "${UPDATE_HELPER_SLICES[1]}" "$UPDATE_HELPER"
 fi
 cp "$PROJECT_DIR/Resources/Info.plist" "$CONTENTS_DIR/Info.plist"
 cp "$PROJECT_DIR/Resources/FocusStudio.icns" "$CONTENTS_DIR/Resources/FocusStudio.icns"
@@ -266,13 +276,14 @@ fi
 # The helper is nested code: it is signed first, under its own identifier and
 # without entitlements, and the app's signature then seals it.
 if [[ -n "$FOCUS_SIGNING_IDENTITY" && "$FOCUS_SIGNING_IDENTITY" != "-" ]]; then
-    HELPER_SIGN_OPTIONS=(--force --options runtime --identifier "$HELPER_IDENTIFIER" --sign "$FOCUS_SIGNING_IDENTITY")
+    HELPER_SIGN_OPTIONS=(--force --options runtime --sign "$FOCUS_SIGNING_IDENTITY")
     SIGN_OPTIONS=(--force --options runtime --entitlements "$PROJECT_DIR/Resources/FocusStudio.entitlements" --sign "$FOCUS_SIGNING_IDENTITY")
     if [[ "$FOCUS_SIGNING_IDENTITY" == "Developer ID Application:"* ]]; then
         HELPER_SIGN_OPTIONS+=(--timestamp)
         SIGN_OPTIONS+=(--timestamp)
     fi
-    codesign "${HELPER_SIGN_OPTIONS[@]}" "$HELPER"
+    codesign "${HELPER_SIGN_OPTIONS[@]}" --identifier "$HELPER_IDENTIFIER" "$HELPER"
+    codesign "${HELPER_SIGN_OPTIONS[@]}" --identifier "$UPDATE_IDENTIFIER" "$UPDATE_HELPER"
     codesign "${SIGN_OPTIONS[@]}" "$STAGED_APP"
     echo "Signed with stable identity: $FOCUS_SIGNING_IDENTITY"
 else
@@ -286,6 +297,7 @@ else
         --identifier "$HELPER_IDENTIFIER" \
         --requirements "=designated => identifier \"$HELPER_IDENTIFIER\"" \
         "$HELPER"
+    codesign --force --sign - --identifier "$UPDATE_IDENTIFIER" "$UPDATE_HELPER"
     codesign \
         --force \
         --sign - \

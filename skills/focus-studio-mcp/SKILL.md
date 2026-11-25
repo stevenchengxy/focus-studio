@@ -1,6 +1,6 @@
 ---
 name: focus-studio-mcp
-description: Operate Focus Studio through its MCP tools to record a product demo, edit its video clips, zooms, transitions, captions and sound, then export an MP4. Use for Focus Studio recording, demo editing, generated narration, BGM, subtitles and export requests. Paid narration requires approval in the app; image/video generation is separate.
+description: Operate Focus Studio through its MCP tools to record a product demo, edit its video clips, zooms, transitions, chapters and sound, then export an MP4. Use for Focus Studio recording, demo editing, generated narration, BGM and export requests. Paid narration requires approval in the app; image/video generation is separate.
 ---
 
 # focus-studio-mcp - record, edit and export with Focus Studio over MCP
@@ -114,7 +114,7 @@ shared library; adding it to a project remains an explicit step.
 
 After updating Focus Studio and its MCP helper, start a fresh Codex session so its tool catalog refreshes.
 Confirm `list_speech_models` and `generate_voiceover` are available before using this workflow. A
-narrated demo follows **record → finish picture → script → generate speech/captions → mix → verify → export**.
+narrated demo follows **record → finish picture → script → generate speech → mix → verify → export**.
 Keep the original take and use the edited working project's returned ID throughout.
 
 1. Call `list_speech_models`. It reports saved provider/model/voice and key presence, not a live provider
@@ -123,25 +123,23 @@ Keep the original take and use the edited working project's returned ID througho
    a prompt or tool argument. Do not silently substitute another provider, model or voice.
 2. Finish clip order, trims, joins and zooms, then inspect `get_project` and `get_timeline`. Write short
    sentences that explain the visible product action. Place them on the **edited output timeline**, allowing
-   room to hear each sentence and see its result. Existing narration and captions remain in the project;
-   choose unoccupied intervals. Later video ripple edits also remap audio, so verify timing again after one.
+   room to hear each sentence and see its result. Choose intervals that are free of existing narration. Later video ripple edits also remap audio, so verify timing again after one.
 3. Call `generate_voiceover` with `project_id` and `segments: [{text, start_time}]`: 1–24 short sentences,
    up to 240 characters each, with ascending output start times. Optional `model`, `voice`, `speed`
-   (0.5–2) and `add_captions` (default true) refine the configured selection. An optional `provider` must
+   (0.5–2) refine the configured selection. An optional `provider` must
    match Settings. Focus Studio displays the provider, model, voice and script for the person's real
    approval **before** sending a paid request. Do not manufacture approval or replace this step with an
-   unrelated confirmation. The app checks generated audio and rejects overlaps or overflow rather than
-   cutting off speech or replacing existing captions.
-4. Inspect the receipt and `get_project` for stable voiceover and caption IDs. Captions span each sentence's
-   **measured audio duration**; this is not word alignment. If a failure reports `requests_sent > 0`, or a
+   unrelated confirmation. The app checks generated audio for overlaps and overflow.
+4. Inspect the receipt and `get_project` for the voiceover IDs and each clip’s measured duration.
+   If a failure reports `requests_sent > 0`, or a
    call ends without a receipt after synthesis began, do not automatically retry: provider usage may already
    have been billed. Inspect the project, report the result, and resolve the next paid attempt with the user.
 5. Use `edit_voiceover` to trim, place, fade or change the volume of an existing `voiceover_id`; local audio
    can also be imported with `action: "add"` and `path`. Use `set_audio_mix` for source volume, music volume
    and `duck_music`/`duck_level` to lower music during narration. These edits do not regenerate paid speech.
-6. Read `get_project`, inspect `capture_frame` at caption boundaries, and play an exported draft to hear the
+6. Read `get_project`, inspect `capture_frame` at the narrated actions, and play an exported draft to hear the
    mix and check speech against the action. Stills cannot verify sound. Export with `export_project`, wait
-   on any returned job, and verify the resulting file has audio and readable, complete captions. State which
+   on any returned job, and verify the resulting file has audio and the final sentence plays in full. State which
    playback and export checks were actually performed.
 
 ### Codex-controlled recording with synchronized pointer and zooms
@@ -205,7 +203,7 @@ recording tools for synchronized automated demos. There is no universal CUA even
 5. `get_project` with the `project_id` - duration, settings, zooms with ids, chapters, and the recorded clicks
    and typing moments. Plan zooms and chapters from these times.
 6. Edit: `add_zoom` (`start`, `end`, `x`, `y`, optional `scale` 1.1-3), `remove_zoom` (`id`, `index` or
-   `all: true`), `set_zoom_style`, `set_chapters` (`chapters: [{start, end, title, caption}]`, `append`),
+   `all: true`), `set_zoom_style`, `set_chapters` (`chapters: [{start, end, title}]`, `append`),
    `update_settings` (background, padding, aspect ratio, `exportWidth`, `frameRate`, ...),
    `set_background_image`, `set_background_music` (`track`: id, title, audio file or `"none"`; `volume`),
    `set_sound_effects` (`click`, `zoom`, volumes).

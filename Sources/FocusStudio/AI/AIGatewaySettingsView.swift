@@ -336,7 +336,7 @@ private struct AISpeechProviderDetailView: View {
                     .textSelection(.enabled)
                 Spacer(minLength: 0)
             }
-            Text("Codex can turn your script into narration and captions. Generation asks for confirmation before using paid credits.")
+            Text("AI providers may charge separately. Generation always asks for confirmation.")
                 .font(.system(size: 12))
                 .foregroundStyle(StudioTheme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)

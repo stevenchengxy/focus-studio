@@ -965,11 +965,6 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
     private let backgroundImage: CIImage?
     private let sourceCropInsets: SourceCropInsets
     private let visibleSourceReferenceWidth: Double
-    /// Enabled chapters in playback order; numbering matches the SRT export.
-    private let captionChapters: [DemoChapter]
-    private let captionStyle: CaptionStyle
-    /// Caption pills rasterized once per chapter for this canvas and style.
-    private let captionArtwork: [UUID: CIImage]
     // These Core Image graphs depend only on project settings, not frame time.
     // Set them before the renderer is shared with AVFoundation's frame callbacks.
     private var staticBackground = CIImage(color: .clear)
@@ -1119,26 +1114,6 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
             relativeTo: URL(fileURLWithPath: project.sourceVideoPath)
                 .deletingLastPathComponent()
         ) : nil
-        // Captions are part of the immutable compositor state: text is drawn
-        // once here, never per frame, and the same pills feed preview and export.
-        let captionStyle = project.settings.resolvedCaptionStyle
-        self.captionStyle = captionStyle
-        let chapters = ChapterMath
-            .sanitized(project.chapters ?? [], duration: project.duration)
-            .filter(\.isEnabled)
-        self.captionChapters = chapters
-        var captionArtwork: [UUID: CIImage] = [:]
-        for (index, chapter) in chapters.enumerated() {
-            guard let artwork = CaptionRenderer.artwork(
-                text: chapter.displayText,
-                number: captionStyle.showsChapterNumber ? index + 1 : nil,
-                canvasSize: geometry.outputSize,
-                style: captionStyle
-            ) else { continue }
-            captionArtwork[chapter.id] = CIImage(cgImage: artwork.image)
-        }
-        self.captionArtwork = captionArtwork
-
         let canvasRect = CGRect(origin: .zero, size: geometry.outputSize)
         let background = background(in: canvasRect)
         self.staticBackground = background
@@ -1283,13 +1258,7 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
                 kCIInputMaskImageKey: screenMask
             ]
         )
-        var composed = screenLayer.composited(over: canvas)
-        // The chapter caption sits above everything, including the padding,
-        // so it stays legible over any zoom, cursor or background.
-        if let caption = captionLayer(at: seconds, canvasRect: canvasRect) {
-            composed = caption.composited(over: composed)
-        }
-        return composed.cropped(to: canvasRect)
+        return screenLayer.composited(over: canvas).cropped(to: canvasRect)
     }
 
     /// Imported footage and stills use authored zooms on their own pixels,
@@ -1338,34 +1307,7 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
                 kCIInputBackgroundImageKey: transparent, kCIInputMaskImageKey: mask
             ])
         canvas = layer.composited(over: canvas)
-        if let caption = captionLayer(at: seconds, canvasRect: canvasRect) {
-            canvas = caption.composited(over: canvas)
-        }
         return canvas.cropped(to: canvasRect)
-    }
-
-    private func captionLayer(at seconds: Double, canvasRect: CGRect) -> CIImage? {
-        guard let chapter = ChapterMath.activeChapter(at: seconds, chapters: captionChapters),
-              let artwork = captionArtwork[chapter.id] else { return nil }
-        let opacity = ChapterMath.opacity(at: seconds, chapter: chapter)
-        guard opacity > 0.001 else { return nil }
-        let size = artwork.extent.size
-        let padding = canvasRect.height * 0.06
-        let x = ((canvasRect.width - size.width) / 2).rounded()
-        let y: CGFloat
-        switch captionStyle.position {
-        case .bottom:
-            y = padding.rounded()
-        case .top:
-            y = (canvasRect.height - padding - size.height).rounded()
-        }
-        var layer = artwork.transformed(by: CGAffineTransform(translationX: x, y: y))
-        if opacity < 0.999 {
-            layer = layer.applyingFilter("CIColorMatrix", parameters: [
-                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: opacity)
-            ])
-        }
-        return layer.cropped(to: canvasRect)
     }
 
     private func background(in rect: CGRect) -> CIImage {

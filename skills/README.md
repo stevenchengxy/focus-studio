@@ -26,7 +26,7 @@ bash skills/install.sh --all --copy  # 两个客户端都安装，使用副本
 | skill | 作用 |
 | --- | --- |
 | `focus-demo-editing` | 将录制、空等分析、非破坏剪辑、单段缩放、预览和导出连成一个任务；保存策略与验证报告 |
-| `focus-studio-mcp` | 通过真实工具控制 Focus Studio 录制、项目、缩放、字幕、音频与导出 |
+| `focus-studio-mcp` | 通过真实工具控制 Focus Studio 录制、项目、缩放、章节标记、音频与导出 |
 | `demo-storyboard` | 为需要片头、章节和片尾的成片创建分镜 |
 | `focus-ai-promo` | 从真实产品收益和录屏出发，规划 AI 宣传镜头与单片段视觉变体 |
 | `product-demo-composer` | 按分镜用 ffmpeg 合成已导出的片段、字幕、转场和音轨 |

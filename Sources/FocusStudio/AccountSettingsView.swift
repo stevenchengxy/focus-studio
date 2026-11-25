@@ -12,11 +12,7 @@ struct AccountSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Community connection").font(.title2.bold())
-                    Text("Connect your ChatGPT account to share creations.")
-                        .foregroundStyle(StudioTheme.secondaryText)
-                }
+                Text("Community connection").font(.title2.bold())
                 VStack(alignment: .leading, spacing: 18) {
                     identity
                     if let pairing = community.connection.pairing {

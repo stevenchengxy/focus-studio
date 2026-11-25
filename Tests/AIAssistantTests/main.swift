@@ -645,14 +645,13 @@ struct AIAssistantTests {
         let context = makeContext(root: root, box: box)
         let tool = UpdateSettingsTool()
         let result = try await tool.run(
-            arguments: ["backgroundPreset": "ocean", "padding": 10_000, "aspectRatio": "9:16", "zoomScale": "2.2", "screenAnimation": "Snappy", "captionPosition": "top", "showsChapterNumber": false],
+            arguments: ["backgroundPreset": "ocean", "padding": 10_000, "aspectRatio": "9:16", "zoomScale": "2.2", "screenAnimation": "Snappy"],
             context: context, progress: { _ in }
         )
         let settings = box.project!.settings
         check(settings.backgroundStyle == .gradient && settings.backgroundColor == "#0866C6" && settings.secondaryBackgroundColor == "#21D4B4", "preset sets both colours and the gradient style")
         check(settings.padding == 160, "padding is clamped to the inspector range: \(settings.padding)")
         check(settings.aspectRatio == .vertical && settings.zoomScale == 2.2 && settings.screenAnimation == .snappy, "ratios, numeric strings and case-insensitive enums are accepted")
-        check(settings.resolvedCaptionStyle.position == .top && settings.resolvedCaptionStyle.showsChapterNumber == false, "caption style keys apply")
         check(result.text.contains("padding") && result.text.contains("clamped"), "clamping is reported: \(result.text)")
         check(settings.zoomFollowsCursor == nil && settings.resolvedZoomFollowsCursor == ProjectSettings.defaultZoomFollowsCursor,
               "Unrelated edits preserve the existing cursor-follow default")
@@ -745,8 +744,8 @@ struct AIAssistantTests {
         ]], context: context, progress: { _ in })
         let chapters = box.project!.chapters ?? []
         check(chapters.map(\.title) == ["First", "Second"], "invalid chapters are dropped and the rest sorted: \(chapters.map(\.title))")
-        check(chapters[0].caption == "Cap" && chapters[0].end == 4.5, "captions are trimmed and numeric strings accepted")
-        check(result.text.contains("2") && result.text.contains("First — Cap"), "result lists the chapters: \(result.text)")
+        check(chapters[0].caption.isEmpty && chapters[0].end == 4.5, "legacy caption arguments do not create subtitles; numeric strings accepted")
+        check(result.text.contains("2") && result.text.contains("First") && !result.text.contains("Cap"), "result lists the chapters: \(result.text)")
 
         _ = try await tool.run(arguments: ["chapters": [["start": 9.5, "end": 12, "title": "Third"]], "append": true], context: context, progress: { _ in })
         check(box.project!.chapters?.map(\.title) == ["First", "Second", "Third"], "append keeps existing chapters")
@@ -829,8 +828,8 @@ struct AIAssistantTests {
         // update_settings(padding) while another edit sets zoomHold.
         box.writeCount = 0
         box.afterNextRead = { box.project!.settings.zoomHold = 1.7 }
-        _ = try await UpdateSettingsTool().run(arguments: ["padding": 100, "captionPosition": "top"], context: context, progress: { _ in })
-        check(box.project!.settings.padding == 100 && box.project!.settings.resolvedCaptionStyle.position == .top && box.project!.settings.zoomHold == 1.7, "both interleaved edits survive update_settings: \(box.project!.settings)")
+        _ = try await UpdateSettingsTool().run(arguments: ["padding": 100], context: context, progress: { _ in })
+        check(box.project!.settings.padding == 100 && box.project!.settings.zoomHold == 1.7, "both interleaved edits survive update_settings: \(box.project!.settings)")
         check(box.writeCount == 1, "update_settings writes once")
 
         // set_zoom_style(zoomScale + zoomHold) while another edit sets padding: one write, both survive.

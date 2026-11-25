@@ -1772,11 +1772,11 @@ struct SetZoomStyleTool: AIAssistantTool {
             "type": "object",
             "properties": [
                 "screenAnimation": ["type": "string", "enum": ScreenAnimationStyle.allCases.map(\.rawValue)],
-                "zoomScale": ["type": "number", "minimum": 1.1, "maximum": 3, "description": "Magnification for automatic and new manual zooms."],
-                "zoomHold": ["type": "number", "minimum": 0.2, "maximum": 3, "description": "Seconds at full zoom after entry. Preserves typing holds and manual cues; limited by the shot or next focus."],
-                "zoomEaseIn": ["type": "number", "minimum": 0.05, "maximum": 1, "description": "Entry seconds. Preserves hold, extending automatic cues within the shot."],
-                "zoomEaseOut": ["type": "number", "minimum": 0.05, "maximum": 1.4, "description": "Exit seconds. Preserves hold where the shot permits."],
-                "zoomChainGap": ["type": "number", "minimum": 0, "maximum": ProjectSettings.maximumZoomChainGap, "description": "Clicks within this many seconds pan inside one zoom."],
+                "zoomScale": ["type": "number", "minimum": 1.1, "maximum": 3, "description": "Magnification for automatic and new manual zooms, from 1.1 to 3."],
+                "zoomHold": ["type": "number", "minimum": 0.2, "maximum": 3, "description": "Hold at full zoom for 0.2 to 3 seconds, within the shot or until the next focus. Preserves typing holds and manual cues."],
+                "zoomEaseIn": ["type": "number", "minimum": 0.05, "maximum": 1, "description": "Entry duration from 0.05 to 1 second. Preserves the hold by extending automatic cues within the shot."],
+                "zoomEaseOut": ["type": "number", "minimum": 0.05, "maximum": 1.4, "description": "Exit duration from 0.05 to 1.4 seconds. Preserves the hold where the shot permits."],
+                "zoomChainGap": ["type": "number", "minimum": 0, "maximum": ProjectSettings.maximumZoomChainGap, "description": "Clicks separated by 0 to \(ProjectSettings.maximumZoomChainGap) seconds can pan within one zoom. Set the maximum gap here."],
                 "autoZoomEnabled": ["type": "boolean"],
             ],
         ]
@@ -2013,7 +2013,7 @@ public struct ExportProjectTool: AIAssistantTool {
     public let summary: String
 
     init() {
-        self.init(name: "export_project", summary: "Render the open project with its look, zooms, captions and audio to an MP4. Default location: export-<timestamp>.mp4 in the assets folder; an optional path may name a file (.mp4) or a folder. An existing file is only replaced with overwrite: true, and the project's own recording and media are never written. Optional width and frame_rate apply to this export only.")
+        self.init(name: "export_project", summary: "Render the open project with its look, zooms and audio to an MP4. Default location: export-<timestamp>.mp4 in the assets folder; an optional path may name a file (.mp4) or a folder. An existing file is only replaced with overwrite: true, and the project's own recording and media are never written. Optional width and frame_rate apply to this export only.")
     }
 
     init(name: String, summary: String) {

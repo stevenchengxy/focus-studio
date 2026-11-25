@@ -7,6 +7,9 @@ Focus Studio — 安装与更新 / Install and update
 3. 按提示完成旧版中的工作。安装完成后，会打开“应用程序”里的新版并退出本次下载的副本。
 4. 退出磁盘映像。以后从“应用程序”打开 Focus Studio。
 
+从 macOS 版 1.14.12 起，请在 Focus Studio 的“设置 → 安装 → 软件更新”中点击“下载更新”。
+验证完成后，结束录制、导出或助手任务，返回项目库，点击“安装并重启”。
+
 应用会检查“应用程序”和你个人的“应用程序”文件夹里的 Focus Studio，
 把旧安装归并到 /Applications/Focus Studio.app，并保留可恢复的备份。
 录制项目、素材、设置与账号保存在应用之外，更新应用不会删除它们。
@@ -29,6 +32,9 @@ English
 3. Finish any work in the old app when prompted. After installation, the app in
    Applications opens and this downloaded copy quits.
 4. Eject the disk image. Open Focus Studio from Applications next time.
+
+In macOS version 1.14.12 and later, choose Settings → Installation → Software updates,
+then Download update. Finish active tasks, return to the library, and choose Install and restart.
 
 The app checks the system and your personal Applications folders for Focus Studio,
 consolidates old installations at /Applications/Focus Studio.app, and keeps recoverable

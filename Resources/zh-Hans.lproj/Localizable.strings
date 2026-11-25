@@ -568,12 +568,10 @@
 "Update Codex CLI or fix ~/.codex/config.toml." = "请更新 Codex CLI 或修复 ~/.codex/config.toml。";
 
 /* 1.3: lower text density */
-"Record. Clicks become cinematic zooms. Edit, caption, export." = "录制，点击自动变成电影感缩放，再编辑、加字幕、导出。";
 "Uses your existing Codex sign-in." = "使用你已有的 Codex 登录。";
 "Nothing runs until you approve the plan." = "批准计划前不会执行任何操作。";
 
-/* 1.3: chapters and captions */
-"Captions" = "字幕";
+/* 1.3: chapters */
 "Chapters" = "章节";
 "Chapter %lld" = "章节 %lld";
 "Chapter %lld start" = "章节 %lld 开始";
@@ -586,24 +584,14 @@
 "Add a 4-second chapter after the last one" = "在最后一个章节之后添加 4 秒章节";
 "From zooms" = "按缩放生成";
 "Create chapters from the zoom blocks" = "根据缩放区块创建章节";
-"Export SRT…" = "导出 SRT…";
-"Export captions" = "导出字幕";
-"Save captions as a SubRip subtitle file" = "将字幕保存为 SubRip 字幕文件";
 "Title" = "标题";
-"Caption" = "字幕";
-"Shown on the video; the title is used when empty" = "显示在视频上；留空时使用标题";
 "Untitled" = "未命名";
 "Position" = "位置";
-"Chapter number" = "章节编号";
-"Show the chapter number on the caption" = "在字幕上显示章节编号";
 "Accent" = "强调色";
 "AI" = "AI";
 "What does this demo show?" = "这个演示展示了什么？";
-"Used to write chapter titles and captions" = "用于撰写章节标题和字幕";
 "Generate chapters" = "生成章节";
-"Polish captions" = "润色字幕";
 "Write chapters from the clicks, zooms and typing" = "根据点击、缩放和输入生成章节";
-"Rewrite every caption concisely" = "精简改写所有字幕";
 "Set up an AI model in Settings" = "请先在“设置”中配置 AI 模型";
 "The AI model returned an empty reply." = "AI 模型返回了空回复。";
 "The AI reply did not contain chapter JSON." = "AI 回复中不包含章节 JSON。";
@@ -661,7 +649,6 @@
 "Ask the assistant…" = "向助手提问…";
 "Generate a background image for this recording" = "为这段录制生成背景图";
 "Make a 5-second intro clip from the current look" = "按当前外观制作 5 秒片头";
-"Create chapters and captions from my clicks" = "根据我的点击生成章节和字幕";
 "Generate image" = "生成图片";
 "Generate video" = "生成视频";
 "Capture frame" = "截取画面";
@@ -1208,7 +1195,6 @@
 "Zoom timeline in" = "放大时间轴";
 "Timeline zoom" = "时间轴缩放";
 "Fit" = "适配";
-"Your media will appear here" = "素材会显示在这里";
 "Import a video or image, then drag it onto the video track." = "导入视频或图片后，将其拖入视频滑轨。";
 "Click to add at the playhead, or drag onto the video track." = "点击可在播放头处加入，也可以拖入视频滑轨。";
 "Still image" = "静态图片";
@@ -1217,7 +1203,6 @@
 "Undo / Redo" = "撤销 / 重做";
 "Undo edit" = "撤销编辑";
 "Redo edit" = "重做编辑";
-"Connect the AI assistant in Focus Studio." = "连接 Focus Studio 内的 AI 助手。";
 "Advanced options" = "高级选项";
 "Connect & test" = "连接并测试";
 "Test again" = "重新测试";
@@ -1339,7 +1324,6 @@
 "Media actions: %@" = "素材操作：%@";
 "Move shared media to Trash?" = "将通用素材移到废纸篓？";
 "Only shared copies will be moved to Trash. Media already added to a demo stays in that project." = "只会移动通用素材库中的副本。已加入演示项目的素材不受影响。";
-"Record. Edit. Export." = "录制 · 剪辑 · 导出";
 "This paid generation cannot start because its model, settings, or price could not be verified. Review the model and duration in Settings, then try again." = "无法验证本次付费生成的模型、参数或价格，因此没有启动任务。请在设置中检查模型与时长后重试。";
 "Clip actions" = "片段操作";
 "Fine tune transition" = "细调转场";
@@ -1487,7 +1471,6 @@
 "Could not save the key. Please try again." = "密钥保存失败，请重试。";
 "Checking credentials without generating audio…" = "正在验证密钥，不生成音频…";
 "Checks your key without generating audio." = "仅检查密钥，不生成音频。";
-"Codex can turn your script into narration and captions. Generation asks for confirmation before using paid credits." = "让 Codex 为脚本配旁白和字幕。付费生成前会请你确认。";
 "Key verified. Audio generation has not been tested." = "密钥验证通过，尚未测试音频生成。";
 "Service reachable. Audio generation has not been tested." = "服务可访问，尚未测试音频生成。";
 "Settings valid. This service has no model-list check; audio generation has not been tested." = "配置有效；服务不支持模型列表检查，尚未测试音频生成。";
@@ -1563,7 +1546,6 @@
 "Confirm that you are using Focus Studio on this Mac to enable community publishing. No project will be uploaded." = "确认此 Mac 后即可发布到社区，不会自动上传项目。";
 "Confirm this Mac" = "确认此 Mac";
 "Connect with ChatGPT" = "连接 ChatGPT";
-"Connect your ChatGPT account to share creations." = "连接 ChatGPT，分享你的作品。";
 "Connection saved" = "连接已保存";
 "Connection saved. Refresh to verify your account." = "连接已保存，点击检查以验证账号。";
 "Copy code" = "复制代码";
@@ -1624,3 +1606,24 @@
 "This connection code expired. Connect again to get a new code." = "连接码已过期，请重新连接以获取新的连接码。";
 "Community connection is temporarily unavailable. Your local recordings and exports are unaffected." = "社区连接暂时不可用，本地录制和导出不受影响。";
 "Your browser could not open. Try connecting again." = "未能打开浏览器，请重新连接。";
+"Retry download" = "重新下载";
+"Install and restart" = "安装并重启";
+"Downloading update · %d%%" = "正在下载更新 · %d%%";
+"Downloading update…" = "正在下载更新…";
+"Verifying update…" = "正在校验更新…";
+"Focus Studio %@ is ready to install." = "Focus Studio %@ 已准备好安装。";
+"Preparing update…" = "正在准备更新…";
+"Restarting Focus Studio…" = "正在重启 Focus Studio…";
+"View update" = "查看更新";
+"Return to the library and finish active tasks to install the update." = "请先完成当前任务并返回项目库，再安装更新。";
+"The update download did not match the release. Try again." = "下载的文件与发布版本不符，请重试。";
+"The update could not be authenticated." = "无法验证更新签名。";
+"The downloaded update did not pass verification." = "下载的更新未通过校验。";
+"Open Focus Studio from Applications to update." = "请从“应用程序”打开 Focus Studio 以更新。";
+"The previous version is available for recovery." = "上一版本可用于恢复。";
+"The update helper is missing. Install a fresh copy of Focus Studio." = "缺少更新组件，请重新安装 Focus Studio。";
+"The downloaded app does not match the update version." = "下载的应用版本与更新信息不符。";
+"The update could not be installed." = "无法安装更新。";
+"Quit other copies of Focus Studio before updating." = "请退出其他 Focus Studio 副本后再更新。";
+"An update is already in progress." = "正在进行更新。";
+"The update helper could not start. Please retry." = "更新组件启动失败，请重试。";

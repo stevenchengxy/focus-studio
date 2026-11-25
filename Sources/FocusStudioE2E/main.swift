@@ -48,6 +48,18 @@ enum FocusStudioE2E {
                 try await validateRecordedProject(at: URL(fileURLWithPath: path), outputDirectory: outputDirectory)
                 return
             }
+            if CommandLine.arguments.contains("--legacy-subtitles-only") {
+                let spec = SyntheticVideoSpecification()
+                let source = outputDirectory.appendingPathComponent("legacy-source.mp4")
+                let movie = outputDirectory.appendingPathComponent("legacy-export.mp4")
+                try? FileManager.default.removeItem(at: source)
+                try await SyntheticGridVideoWriter.write(spec, to: source)
+                let project = makeProject(sourceURL: source, specification: spec)
+                _ = try await ProjectVideoRenderer.export(project: project, to: movie)
+                let difference = try await validateChapterCaptionRendering(project: project, exportedURL: movie)
+                print("PASS: legacy subtitle metadata produced a preview difference of \(difference); MP4 matches.")
+                return
+            }
             if CommandLine.arguments.contains("--voiceover-only") {
                 var spec = SyntheticVideoSpecification(); spec.duration = 8; spec.includesAudio = false
                 let source = outputDirectory.appendingPathComponent("voiceover-silent-source.mp4")
@@ -137,8 +149,7 @@ enum FocusStudioE2E {
             try await validateRegionEffectRendering(project: project, outputDirectory: outputDirectory)
             let chapterCaptionDifference = try await validateChapterCaptionRendering(
                 project: project,
-                exportedURL: renderedURL,
-                outputDirectory: outputDirectory
+                exportedURL: renderedURL
             )
             try await validateTypingFocusRendering(outputDirectory: outputDirectory)
             try await validateInputHandoffRendering(outputDirectory: outputDirectory)
@@ -473,8 +484,8 @@ enum FocusStudioE2E {
             "new projects must use safe image-background defaults"
         )
         try require(
-            settings.cursorAppearance == nil && settings.resolvedCursorAppearance == .system,
-            "new projects must resolve a missing cursor appearance to the system cursor"
+            settings.resolvedCursorAppearance == .elevated,
+            "new projects must use the outlined studio cursor"
         )
 
         settings.zoomScale = 2
@@ -491,7 +502,7 @@ enum FocusStudioE2E {
         )
         try require(segments.count == 1, "one click should create one zoom segment")
         try require(abs(segments[0].start - 0.9) < 0.0001, "zoom lead-in is incorrect")
-        try require(abs(segments[0].end - 2.2) < 0.0001, "zoom hold/ease-out is incorrect")
+        try require(abs(segments[0].end - 2.3) < 0.0001, "zoom must hold for 0.8 seconds after the 0.2-second camera arrival before easing out")
 
         let before = TimelineMath.zoomState(at: 0.5, segments: segments, settings: settings)
         let active = TimelineMath.zoomState(at: 1.45, segments: segments, settings: settings)
@@ -941,8 +952,8 @@ enum FocusStudioE2E {
         var custom = ZoomTiming.applying(.easeIn(0.08), to: original, projectDuration: 10, settings: settings)
         custom = ZoomTiming.applying(.easeOut(0.75), to: custom, projectDuration: 10, settings: settings)
         let restored = try JSONDecoder().decode(ZoomSegment.self, from: JSONEncoder().encode(custom))
-        try require(restored == custom && restored.zoomEaseIn == 0.08 && restored.zoomEaseOut == 0.75, "per-block transition edits must survive save/reopen without modifying start/end")
-        try require(custom.start == original.start && custom.end == original.end, "changing zoom speed must not silently change the block's interval")
+        try require(restored == custom && restored.zoomEaseIn == 0.08 && restored.zoomEaseOut == 0.75, "per-block timing must survive save/reopen")
+        try require(custom.start == original.start && abs(ZoomTiming.resolve(custom, settings: settings).hold - inherited.hold) < 0.000001, "changing transition duration must keep the original start and readable hold")
         var slowerGlobals = settings
         slowerGlobals.zoomEaseIn = 1.5
         slowerGlobals.zoomEaseOut = 1.5
@@ -951,7 +962,7 @@ enum FocusStudioE2E {
         let inheritedWithNewGlobals = TimelineMath.zoomState(at: 1.15, segments: [legacy], settings: slowerGlobals)
         try require(abs(customState.scale - customWithNewGlobals.scale) < 0.000001 && customState.scale > 1.99 && customState.scale - inheritedWithNewGlobals.scale > 0.5, "a block's transition override must take precedence over changed global defaults")
         let reset = ZoomTiming.applying(.resetTransitions, to: custom, projectDuration: 10, settings: settings)
-        try require(reset.zoomEaseIn == nil && reset.zoomEaseOut == nil && reset.start == custom.start && reset.end == custom.end, "resetting transition overrides must restore inheritance without moving the block")
+        try require(reset.zoomEaseIn == nil && reset.zoomEaseOut == nil && reset.start == original.start && abs(reset.end - original.end) < 0.000001, "resetting transitions must restore the inherited speeds and original interval")
         var immediate = ZoomTiming.applying(.easeIn(0), to: original, projectDuration: 10, settings: settings)
         immediate = ZoomTiming.applying(.easeOut(0), to: immediate, projectDuration: 10, settings: settings)
         try require(TimelineMath.zoomState(at: immediate.start, segments: [immediate], settings: settings).scale == 2 && TimelineMath.zoomState(at: immediate.end + 0.001, segments: [immediate], settings: settings).scale == 1, "zero-second transitions must be instantaneous while preserving the selected interval")
@@ -1156,7 +1167,8 @@ enum FocusStudioE2E {
         var disabled = settings
         disabled.typingZoom = TypingZoomSettings(enabled: false)
         let clickOnly = TimelineMath.generateZoomSegments(from: [click], duration: 10, settings: disabled, typingActivity: activity)
-        try require(abs(clickOnly[0].end - (click.time + settings.zoomHold + settings.zoomEaseOut)) < 0.0001, "turning typing hold off must retain ordinary click timing")
+        let ordinaryEnd = max(0, click.time - settings.zoomLeadIn) + settings.zoomEaseIn + settings.zoomHold + settings.zoomEaseOut
+        try require(clickOnly.count == 1 && abs(clickOnly[0].end - ordinaryEnd) < 0.0001, "turning typing hold off must retain ordinary click timing")
         disabled.autoZoomEnabled = false
         try require(TimelineMath.generateZoomSegments(from: [click], duration: 10, settings: disabled, typingActivity: activity).isEmpty, "automatic zoom off must disable typing cues too")
         let clamped = TimelineMath.generateZoomSegments(from: [], duration: 1, settings: settings, typingActivity: [TypingActivity(time: 0.9, x: 0.4, y: 0.6)])
@@ -1165,7 +1177,7 @@ enum FocusStudioE2E {
         pageSettings.sourceCropInsets = SourceCropInsets(top: 0.2)
         let browserTyping = [TypingActivity(time: 1.2, x: 0.3, y: 0.12), TypingActivity(time: 5, x: 0.3, y: 0.12)]
         let pageCues = TimelineMath.generateZoomSegments(from: [ClickEvent(time: 0.5, x: 0.3, y: 0.21, button: .left)], duration: 8, settings: pageSettings, typingActivity: browserTyping)
-        try require(pageCues.count == 1 && pageCues[0].end < 2, "typing in a cropped-out browser address bar must not prolong a nearby visible product zoom")
+        try require(pageCues.count == 1 && abs(pageCues[0].end - ordinaryEnd) < 0.0001, "typing in a cropped-out browser address bar must not prolong a nearby visible product zoom")
         try require(TimelineMath.generateZoomSegments(from: [], duration: 8, settings: pageSettings, typingActivity: browserTyping).isEmpty, "cropped-out browser typing must not create camera cues")
 
         var project = RecordingProject(title: "Typing metadata", sourceVideoPath: "/tmp/input.mp4", duration: 10, sourceWidth: 960, sourceHeight: 540, clickEvents: [click], typingActivity: activity)
@@ -1322,8 +1334,7 @@ enum FocusStudioE2E {
             settings: settings
         )
 
-        // One narrated chapter spanning the click/zoom hold period (0.8–1.9 s),
-        // fully faded in between 1.08 s and 1.62 s.
+        // A legacy subtitle covers the click/zoom hold where preview and export are sampled.
         let chapters = [
             DemoChapter(
                 id: UUID(uuidString: "00000000-0000-0000-0000-00000000C4A1")!,
@@ -1554,13 +1565,16 @@ enum FocusStudioE2E {
         fast.settings.motionBlur = 0
         fast.settings.screenAnimation = .focused
         let base = ZoomSegment(start: 0.25, end: 2.125, targetX: 0.32, targetY: 0.63, scale: 2, kind: .manual)
-        var fastCue = ZoomTiming.applying(.easeIn(0.1), to: base, projectDuration: fast.duration, settings: fast.settings)
-        fastCue = ZoomTiming.applying(.easeOut(0.1), to: fastCue, projectDuration: fast.duration, settings: fast.settings)
+        // Transition edits normally preserve the hold. Give each preset the
+        // same total interval to isolate the effect of its speed on the movie.
+        let interval = base.end - base.start
+        let fastCue = ZoomTiming.applying(.pacing(easeIn: 0.1, hold: interval - 0.2, easeOut: 0.1),
+                                         to: base, projectDuration: fast.duration, settings: fast.settings)
         fast.zoomSegments = [fastCue]
         var slow = fast
         slow.title = "Zoom timing — slow transitions, same duration"
-        var slowCue = ZoomTiming.applying(.easeIn(0.8), to: fastCue, projectDuration: slow.duration, settings: slow.settings)
-        slowCue = ZoomTiming.applying(.easeOut(0.8), to: slowCue, projectDuration: slow.duration, settings: slow.settings)
+        let slowCue = ZoomTiming.applying(.pacing(easeIn: 0.8, hold: interval - 1.6, easeOut: 0.8),
+                                         to: base, projectDuration: slow.duration, settings: slow.settings)
         slow.zoomSegments = [slowCue]
         var brief = fast
         brief.title = "Zoom timing — same speed, shorter duration"
@@ -1933,140 +1947,30 @@ enum FocusStudioE2E {
         try report.write(to: outputDirectory.appendingPathComponent("focus-studio-region-report.json"))
     }
 
-    /// Chapter captions are part of the shared compositor: the pill must show
-    /// only while its chapter is active, fade in, honour position/enabled
-    /// state, render CJK text, and match between preview and export.
+    /// Legacy subtitle metadata must have no effect on preview or exported pixels.
     private static func validateChapterCaptionRendering(
-        project: RecordingProject,
-        exportedURL: URL,
-        outputDirectory: URL
+        project: RecordingProject, exportedURL: URL
     ) async throws -> Double {
-        guard let chapter = project.chapters?.first else {
-            throw E2EError.assertionFailed("the synthetic project must carry a chapter")
+        guard let chapter = project.chapters?.first, !chapter.caption.isEmpty else {
+            throw E2EError.assertionFailed("missing legacy subtitle fixture")
         }
-        var baselineProject = project
-        baselineProject.chapters = nil
-        let captioned = makeImageGenerator(for: try await ProjectVideoRenderer.prepare(project: project))
-        let baseline = makeImageGenerator(for: try await ProjectVideoRenderer.prepare(project: baselineProject))
-        let sampleRows = 135
-
-        // Frame-aligned probes (k/24) keep composition and encoded frames in step.
-        let insideTime = CMTime(value: 32, timescale: 24)
-        let (captionFrame, _) = try await captioned.image(at: insideTime)
-        let (baselineFrame, _) = try await baseline.image(at: insideTime)
-        let inside = imageDifference(captionFrame, baselineFrame)
-        try require(
-            inside.meanAbsolute > 0.3 && inside.changedPixels >= 80,
-            "the caption pill must visibly change the frame during its chapter (mean \(inside.meanAbsolute), pixels \(inside.changedPixels))"
-        )
-        guard let bottomRows = changedRowBounds(captionFrame, baselineFrame) else {
-            throw E2EError.assertionFailed("could not locate the caption pill")
-        }
-        try require(
-            bottomRows.first >= Int(Double(sampleRows) * 0.6),
-            "a bottom caption must only touch the lower part of the canvas (rows \(bottomRows))"
-        )
-
-        var outsideDifference = 0.0
-        for frame in [7, 54] as [CMTimeValue] {
-            let time = CMTime(value: frame, timescale: 24)
-            let (withChapter, _) = try await captioned.image(at: time)
-            let (without, _) = try await baseline.image(at: time)
-            let difference = imageDifference(withChapter, without).meanAbsolute
-            outsideDifference = max(outsideDifference, difference)
-            try require(difference < 0.05, "frames outside the chapter must be unchanged at \(time.seconds)s (\(difference))")
-        }
-
-        // 0.875 s is 0.075 s into the chapter: the pill is at roughly 12% opacity.
-        let fadeTime = CMTime(value: 21, timescale: 24)
-        let (fadeFrame, _) = try await captioned.image(at: fadeTime)
-        let (fadeBaseline, _) = try await baseline.image(at: fadeTime)
-        let fading = imageDifference(fadeFrame, fadeBaseline).meanAbsolute
-        try require(
-            fading > 0.02 && fading < inside.meanAbsolute * 0.6,
-            "the caption must fade in rather than pop (fading \(fading), visible \(inside.meanAbsolute))"
-        )
-
-        let exportedGenerator = AVAssetImageGenerator(asset: AVURLAsset(url: exportedURL))
-        exportedGenerator.appliesPreferredTrackTransform = true
-        exportedGenerator.requestedTimeToleranceBefore = .zero
-        exportedGenerator.requestedTimeToleranceAfter = .zero
-        let (exportedFrame, _) = try await exportedGenerator.image(at: insideTime)
-        let previewExportDifference = imageDifference(captionFrame, exportedFrame).meanAbsolute
-        try require(previewExportDifference < 3, "caption preview and exported MP4 must match apart from compression (\(previewExportDifference))")
-        let (exportedBaselineTime, _) = try await exportedGenerator.image(at: CMTime(value: 7, timescale: 24))
-        let (previewBaselineTime, _) = try await captioned.image(at: CMTime(value: 7, timescale: 24))
-        try require(imageDifference(exportedBaselineTime, previewBaselineTime).meanAbsolute < 3, "exported frames before the chapter must still match the preview")
-        let reviewURL = outputDirectory.appendingPathComponent("focus-studio-chapter-caption.png")
-        try writeReviewFrame(exportedFrame, to: reviewURL)
-
-        // Top placement, larger size, no number, Chinese text.
-        var topProject = project
-        topProject.settings.captionStyle = CaptionStyle(position: .top, scale: 1.2, showsChapterNumber: false)
-        topProject.chapters = [DemoChapter(start: chapter.start, end: chapter.end, title: "第一章", caption: "每次点击都会自动放大")]
-        let restoredTop = try JSONDecoder().decode(RecordingProject.self, from: JSONEncoder().encode(topProject))
-        try require(restoredTop.chapters == topProject.chapters && restoredTop.settings.captionStyle == topProject.settings.captionStyle, "chapters and caption style must survive save/reopen")
-        let top = makeImageGenerator(for: try await ProjectVideoRenderer.prepare(project: restoredTop))
-        let (topFrame, _) = try await top.image(at: insideTime)
-        let topDifference = imageDifference(topFrame, baselineFrame)
-        try require(topDifference.changedPixels >= 80, "a Chinese caption at the top must render visibly (\(topDifference.changedPixels) pixels)")
-        guard let topRows = changedRowBounds(topFrame, baselineFrame) else {
-            throw E2EError.assertionFailed("could not locate the top caption pill")
-        }
-        try require(
-            topRows.last <= Int(Double(sampleRows) * 0.4),
-            "a top caption must only touch the upper part of the canvas (rows \(topRows))"
-        )
-        try require(imageDifference(topFrame, captionFrame).meanAbsolute > 0.3, "moving the caption to the top must change the frame")
-        try writeReviewFrame(topFrame, to: outputDirectory.appendingPathComponent("focus-studio-chapter-caption-top.png"))
-
-        var disabledProject = project
-        disabledProject.chapters?[0].isEnabled = false
-        let disabled = makeImageGenerator(for: try await ProjectVideoRenderer.prepare(project: disabledProject))
-        let (disabledFrame, _) = try await disabled.image(at: insideTime)
-        try require(imageDifference(disabledFrame, baselineFrame).meanAbsolute < 0.05, "a disabled chapter must not render")
-
-        let report = ChapterCaptionValidationReport(
-            status: "PASS",
-            visibleDifference: inside.meanAbsolute,
-            visibleChangedPixels: inside.changedPixels,
-            fadeDifference: fading,
-            outsideDifference: outsideDifference,
-            previewExportDifference: previewExportDifference,
-            bottomRows: [bottomRows.first, bottomRows.last],
-            topRows: [topRows.first, topRows.last],
-            reviewFramePath: reviewURL.path
-        )
-        try Data(try jsonString(report).utf8).write(
-            to: outputDirectory.appendingPathComponent("focus-studio-chapter-caption-report.json"),
-            options: .atomic
-        )
-        return inside.meanAbsolute
-    }
-
-    /// First and last sampled rows (0 = top) where two frames differ noticeably.
-    private static func changedRowBounds(_ lhs: CGImage, _ rhs: CGImage) -> (first: Int, last: Int)? {
-        let width = 240
-        let height = 135
-        let lhsPixels = sampledPixels(lhs, width: width, height: height)
-        let rhsPixels = sampledPixels(rhs, width: width, height: height)
-        var first: Int?
-        var last: Int?
-        for row in 0..<height {
-            for column in 0..<width {
-                let offset = (row * width + column) * 4
-                let red = abs(Int(lhsPixels[offset]) - Int(rhsPixels[offset]))
-                let green = abs(Int(lhsPixels[offset + 1]) - Int(rhsPixels[offset + 1]))
-                let blue = abs(Int(lhsPixels[offset + 2]) - Int(rhsPixels[offset + 2]))
-                if max(red, green, blue) >= 24 {
-                    if first == nil { first = row }
-                    last = row
-                    break
-                }
-            }
-        }
-        guard let first, let last else { return nil }
-        return (first, last)
+        let reopened = try JSONDecoder().decode(RecordingProject.self, from: JSONEncoder().encode(project))
+        var baseline = reopened
+        baseline.chapters = nil
+        let preview = makeImageGenerator(for: try await ProjectVideoRenderer.prepare(project: reopened))
+        let clean = makeImageGenerator(for: try await ProjectVideoRenderer.prepare(project: baseline))
+        let time = CMTime(value: 32, timescale: 24)
+        let (frame, _) = try await preview.image(at: time)
+        let (expected, _) = try await clean.image(at: time)
+        let difference = imageDifference(frame, expected)
+        try require(difference.changedPixels == 0, "legacy subtitles changed the preview")
+        let exported = AVAssetImageGenerator(asset: AVURLAsset(url: exportedURL))
+        exported.appliesPreferredTrackTransform = true
+        exported.requestedTimeToleranceBefore = .zero
+        exported.requestedTimeToleranceAfter = .zero
+        let (encoded, _) = try await exported.image(at: time)
+        try require(imageDifference(encoded, expected).meanAbsolute < 3, "export differs from the clean preview")
+        return difference.meanAbsolute
     }
 
     private static func validateTypingFocusRendering(outputDirectory: URL) async throws {
@@ -2950,18 +2854,6 @@ private struct ZoomTimingValidationReport: Codable {
     let variants: [ZoomTimingVariantCheck]
     let maximumPreviewExportDifference: Double
     let frameComparisons: [ZoomTimingFrameComparison]
-}
-
-private struct ChapterCaptionValidationReport: Codable {
-    let status: String
-    let visibleDifference: Double
-    let visibleChangedPixels: Int
-    let fadeDifference: Double
-    let outsideDifference: Double
-    let previewExportDifference: Double
-    let bottomRows: [Int]
-    let topRows: [Int]
-    let reviewFramePath: String
 }
 
 private struct ZoomTimingVariantCheck: Codable {

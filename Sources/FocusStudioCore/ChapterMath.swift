@@ -8,12 +8,8 @@ public enum ChapterEdit: Sendable {
     case move(Double)
 }
 
-/// Pure chapter timing shared by the timeline, Inspector, SRT export and the
-/// frame compositor. Everything here is deterministic so preview and export
-/// agree about which caption is visible and how opaque it is.
 public enum ChapterMath {
     public static let minimumDuration = 0.5
-    public static let fadeDuration = 0.28
     public static let defaultChapterLength = 4.0
     /// Enabled zoom segments closer together than this form one chapter.
     public static let zoomClusterGap = 2.5
@@ -23,7 +19,6 @@ public enum ChapterMath {
 
     /// Drops chapters without a usable time range or text, clamps the rest to
     /// the project, enforces the minimum length and sorts by start time.
-    /// Overlaps are allowed; the compositor shows the latest-starting one.
     public static func sanitized(_ chapters: [DemoChapter], duration: Double) -> [DemoChapter] {
         guard duration.isFinite, duration > 0 else { return [] }
         var seenIDs = Set<UUID>()
@@ -49,41 +44,6 @@ public enum ChapterMath {
         if lhs.start != rhs.start { return lhs.start < rhs.start }
         if lhs.end != rhs.end { return lhs.end < rhs.end }
         return lhs.id.uuidString < rhs.id.uuidString
-    }
-
-    // MARK: Playback
-
-    /// The enabled chapter covering `time`. When chapters overlap, the one
-    /// that started most recently wins so a later, more specific caption can
-    /// interrupt a longer section.
-    public static func activeChapter(at time: Double, chapters: [DemoChapter]) -> DemoChapter? {
-        guard time.isFinite else { return nil }
-        var best: DemoChapter?
-        for chapter in chapters where chapter.isEnabled {
-            guard chapter.start.isFinite, chapter.end.isFinite,
-                  chapter.end > chapter.start,
-                  time >= chapter.start, time <= chapter.end else { continue }
-            if let current = best {
-                if chapter.start > current.start
-                    || (chapter.start == current.start && precedes(current, chapter)) {
-                    best = chapter
-                }
-            } else {
-                best = chapter
-            }
-        }
-        return best
-    }
-
-    /// Caption opacity: a smoother-step fade over ``fadeDuration`` inside both
-    /// ends of the chapter, and zero outside it.
-    public static func opacity(at time: Double, chapter: DemoChapter) -> Double {
-        guard time.isFinite, chapter.start.isFinite, chapter.end.isFinite,
-              chapter.end > chapter.start,
-              time >= chapter.start, time <= chapter.end else { return 0 }
-        let fadeIn = TimelineMath.smootherStep((time - chapter.start) / fadeDuration)
-        let fadeOut = TimelineMath.smootherStep((chapter.end - time) / fadeDuration)
-        return min(fadeIn, fadeOut)
     }
 
     // MARK: Editing
@@ -198,36 +158,5 @@ public enum ChapterMath {
             chapters.append(DemoChapter(start: start, end: end, title: title(chapters.count + 1)))
         }
         return sanitized(chapters, duration: duration)
-    }
-
-    // MARK: SubRip
-
-    /// SubRip subtitles for the enabled chapters, in chronological order. Each
-    /// cue shows the caption, or the title when the caption is empty.
-    public static func srt(for chapters: [DemoChapter]) -> String {
-        let cues = chapters
-            .filter { $0.isEnabled && $0.start.isFinite && $0.end.isFinite && $0.end > $0.start }
-            .sorted(by: precedes)
-        var lines: [String] = []
-        for (index, chapter) in cues.enumerated() {
-            let text = chapter.displayText
-                .replacingOccurrences(of: "\r\n", with: "\n")
-                .replacingOccurrences(of: "\r", with: "\n")
-            lines.append("\(index + 1)")
-            lines.append("\(srtTimestamp(chapter.start)) --> \(srtTimestamp(chapter.end))")
-            lines.append(text.isEmpty ? " " : text)
-            lines.append("")
-        }
-        return lines.joined(separator: "\n")
-    }
-
-    /// `HH:MM:SS,mmm` as required by SubRip.
-    public static func srtTimestamp(_ seconds: Double) -> String {
-        let totalMilliseconds = Int((max(0, seconds) * 1_000).rounded())
-        let hours = totalMilliseconds / 3_600_000
-        let minutes = (totalMilliseconds % 3_600_000) / 60_000
-        let wholeSeconds = (totalMilliseconds % 60_000) / 1_000
-        let milliseconds = totalMilliseconds % 1_000
-        return String(format: "%02d:%02d:%02d,%03d", hours, minutes, wholeSeconds, milliseconds)
     }
 }

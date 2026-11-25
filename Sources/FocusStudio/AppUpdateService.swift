@@ -1,14 +1,26 @@
 import Combine
 import Foundation
 
-/// Checks public release metadata only. Downloads are an explicit browser action
-/// in the UI; this service never writes the application, projects, or credentials.
+/// One update operation survives navigation and closing the Settings window.
 @MainActor
 final class AppUpdateService: ObservableObject {
     static let shared = AppUpdateService()
     enum Status: Equatable {
         case idle, checking, upToDate, noRelease, available, requiresNewerOS, failed(String)
     }
+    enum Phase: Equatable {
+        case idle, downloading(Int?), verifying, ready, installing, restarting
+    }
+    typealias Download = (AppUpdateRelease, @escaping AppUpdateDownload.Observer) async throws -> AppUpdatePackage
+    typealias Handoff = @MainActor () throws -> Void
+    @Published private(set) var phase: Phase = .idle
+    @Published private(set) var operationError: String?
+    private let download: Download
+    private var operationID: UUID?
+    private var downloadTask: Task<Void, Never>?
+    private var package: AppUpdatePackage?
+
+    var isUpdating: Bool { phase != .idle && phase != .ready }
     @Published private(set) var status: Status = .idle
     @Published private(set) var availableRelease: AppUpdateRelease?
     @Published private(set) var lastCheckedAt: Date?
@@ -20,6 +32,7 @@ final class AppUpdateService: ObservableObject {
             guard oldValue != channel else { return }
             defaults.set(channel.rawValue, forKey: Self.channelKey)
             dismissedVersion = nil
+            resetTransfer()
             restoreCachedState()
         }
     }
@@ -42,7 +55,9 @@ final class AppUpdateService: ObservableObject {
          installedVersion: String = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0",
          defaultChannel: AppUpdateChannel = AppUpdateChannel(rawValue: Bundle.main.object(forInfoDictionaryKey: "FocusStudioUpdateChannel") as? String ?? "") ?? .preview,
          operatingSystem: OperatingSystemVersion = ProcessInfo.processInfo.operatingSystemVersion,
-         now: @escaping () -> Date = Date.init) {
+         now: @escaping () -> Date = Date.init,
+         download: @escaping Download = AppUpdateDownload.run) {
+        self.download = download
         self.defaults = defaults; self.session = session; self.installedVersion = installedVersion
         self.operatingSystem = operatingSystem; self.now = now
         automaticallyChecks = defaults.object(forKey: Self.autoKey) as? Bool ?? true
@@ -58,7 +73,7 @@ final class AppUpdateService: ObservableObject {
     }
 
     func check(force: Bool = true) async {
-        guard !isChecking else { return }
+        guard !isChecking, !isUpdating else { return }
         let selectedChannel = channel
         let time = now()
         guard force || AppUpdateCheckPolicy.shouldCheck(lastAttempt: lastCheckedAt, now: time) else { return }
@@ -78,6 +93,7 @@ final class AppUpdateService: ObservableObject {
             guard channel == selectedChannel else { return }
             guard let http = response as? HTTPURLResponse else { throw AppUpdateError.invalidRelease }
             if http.statusCode == 404 {
+                resetTransfer()
                 availableRelease = nil
                 defaults.removeObject(forKey: cacheKey(selectedChannel))
                 status = .noRelease
@@ -98,6 +114,7 @@ final class AppUpdateService: ObservableObject {
     }
 
     private func apply(_ release: AppUpdateRelease) {
+        if availableRelease != release { resetTransfer() }
         do {
             guard try release.isNewer(than: installedVersion) else {
                 availableRelease = nil
@@ -110,6 +127,99 @@ final class AppUpdateService: ObservableObject {
             availableRelease = nil
             status = .failed(AppUpdateError.invalidInstalledVersion.localizedDescription)
         }
+    }
+
+    @discardableResult
+    func startDownload() -> Task<Void, Never>? {
+        guard !isChecking, phase == .idle, let release = availableRelease,
+              release.supports(operatingSystem),
+              (try? release.validate(expectedChannel: channel)) != nil,
+              (try? release.isNewer(than: installedVersion)) == true else { return nil }
+        let id = UUID()
+        operationID = id
+        operationError = nil
+        phase = .downloading(nil)
+        let report: AppUpdateDownload.Observer = { [weak self] event in
+            Task { @MainActor in
+                guard let self, self.operationID == id, case let .downloading(current) = self.phase else { return }
+                switch event {
+                case let .progress(percent):
+                    self.phase = .downloading(max(current ?? 0, min(100, percent)))
+                case .verifying: self.phase = .verifying
+                }
+            }
+        }
+        let task = Task {
+            defer { if operationID == id { downloadTask = nil } }
+            guard operationID == id, !Task.isCancelled else { return }
+            do {
+                let candidate = try await download(release, report)
+                guard operationID == id, !Task.isCancelled else { return }
+                package = candidate
+                phase = .ready
+            } catch {
+                guard operationID == id else { return }
+                phase = .idle
+                operationError = error.localizedDescription
+            }
+        }
+        downloadTask = task
+        return task
+    }
+
+    func cancelDownload() {
+        switch phase {
+        case .downloading, .verifying: resetTransfer()
+        default: break
+        }
+    }
+
+    /// Recheck both the cached bytes and active work immediately before staging
+    /// and handoff. If work started during staging, keep the download for later.
+    func install(isBusyNow: @escaping @MainActor () -> Bool,
+                 prepare: (AppUpdatePackage, AppUpdateRelease) async throws -> Handoff,
+                 flushEdits: @MainActor () async -> Void, restart: @MainActor () -> Void) async {
+        guard !isChecking, phase == .ready, let package, let release = availableRelease, let id = operationID else { return }
+        let busyMessage = "Return to the library and finish active tasks to install the update."
+        guard !isBusyNow() else { operationError = busyMessage; return }
+        operationError = nil
+        phase = .installing
+        do {
+            try await package.verify()
+        } catch {
+            guard operationID == id else { return }
+            resetTransfer()
+            operationError = error.localizedDescription
+            return
+        }
+        do {
+            guard operationID == id else { return }
+            let beginHandoff = try await prepare(package, release)
+            await flushEdits()
+            guard operationID == id else { return }
+            guard !isBusyNow() else {
+                phase = .ready
+                operationError = busyMessage
+                return
+            }
+            try beginHandoff()
+            phase = .restarting
+            self.package = nil
+            restart()
+        } catch {
+            guard operationID == id else { return }
+            phase = .ready
+            operationError = error.localizedDescription
+        }
+    }
+
+    func resetTransfer() {
+        operationID = nil
+        downloadTask?.cancel()
+        downloadTask = nil
+        package = nil
+        operationError = nil
+        phase = .idle
     }
 
     private func restoreCachedState() {

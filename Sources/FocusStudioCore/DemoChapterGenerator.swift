@@ -1,7 +1,7 @@
 import Foundation
 
 /// Builds prompts for, and parses replies from, a text model that writes
-/// chapter titles and captions for a recording.
+/// named timeline markers for a recording.
 ///
 /// There is deliberately no networking here: callers pass a completion
 /// closure (or a ``TextCompletionProviding``), which keeps every prompt and
@@ -37,7 +37,6 @@ public enum DemoChapterGenerator {
     }
 
     public static let chapterCountRange = 3...8
-    public static let maximumCaptionLength = 60
     /// Keeps the prompt compact for long recordings with many interactions.
     public static let maximumListedEvents = 40
 
@@ -65,71 +64,15 @@ public enum DemoChapterGenerator {
 
     public static func chapterPrompt(project: RecordingProject, language: String) -> Prompt {
         let system = """
-        You write chapter captions for short software product-demo videos. \
-        Reply with JSON only, no prose: {"chapters":[{"start":0,"end":4.5,"title":"...","caption":"..."}]}
+        You name timeline chapters for short software product demos. \
+        Reply with JSON only, no prose: {"chapters":[{"start":0,"end":4.5,"title":"..."}]}
         Rules:
         - \(chapterCountRange.lowerBound) to \(chapterCountRange.upperBound) chapters in chronological order that together cover the whole recording without overlapping.
         - Times are seconds: start >= 0, end <= the recording duration, each chapter at least 1.5 seconds.
         - Group nearby clicks, zooms and typing into one chapter; change chapters at natural pauses.
-        - Titles: at most 4 words. Captions: one line, at most \(maximumCaptionLength) characters, benefit-oriented (what the viewer gains), present tense, no emoji, no quotation marks.
-        - Write titles and captions in \(languageName(language)).
+        - Write each title in \(languageName(language)), using at most four words that describe the action.
         """
         return Prompt(system: system, user: projectSummary(project))
-    }
-
-    // MARK: Polishing captions
-
-    /// Rewrites captions concisely. Identity, timing, titles and enabled
-    /// state of every chapter are preserved; only captions change.
-    public static func polishCaptions(
-        _ chapters: [DemoChapter],
-        project: RecordingProject,
-        language: String,
-        complete: Completion
-    ) async throws -> [DemoChapter] {
-        guard !chapters.isEmpty else { return chapters }
-        let prompt = polishPrompt(chapters: chapters, project: project, language: language)
-        let response = try await complete(prompt.system, prompt.user)
-        return try parsePolishedCaptions(from: response, applyingTo: chapters)
-    }
-
-    public static func polishCaptions(
-        _ chapters: [DemoChapter],
-        project: RecordingProject,
-        language: String,
-        provider: any TextCompletionProviding
-    ) async throws -> [DemoChapter] {
-        try await polishCaptions(chapters, project: project, language: language) { system, user in
-            try await provider.complete(system: system, user: user, json: true)
-        }
-    }
-
-    public static func polishPrompt(
-        chapters: [DemoChapter],
-        project: RecordingProject,
-        language: String
-    ) -> Prompt {
-        let system = """
-        You polish captions for a software product-demo video. \
-        Reply with JSON only, no prose: {"chapters":[{"index":1,"caption":"..."}]}
-        Rules:
-        - Return every chapter with its original index; do not add, remove or reorder chapters.
-        - Rewrite each caption to be concise, concrete and benefit-oriented: one line, at most \(maximumCaptionLength) characters, present tense, no emoji, no quotation marks.
-        - Use the title and the neighbouring chapters for context; write a caption when one is missing.
-        - Write in \(languageName(language)).
-        """
-        var lines = [projectHeadline(project)]
-        if let description = normalizedDescription(project.settings.productDescription) {
-            lines.append("Product: \(description)")
-        }
-        lines.append("Chapters:")
-        for (index, chapter) in chapters.enumerated() {
-            lines.append(
-                "{\"index\":\(index + 1),\"start\":\(seconds(chapter.start)),\"end\":\(seconds(chapter.end)),"
-                    + "\"title\":\(jsonString(chapter.title)),\"caption\":\(jsonString(chapter.caption))}"
-            )
-        }
-        return Prompt(system: system, user: lines.joined(separator: "\n"))
     }
 
     // MARK: Parsing
@@ -144,38 +87,11 @@ public enum DemoChapterGenerator {
             guard let start = seconds(from: entry["start"]),
                   let end = seconds(from: entry["end"]) else { return nil }
             let title = text(entry["title"]) ?? text(entry["name"]) ?? ""
-            let caption = text(entry["caption"]) ?? text(entry["text"]) ?? text(entry["subtitle"]) ?? ""
-            return DemoChapter(start: start, end: end, title: singleLine(title), caption: singleLine(caption))
+            return DemoChapter(start: start, end: end, title: singleLine(title))
         }
         let valid = ChapterMath.sanitized(chapters, duration: duration)
         guard !valid.isEmpty else { throw Failure.noChapters }
         return valid
-    }
-
-    /// Applies polished captions by 1-based `index` (or by position when the
-    /// reply omits indices). Chapters the reply skips keep their caption.
-    public static func parsePolishedCaptions(
-        from response: String,
-        applyingTo chapters: [DemoChapter]
-    ) throws -> [DemoChapter] {
-        let entries = try chapterEntries(from: response)
-        var result = chapters
-        var applied = 0
-        for (position, entry) in entries.enumerated() {
-            let index: Int
-            if let explicit = seconds(from: entry["index"]) {
-                index = Int(explicit.rounded()) - 1
-            } else {
-                index = position
-            }
-            guard result.indices.contains(index) else { continue }
-            let caption = singleLine(text(entry["caption"]) ?? text(entry["text"]) ?? "")
-            guard !caption.isEmpty else { continue }
-            result[index].caption = caption
-            applied += 1
-        }
-        guard applied > 0 else { throw Failure.noChapters }
-        return result
     }
 
     static func chapterEntries(from response: String) throws -> [[String: Any]] {

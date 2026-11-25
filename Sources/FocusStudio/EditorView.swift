@@ -161,7 +161,7 @@ struct EditorView: View {
             if id != nil { selectedChapterID = nil; selectedRegionEffectID = nil; selectedTool = .zoom }
         }
         .onChange(of: selectedChapterID) { _, id in
-            if id != nil { selectedZoomID = nil; selectedRegionEffectID = nil; selectedTool = .captions }
+            if id != nil { selectedZoomID = nil; selectedRegionEffectID = nil; selectedTool = .chapters }
         }
         .onChange(of: selectedClipID) { _, id in
             if id != nil {

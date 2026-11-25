@@ -1,9 +1,6 @@
 import FocusStudioCore
 import Foundation
 
-/// Chapter captions: timing sanitization, playback selection, fades, the
-/// zoom-based heuristic, SubRip export, AI reply parsing and compatibility.
-/// Everything here is shared by the timeline, Inspector, preview and export.
 func chapterFailures() -> [String] {
     var failures: [String] = []
     func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
@@ -47,23 +44,6 @@ func chapterFailures() -> [String] {
     expect(fresh?.start == 6 && fresh?.end == 10 && fresh?.title == "New", "new chapters are pulled back to fit")
     expect(ChapterMath.newChapter(at: 1, duration: 2, title: "Short")?.end == 2, "new chapters shrink to short recordings")
 
-    // --- Active chapter and fade ---------------------------------------------
-    let long = DemoChapter(start: 0, end: 10, title: "Overview")
-    let nested = DemoChapter(start: 4, end: 6, title: "Detail")
-    let disabled = DemoChapter(start: 5, end: 5.9, title: "Off", isEnabled: false)
-    let chapters = [long, nested, disabled]
-    expect(ChapterMath.activeChapter(at: 2, chapters: chapters)?.id == long.id, "the only covering chapter is active")
-    expect(ChapterMath.activeChapter(at: 5, chapters: chapters)?.id == nested.id, "the latest-starting enabled chapter wins")
-    expect(ChapterMath.activeChapter(at: 11, chapters: chapters) == nil, "nothing is active after the last chapter")
-    expect(ChapterMath.opacity(at: 4, chapter: nested) == 0, "the fade starts from zero")
-    expect(abs(ChapterMath.opacity(at: 4 + ChapterMath.fadeDuration, chapter: nested) - 1) < 1e-9, "fully visible after the fade-in")
-    expect(ChapterMath.opacity(at: 5, chapter: nested) == 1, "opaque in the middle")
-    expect(abs(ChapterMath.opacity(at: 4.14, chapter: nested) - 0.5) < 1e-9, "the fade is a smoother-step")
-    expect(abs(ChapterMath.opacity(at: 5.86, chapter: nested) - 0.5) < 1e-9, "the fade-out mirrors the fade-in")
-    expect(ChapterMath.opacity(at: 6, chapter: nested) == 0
-           && ChapterMath.opacity(at: 3.9, chapter: nested) == 0
-           && ChapterMath.opacity(at: 6.1, chapter: nested) == 0, "opacity is zero at and beyond both ends")
-
     // --- Heuristic chapters --------------------------------------------------
     var project = RecordingProject(
         title: "Demo",
@@ -102,26 +82,6 @@ func chapterFailures() -> [String] {
     expect(ChapterMath.chaptersFromZooms(project: tiny).count == 2, "short recordings get fewer chapters, never shorter than the minimum")
     expect(ChapterMath.chaptersFromZooms(project: empty) { "章节 \($0)" }.first?.title == "章节 1", "heuristic titles can be localized")
 
-    // --- SubRip ---------------------------------------------------------------
-    let srt = ChapterMath.srt(for: [
-        DemoChapter(start: 4.25, end: 3661.5, title: "Long", caption: "Caption wins"),
-        DemoChapter(start: 1.5, end: 4, title: "Title fallback"),
-        DemoChapter(start: 5, end: 6, title: "Hidden", isEnabled: false),
-    ])
-    let expectedSRT = """
-    1
-    00:00:01,500 --> 00:00:04,000
-    Title fallback
-
-    2
-    00:00:04,250 --> 01:01:01,500
-    Caption wins
-
-    """
-    expect(srt == expectedSRT, "SRT numbering, HH:MM:SS,mmm timestamps and caption fallback:\n\(srt)")
-    expect(ChapterMath.srtTimestamp(59.9996) == "00:01:00,000", "SRT timestamps round milliseconds with carry")
-    expect(ChapterMath.srt(for: []).isEmpty, "no chapters make an empty SRT")
-
     // --- Generator parsing ----------------------------------------------------
     let fenced = """
     Here are the chapters:
@@ -137,6 +97,7 @@ func chapterFailures() -> [String] {
     do {
         let parsed = try DemoChapterGenerator.parseChapters(from: fenced, duration: 12)
         expect(parsed.count == 2, "fenced JSON with prose parses and out-of-range chapters are rejected (\(parsed.count))")
+        expect(parsed.allSatisfy { $0.caption.isEmpty }, "AI chapter generation ignores unsolicited subtitle text")
         expect(parsed.first?.title == "Open the dashboard" && parsed.last?.end == 9.5, "numeric strings are accepted")
     } catch {
         failures.append("fenced generator reply must parse: \(error)")
@@ -187,6 +148,7 @@ func chapterFailures() -> [String] {
         TypingActivity(time: 20, x: 0.5, y: 0.5),
     ]
     let prompt = DemoChapterGenerator.chapterPrompt(project: described, language: "zh-Hans")
+    expect(!prompt.system.lowercased().contains("caption"), "AI chapter generation requests only titles and ranges")
     expect(prompt.system.contains("Simplified Chinese") && prompt.system.contains("\"chapters\""),
            "the prompt names the UI language and the JSON shape")
     expect(prompt.user.contains("Finlyze") && prompt.user.contains("2.50@0.25,0.75")
@@ -195,25 +157,6 @@ func chapterFailures() -> [String] {
            "the prompt lists description, clicks, zooms, typing bursts and duration:\n\(prompt.user)")
     expect(DemoChapterGenerator.chapterPrompt(project: described, language: "en").system.contains("in English"),
            "English prompts ask for English")
-
-    // --- Polishing ------------------------------------------------------------
-    let original = [
-        DemoChapter(start: 0, end: 4, title: "One", caption: "old one"),
-        DemoChapter(start: 4, end: 8, title: "Two", caption: "old two"),
-    ]
-    let polishReply = "```\n{\"chapters\":[{\"index\":2,\"caption\":\"  New two  \"},{\"index\":1,\"caption\":\"\"},{\"index\":9,\"caption\":\"ignored\"}]}\n```"
-    do {
-        let polished = try DemoChapterGenerator.parsePolishedCaptions(from: polishReply, applyingTo: original)
-        expect(polished.map(\.id) == original.map(\.id) && polished.map(\.start) == original.map(\.start)
-               && polished.map(\.end) == original.map(\.end) && polished.map(\.title) == original.map(\.title),
-               "polishing preserves ids, times and titles")
-        expect(polished[1].caption == "New two" && polished[0].caption == "old one",
-               "polishing applies non-empty captions by index: \(polished.map(\.caption))")
-    } catch {
-        failures.append("polish reply must parse: \(error)")
-    }
-    let polishPrompt = DemoChapterGenerator.polishPrompt(chapters: original, project: described, language: "en")
-    expect(polishPrompt.user.contains("\"index\":2") && polishPrompt.user.contains("old two"), "the polish prompt lists numbered chapters")
 
     // --- End to end with a fake model -----------------------------------------
     let box = ResultBox<[DemoChapter]>()

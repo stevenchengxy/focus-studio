@@ -69,9 +69,6 @@ struct LibraryView: View {
                             Text("Make every click easy to follow.")
                                 .font(.system(size: 34, weight: .bold, design: .rounded))
                                 .tracking(-0.8)
-                            Text("Record. Edit. Export.")
-                                .font(.system(size: 14))
-                                .foregroundStyle(StudioTheme.secondaryText)
 
                             HStack(spacing: 10) {
                                 Button {

@@ -1137,7 +1137,7 @@ struct SetBackgroundImageTool: AIAssistantTool {
 
 struct UpdateSettingsTool: AIAssistantTool {
     let name = "update_settings"
-    let summary = "Change how the recording looks and exports: background (style, preset, colours, image, blur, brightness), padding, corner radius, shadow, screen animation, zoom scale and cursor following, aspect ratio, motion blur, caption style, the product description, and the export width and frame rate. Only the given keys change."
+    let summary = "Change how the recording looks and exports: background (style, preset, colours, image, blur, brightness), padding, corner radius, shadow, screen animation, zoom scale and cursor following, aspect ratio, motion blur, the product description, and the export width and frame rate. Only the given keys change."
 
     static let backgroundPresetNames = BackgroundPreset.allCases.map(\.rawValue)
     static let aspectRatioNames = CanvasAspectRatio.allCases.map(\.rawValue) + ["auto", "16:9", "9:16", "1:1", "4:3", "3:4"]
@@ -1154,13 +1154,12 @@ struct UpdateSettingsTool: AIAssistantTool {
         "motionBlur": 0...0.3,
         "backgroundBlur": 0...60,
         "backgroundBrightness": -0.5...0.35,
-        "captionScale": CaptionStyle.scaleRange,
     ]
 
     static let allowedKeys = [
         "backgroundStyle", "backgroundPreset", "backgroundColor", "secondaryBackgroundColor", "backgroundImagePath",
         "backgroundBlur", "backgroundBrightness", "padding", "cornerRadius", "shadow", "screenAnimation", "zoomScale", "zoomFollowsCursor",
-        "aspectRatio", "motionBlur", "captionPosition", "captionScale", "showsChapterNumber", "productDescription",
+        "aspectRatio", "motionBlur", "productDescription",
         "exportWidth", "frameRate",
     ]
 
@@ -1183,9 +1182,6 @@ struct UpdateSettingsTool: AIAssistantTool {
                 "zoomFollowsCursor": ["type": "number", "minimum": 0, "maximum": 1, "description": "Camera following for the whole project: 0 holds each zoom's authored target; 1 fully follows the cursor. Leave omitted to preserve the current setting."],
                 "aspectRatio": ["type": "string", "enum": CanvasAspectRatio.allCases.map(\.rawValue), "description": "wide = 16:9, vertical = 9:16, square, classic = 4:3, tall = 3:4"],
                 "motionBlur": ["type": "number", "minimum": 0, "maximum": 0.3, "description": "Motion blur while the camera moves, from 0 (off) to 0.3."],
-                "captionPosition": ["type": "string", "enum": CaptionPosition.allCases.map(\.rawValue)],
-                "captionScale": ["type": "number", "minimum": 0.7, "maximum": 1.6, "description": "Caption size, from 0.7 to 1.6 times the normal size (1)."],
-                "showsChapterNumber": ["type": "boolean"],
                 "productDescription": ["type": "string", "description": "What the demo shows, in the user's words."],
                 "exportWidth": ["type": "integer", "enum": Self.exportWidths, "description": "Width of the exported video in pixels; the height follows the aspect ratio."],
                 "frameRate": ["type": "integer", "enum": Self.exportFrameRates, "description": "Frames per second of the exported video."],
@@ -1341,32 +1337,6 @@ struct UpdateSettingsTool: AIAssistantTool {
             steps.append { $0.aspectRatio = value }
             changes.append("aspectRatio = \(value.rawValue) (\(value.title))")
         }
-        var captionPosition: CaptionPosition?
-        var captionScale: Double?
-        var showsChapterNumber: Bool?
-        if let position = try arguments.choice("captionPosition", in: CaptionPosition.allCases.map(\.rawValue), default: nil),
-           let value = CaptionPosition(rawValue: position) {
-            captionPosition = value
-            changes.append("captionPosition = \(value.rawValue)")
-        }
-        if let value = try number("captionScale") {
-            captionScale = clamp("captionScale", value)
-        }
-        if arguments.has("showsChapterNumber") {
-            guard let value = arguments.bool("showsChapterNumber") else { throw AIToolError.invalidArgument("\"showsChapterNumber\" must be true or false.") }
-            showsChapterNumber = value
-            changes.append("showsChapterNumber = \(value)")
-        }
-        if captionPosition != nil || captionScale != nil || showsChapterNumber != nil {
-            let (position, scale, showsNumber) = (captionPosition, captionScale, showsChapterNumber)
-            steps.append { settings in
-                var caption = settings.resolvedCaptionStyle
-                if let position { caption.position = position }
-                if let scale { caption.scale = scale }
-                if let showsNumber { caption.showsChapterNumber = showsNumber }
-                settings.captionStyle = caption.sanitized
-            }
-        }
         if arguments.has("productDescription") {
             let description = (arguments.string("productDescription") ?? "").prefix(600)
             let stored = description.isEmpty ? nil : String(description)
@@ -1398,7 +1368,7 @@ struct UpdateSettingsTool: AIAssistantTool {
 
 struct SetChaptersTool: AIAssistantTool {
     let name = "set_chapters"
-    let summary = "Replace (or append to) the demo's chapters: time ranges with a short title and an on-video caption. Times are seconds within the recording; each chapter needs at least 0.5 s and a title or caption."
+    let summary = "Replace (or append to) the demo's chapters: named time ranges on the editing timeline. Times are seconds within the recording; each chapter needs at least 0.5 s and a title."
 
     var parametersSchema: [String: Any] {
         [
@@ -1409,12 +1379,11 @@ struct SetChaptersTool: AIAssistantTool {
                     "type": "array",
                     "items": [
                         "type": "object",
-                        "required": ["start", "end"],
+                        "required": ["start", "end", "title"],
                         "properties": [
                             "start": ["type": "number"],
                             "end": ["type": "number"],
                             "title": ["type": "string", "description": "At most 4 words"],
-                            "caption": ["type": "string", "description": "One line, at most 60 characters, benefit-oriented"],
                         ],
                     ],
                 ],
@@ -1430,15 +1399,14 @@ struct SetChaptersTool: AIAssistantTool {
     ) async throws -> AIToolResult {
         let arguments = AIToolArguments(raw)
         let entries = arguments.dictionaryList("chapters")
-        guard !entries.isEmpty else { throw AIToolError.invalidArgument("\"chapters\" must be a non-empty array of {start, end, title, caption}.") }
+        guard !entries.isEmpty else { throw AIToolError.invalidArgument("\"chapters\" must be a non-empty array of {start, end, title}.") }
         let project = try await AIToolSupport.requireProject(context)
         let candidates = entries.compactMap { entry -> DemoChapter? in
             let fields = AIToolArguments(entry)
             guard let start = fields.double("start"), let end = fields.double("end") else { return nil }
             return DemoChapter(
                 start: start, end: end,
-                title: fields.string("title") ?? fields.string("name") ?? "",
-                caption: fields.string("caption") ?? fields.string("text") ?? ""
+                title: fields.string("title") ?? fields.string("name") ?? ""
             )
         }
         let append = arguments.bool("append") ?? false
@@ -1448,15 +1416,14 @@ struct SetChaptersTool: AIAssistantTool {
             let existing = append ? (current.chapters ?? []) : []
             let chapters = ChapterMath.sanitized(existing + candidates, duration: current.duration)
             guard !chapters.isEmpty else {
-                throw AIToolError.invalidArgument("No valid chapters: each needs start < end inside 0–\(AIToolSupport.seconds(current.duration)) s, at least \(ChapterMath.minimumDuration) s long, with a title or caption.")
+                throw AIToolError.invalidArgument("No valid chapters: each needs start < end inside 0–\(AIToolSupport.seconds(current.duration)) s, at least \(ChapterMath.minimumDuration) s long, with a title.")
             }
             current.chapters = chapters
             return (chapters, existing.count)
         }
         var lines = [context.format("Set %lld chapters", chapters.count)]
         for (index, chapter) in chapters.enumerated() {
-            let text = chapter.caption.isEmpty ? chapter.title : "\(chapter.title) — \(chapter.caption)"
-            lines.append("\(index + 1). \(AIToolSupport.seconds(chapter.start))–\(AIToolSupport.seconds(chapter.end)) s  \(text)")
+            lines.append("\(index + 1). \(AIToolSupport.seconds(chapter.start))–\(AIToolSupport.seconds(chapter.end)) s  \(chapter.title)")
         }
         let dropped = candidates.count - (chapters.count - kept)
         if dropped != 0 {

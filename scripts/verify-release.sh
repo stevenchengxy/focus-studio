@@ -9,10 +9,12 @@ EXECUTABLE="$APP_DIR/Contents/MacOS/FocusStudio"
 # The stdio MCP server that Claude Code, Codex and other clients start.
 HELPER="$APP_DIR/Contents/MacOS/focus-studio-mcp"
 HELPER_IDENTIFIER="com.local.focusstudio.mcp"
+UPDATE_HELPER="$APP_DIR/Contents/MacOS/focus-studio-update"
 PLIST="$APP_DIR/Contents/Info.plist"
 
 [[ -x "$EXECUTABLE" ]] || { echo "Missing app executable: $EXECUTABLE" >&2; exit 1; }
 [[ -f "$HELPER" && -x "$HELPER" && ! -L "$HELPER" ]] || { echo "Missing MCP helper executable: $HELPER" >&2; exit 1; }
+[[ -f "$UPDATE_HELPER" && -x "$UPDATE_HELPER" && ! -L "$UPDATE_HELPER" ]] || { echo "Missing update helper." >&2; exit 1; }
 plutil -lint "$PLIST"
 codesign --verify --deep --strict "$APP_DIR"
 icon_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$PLIST")"
@@ -47,6 +49,12 @@ helper_architecture_list="$(lipo -archs "$HELPER")"
     exit 1
 }
 
+update_architectures="$(lipo -archs "$UPDATE_HELPER")"
+[[ "${(j: :)${(o)${(z)update_architectures}}}" == "${(j: :)${(o)${(z)architecture_list}}}" ]] || {
+    echo "Update helper architectures differ from the app." >&2
+    exit 1
+}
+codesign --verify --strict "$UPDATE_HELPER"
 minimum_macos="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$PLIST")"
 bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST")"
 app_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")"
@@ -55,7 +63,7 @@ background_count="$(find "$APP_DIR/Contents/Resources/Backgrounds" -name '*.jpg'
     echo "Unexpected app platform or bundle identity." >&2
     exit 1
 }
-for binary in "$EXECUTABLE" "$HELPER"; do
+for binary in "$EXECUTABLE" "$HELPER" "$UPDATE_HELPER"; do
     for architecture in ${(z)architecture_list}; do
         linked_minimum="$(xcrun vtool -arch "$architecture" -show-build "$binary" | awk '/minos / { print $2; exit }')"
         [[ "$linked_minimum" == "$minimum_macos" ]] || { echo "${binary:t} $architecture minimum OS mismatch: $linked_minimum" >&2; exit 1; }
@@ -63,7 +71,7 @@ for binary in "$EXECUTABLE" "$HELPER"; do
 done
 
 # Every linked framework/runtime must ship with macOS, not the developer's Mac.
-for binary in "$EXECUTABLE" "$HELPER"; do
+for binary in "$EXECUTABLE" "$HELPER" "$UPDATE_HELPER"; do
     while IFS= read -r dependency; do
         case "$dependency" in
             /System/Library/*|/usr/lib/*) ;;
@@ -138,7 +146,7 @@ done
 # copy projects, user preferences, or Codex credentials into a distribution.
 while IFS= read -r entry; do
     case "$entry" in
-        Contents/Info.plist|Contents/MacOS/FocusStudio|Contents/MacOS/focus-studio-mcp|Contents/_CodeSignature/CodeResources) ;;
+        Contents/Info.plist|Contents/MacOS/FocusStudio|Contents/MacOS/focus-studio-mcp|Contents/MacOS/focus-studio-update|Contents/_CodeSignature/CodeResources) ;;
         Contents/Resources/FocusStudio.icns|Contents/Resources/FocusStudioIcon.png|Contents/Resources/ThirdPartyNotices.txt) ;;
         Contents/Resources/en.lproj/Localizable.strings|Contents/Resources/zh-Hans.lproj/Localizable.strings) ;;
         Contents/Resources/en.lproj/InfoPlist.strings|Contents/Resources/zh-Hans.lproj/InfoPlist.strings) ;;

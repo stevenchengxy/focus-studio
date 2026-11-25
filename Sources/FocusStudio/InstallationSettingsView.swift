@@ -322,7 +322,8 @@ struct InstallationSettingsView: View {
 
     var body: some View {
         Form {
-            AppUpdateSettingsSection()
+            AppUpdateSettingsSection(isBusy: isBusy || installation.isWorking,
+                                     isBusyNow: { isBusyNow() || installation.isWorking })
             Section("This copy") {
                 LabeledContent("Version", value: installation.current.map { "\($0.release.version) (\($0.release.build))" } ?? "—")
                 Text(verbatim: Bundle.main.bundleURL.path).font(.caption).textSelection(.enabled)

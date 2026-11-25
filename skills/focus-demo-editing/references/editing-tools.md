@@ -138,7 +138,7 @@ This changes camera framing only; the recorded cursor and click metadata stay av
 ## Preview, export, report
 
 Use `capture_frame` with the edited `project_id` and a `time` near each cut and zoom/result. Its rendered image
-includes the camera, cursor, background and captions. Review the images; an empty tool error is not a preview.
+includes the camera, cursor, background and visual effects. Review the images; an empty tool error is not a preview.
 For a motion draft, use `export_project` with `width: 1280`, `frame_rate: 30` and a distinct preview path.
 Export the final version with the requested width/fps. Read the actual returned path and resolve `wait_for_job`
 until complete. Avoid overwriting an existing output unless it belongs to this task or the user requested it.

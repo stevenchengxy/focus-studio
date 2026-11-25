@@ -38,7 +38,7 @@ public enum AIProjectReport {
         lines.append("Title: \(title.isEmpty ? "Untitled" : title) | Duration: \(seconds(project.duration)) s | Source: \(project.sourceWidth)×\(project.sourceHeight) | Clicks: \(project.clickEvents.count) | Zooms: \(project.zoomSegments.filter(\.isEnabled).count) | Chapters: \(project.chapters?.count ?? 0)")
         let interactions = project.resolvedInteractions
         lines.append("Interaction trace: source \(project.interactionTrace?.source.rawValue ?? "system") | cursor display \(project.interactionTrace?.cursorDisplayMode.rawValue ?? "overlay") | cursor samples \(interactions.cursorSamples.count) | events \(project.interactionTrace?.events.count ?? 0) | typing events \(project.resolvedTypingActivity.count) | rejected events \(interactions.rejectedEventCount)")
-        lines.append("Look: background \(backgroundDescription(settings)) | aspect \(settings.resolvedCanvasAspectRatio.title) | padding \(Int(settings.resolvedFramePadding)) px | corner radius \(Int(settings.resolvedFrameCornerRadius)) px | shadow \(seconds(settings.resolvedFrameShadow)) | screen animation \(settings.screenAnimation.rawValue) | zoom scale \(seconds(settings.zoomScale))× | cursor follow \(seconds(settings.resolvedZoomFollowsCursor)) (0 = fixed target) | caption \(settings.resolvedCaptionStyle.position.rawValue)")
+        lines.append("Look: background \(backgroundDescription(settings)) | aspect \(settings.resolvedCanvasAspectRatio.title) | padding \(Int(settings.resolvedFramePadding)) px | corner radius \(Int(settings.resolvedFrameCornerRadius)) px | shadow \(seconds(settings.resolvedFrameShadow)) | screen animation \(settings.screenAnimation.rawValue) | zoom scale \(seconds(settings.zoomScale))× | cursor follow \(seconds(settings.resolvedZoomFollowsCursor)) (0 = fixed target)")
         if let description = settings.productDescription?.trimmingCharacters(in: .whitespacesAndNewlines), !description.isEmpty {
             lines.append("Product: \(String(description.prefix(400)))")
         }
@@ -69,7 +69,7 @@ public enum AIProjectReport {
         }
         if let chapters = project.chapters, !chapters.isEmpty {
             let listed = chapters.sorted(by: ChapterMath.precedes).prefix(maximumListedChapters).enumerated().map { index, chapter in
-                "\(index + 1). \(seconds(chapter.start))–\(seconds(chapter.end)) s \(clipped(chapter.title, to: maximumListedCaption))\(chapter.caption.isEmpty ? "" : " — \(clipped(chapter.caption, to: maximumListedCaption))")"
+                "\(index + 1). \(seconds(chapter.start))–\(seconds(chapter.end)) s \(clipped(chapter.title, to: maximumListedCaption))"
             }
             var text = "Chapters: " + listed.joined(separator: "; ")
             if chapters.count > maximumListedChapters { text += "; and \(chapters.count - maximumListedChapters) more" }
@@ -149,7 +149,6 @@ public enum AIProjectReport {
     /// Stored look under update_settings' argument names. Effective frame
     /// geometry is separate so an assistant can restore retained decoration.
     static func lookData(_ settings: ProjectSettings) -> AIJSONValue {
-        let caption = settings.resolvedCaptionStyle
         let preset = BackgroundPreset.allCases.first { $0.matches(primary: settings.backgroundColor, secondary: settings.secondaryBackgroundColor) }
         let description = settings.productDescription?.trimmingCharacters(in: .whitespacesAndNewlines)
         return [
@@ -174,9 +173,6 @@ public enum AIProjectReport {
                 "shadow": .rounded(settings.resolvedFrameShadow),
             ],
             "motionBlur": .rounded(settings.motionBlur),
-            "captionPosition": AIJSONValue(caption.position.rawValue),
-            "captionScale": .rounded(caption.scale),
-            "showsChapterNumber": AIJSONValue(caption.showsChapterNumber),
             "productDescription": (description?.isEmpty ?? true) ? .null : AIJSONValue(clipped(description!)),
         ]
     }
@@ -246,7 +242,6 @@ public enum AIProjectReport {
             "start": .rounded(chapter.start),
             "end": .rounded(chapter.end),
             "title": AIJSONValue(clipped(chapter.title, to: maximumDataChapterText)),
-            "caption": AIJSONValue(clipped(chapter.caption, to: maximumDataChapterText)),
         ]
     }
 

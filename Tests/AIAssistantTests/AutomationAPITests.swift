@@ -245,7 +245,7 @@ extension AIAssistantTests {
         check(settings["look"]?["padding"] == 160 && settings["look"]?["backgroundPreset"] == "ocean" && settings["export_width"] == 2_560 && settings["frame_rate"] == 30, "update_settings returns the resulting look and export: \(settings)")
         check(settings["changes"]?.arrayValue?.contains(.string("padding = 160 (clamped)")) == true, "and the change notes: \(settings["changes"] ?? .null)")
         let chapters = try structured(try await SetChaptersTool().run(arguments: ["chapters": [["start": 0, "end": 4, "title": "Intro", "caption": "Hello"], ["start": 5, "end": 5.1, "title": "Blink"], ["end": 2]]], context: context, progress: { _ in }), "set_chapters")
-        check(chapters["chapters"] == [["index": 1, "start": 0, "end": 4, "title": "Intro", "caption": "Hello"]] && chapters["dropped"] == 2, "set_chapters returns what was kept and how many were dropped: \(chapters)")
+        check(chapters["chapters"] == [["index": 1, "start": 0, "end": 4, "title": "Intro"]] && chapters["dropped"] == 2, "set_chapters returns what was kept and how many were dropped: \(chapters)")
 
         let image = root.appendingPathComponent("structured-background.jpg")
         try Pixels.writeJPEG(width: 32, height: 18, color: (0.3, 0.3, 0.3), to: image)
@@ -406,14 +406,14 @@ extension AIAssistantTests {
         check(app.openID == other.id && box.project?.id == other.id && app.closeCount == 0, "get_project never navigates")
         check(data["id"]?.stringValue == project.id.uuidString && data["title"] == "Checkout flow" && data["duration"] == 20 && data["source_width"] == 640 && data["source_height"] == 360 && data["open_in_editor"] == false, "identity and size: \(data)")
         check(data["created_at"]?.stringValue?.contains("T") == true && data["export_width"] == 1_920 && data["frame_rate"] == 60, "dates and export settings")
-        check(data["look"]?["padding"] == 40 && data["look"]?["backgroundStyle"] == "gradient" && data["look"]?["aspectRatio"] == "wide" && data["look"]?["captionPosition"] == "bottom", "look under update_settings' names: \(data["look"] ?? .null)")
+        check(data["look"]?["padding"] == 40 && data["look"]?["backgroundStyle"] == "gradient" && data["look"]?["aspectRatio"] == "wide" && data["look"]?["captionPosition"] == nil, "look under update_settings' names: \(data["look"] ?? .null)")
         check(data["look"]?["zoomFollowsCursor"] == AIJSONValue(project.settings.resolvedZoomFollowsCursor),
               "get_project reports the resolved camera-follow value that editing can restore")
         check(data["zoom_style"]?["autoZoomEnabled"] == true && data["zoom_style"]?["zoomHold"]?.doubleValue != nil, "zoom style under set_zoom_style's names")
         check(data["audio"]?["background_music"]?["track_id"] == "calm-gradient" && data["audio"]?["background_music"]?["volume"] == 0.3 && data["audio"]?["click"] == true && data["audio"]?["zoom"] == false, "audio under set_sound_effects' names: \(data["audio"] ?? .null)")
         let zoomID = project.zoomSegments[0].id.uuidString
         check(data["zoom_count"] == 1 && data["zooms"]?[0]?["id"]?.stringValue == zoomID && data["zooms"]?[0]?["index"] == 1 && data["zooms"]?[0]?["scale"] == 1.6, "zooms with ids and numbers: \(data["zooms"] ?? .null)")
-        check(data["chapters"]?[0]?["title"] == "Browse" && data["chapters"]?[1]?["caption"] == "One tap" && data["chapters"]?[1]?["index"] == 2, "chapters in time order")
+        check(data["chapters"]?[0]?["title"] == "Browse" && data["chapters"]?[1]?["caption"] == nil && data["chapters"]?[1]?["index"] == 2, "chapters in time order")
         check(data["clicks"]?["count"] == 2 && data["clicks"]?["items"] == [[0.5, 0.3, 0.4], [1.235, 0.1, 0.2]], "clicks as [t, x, y] in time order, rounded: \(data["clicks"] ?? .null)")
         check(data["typing"] == [["t": 4, "x": 0.6, "y": 0.7]] && data["typing_count"] == 1, "typing moments")
         check(data["assets_dir"]?.stringValue == folder.appendingPathComponent("ai").path, "the project's assets folder: \(data["assets_dir"] ?? .null)")
@@ -489,7 +489,7 @@ extension AIAssistantTests {
         let wordyChapters = wordy["chapters"]?.arrayValue ?? []
         let wordyBytes = try wordy.jsonData().count + wordyResult.text.utf8.count
         check(wordy["chapter_count"] == 300 && wordyChapters.count == AIProjectReport.maximumDataChapters && wordyChapters.last?["index"] == .number(Double(AIProjectReport.maximumDataChapters)), "chapters are capped with their total: \(wordy["chapter_count"] ?? .null), \(wordyChapters.count)")
-        check(wordyChapters.allSatisfy { ($0["title"]?.stringValue?.count ?? .max) == AIProjectReport.maximumDataChapterText + 1 && $0["caption"]?.stringValue?.hasSuffix("…") == true && ($0["caption"]?.stringValue?.count ?? .max) == AIProjectReport.maximumDataChapterText + 1 }, "long chapter texts are shortened with …")
+        check(wordyChapters.allSatisfy { ($0["title"]?.stringValue?.count ?? .max) == AIProjectReport.maximumDataChapterText + 1 && $0["caption"] == nil }, "long chapter texts are shortened with …")
         let description = wordy["look"]?["productDescription"]?.stringValue ?? ""
         check(description.count == AIProjectReport.maximumDataText + 1 && description.hasSuffix("…"), "the product description is shortened like update_settings stores it: \(description.count)")
         check(wordyResult.text.contains("; and 288 more") && !wordyResult.text.contains(String(repeating: "c", count: AIProjectReport.maximumListedCaption + 1)), "the text lists 12 chapters with short captions")

@@ -3,13 +3,12 @@ import FocusStudioAutomation
 import FocusStudioCore
 import ImageIO
 import SwiftUI
-import UniformTypeIdentifiers
 
 enum EditorTool: String, CaseIterable, Identifiable {
     case video
     case zoom
     case focus
-    case captions
+    case chapters
     case design
     case cursor
     case audio
@@ -23,7 +22,7 @@ enum EditorTool: String, CaseIterable, Identifiable {
         case .video: return "film.stack"
         case .zoom: return "plus.magnifyingglass"
         case .focus: return "viewfinder"
-        case .captions: return "captions.bubble"
+        case .chapters: return "bookmark"
         case .design: return "paintpalette"
         case .cursor: return "cursorarrow"
         case .audio: return "waveform"
@@ -91,7 +90,7 @@ struct EditorInspectorView: View {
     let onSelectRegion: (UUID?) -> Void
     let onPausePlayback: () -> Void
     @State private var isGeneratingChapters = false
-    @State private var captionsMessage: String?
+    @State private var chapterError: String?
     @State private var trimStartDraft = 0.0
     @State private var trimEndDraft = 0.0
     @State private var transitionDurationDraft = 0.5
@@ -172,8 +171,8 @@ struct EditorInspectorView: View {
                     EditorRegionEffectInspector(project: $project, selectedID: $selectedRegionEffectID,
                                                 currentTime: $currentTime, onSelectRegion: onSelectRegion)
                         .disabled(isVideoEditing)
-                case .captions:
-                    captionsInspector
+                case .chapters:
+                    chaptersInspector
                 case .design:
                     designInspector
                 case .cursor:
@@ -235,12 +234,12 @@ struct EditorInspectorView: View {
                 }
                 .disabled(zoom.wrappedValue.isInstant)
                 .accessibilityIdentifier("editor.zoomMotionPreset")
-                Text(LocalizedStringKey(zoom.wrappedValue.isInstant
-                    ? "Turn off Instant animation to use a camera move."
-                    : zoom.wrappedValue.motionPreset.displayDescription))
-                    .font(.system(size: 10))
-                    .foregroundStyle(StudioTheme.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
+                .help(LocalizedStringKey(zoom.wrappedValue.motionPreset.displayDescription))
+                if zoom.wrappedValue.isInstant {
+                    Text("Turn off Instant animation to use a camera move.")
+                        .font(.system(size: 10))
+                        .foregroundStyle(StudioTheme.secondaryText)
+                }
             }
             InspectorSection("Scale") {
                 LabeledSlider(value: zoom.scale, range: 1.1...3, suffix: "×", decimals: 2)
@@ -1432,12 +1431,12 @@ struct EditorInspectorView: View {
     }
 }
 
-// MARK: - Captions
+// MARK: - Chapters
 
 private let chapterTint = StudioTheme.cyanTrack
 
 extension EditorInspectorView {
-    /// Chapters in playback order; numbering matches the timeline, SRT and video.
+    /// Chapters in timeline order.
     private var sortedChapters: [DemoChapter] {
         (project.chapters ?? []).sorted(by: ChapterMath.precedes)
     }
@@ -1452,12 +1451,12 @@ extension EditorInspectorView {
     }
 
     @ViewBuilder
-    private var captionsInspector: some View {
+    private var chaptersInspector: some View {
         let chapters = sortedChapters
         InspectorSection("Chapters") {
             if chapters.isEmpty {
                 HStack(spacing: 7) {
-                    Image(systemName: "captions.bubble")
+                    Image(systemName: "bookmark")
                     Text("No chapters")
                 }
                 .font(.system(size: 10))
@@ -1473,13 +1472,10 @@ extension EditorInspectorView {
             HStack(spacing: 8) {
                 Button("Add chapter", action: addChapter)
                     .help("Add a 4-second chapter after the last one")
-                    .accessibilityIdentifier("captions.addChapter")
+                    .accessibilityIdentifier("chapters.addChapter")
                 Button("From zooms", action: deriveChaptersFromZooms)
                     .help("Create chapters from the zoom blocks")
-                    .accessibilityIdentifier("captions.fromZooms")
-                Button("Export SRT…", action: exportSRT)
-                    .disabled(chapters.isEmpty)
-                    .help("Save captions as a SubRip subtitle file")
+                    .accessibilityIdentifier("chapters.fromZooms")
             }
             .font(.system(size: 10, weight: .medium))
             .controlSize(.small)
@@ -1491,13 +1487,7 @@ extension EditorInspectorView {
                 TextField("Title", text: chapter.title)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 11))
-                    .accessibilityIdentifier("captions.title")
-                TextField("Caption", text: chapter.caption, axis: .vertical)
-                    .lineLimit(1...3)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 11))
-                    .help("Shown on the video; the title is used when empty")
-                    .accessibilityIdentifier("captions.caption")
+                    .accessibilityIdentifier("chapters.title")
                 NumberField(
                     title: "Start",
                     value: chapterTimeBinding(chapter, value: \.start, edit: ChapterEdit.start),
@@ -1524,45 +1514,18 @@ extension EditorInspectorView {
             .id(selected.id)
         }
 
-        InspectorSection("Style") {
-            Picker("Position", selection: captionStyleBinding(\.position)) {
-                Text("Bottom").tag(CaptionPosition.bottom)
-                Text("Top").tag(CaptionPosition.top)
-            }
-            LabeledSlider(
-                value: captionStyleBinding(\.scale),
-                range: CaptionStyle.scaleRange,
-                label: "Size",
-                suffix: "×",
-                decimals: 2
-            )
-            Toggle("Chapter number", isOn: captionStyleBinding(\.showsChapterNumber))
-                .font(.system(size: 11))
-                .help("Show the chapter number on the caption")
-            ColorPicker("Accent", selection: accentColorBinding, supportsOpacity: false)
-                .font(.system(size: 11))
-                .disabled(!project.settings.resolvedCaptionStyle.showsChapterNumber)
-        }
-
         InspectorSection("AI") {
             TextField("What does this demo show?", text: productDescriptionBinding, axis: .vertical)
                 .lineLimit(1...4)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 11))
-                .help("Used to write chapter titles and captions")
-                .accessibilityIdentifier("captions.productDescription")
+                .accessibilityIdentifier("chapters.productDescription")
             HStack(spacing: 8) {
                 Button("Generate chapters", action: generateChapters)
                     .help(LocalizedStringKey(textCompletion == nil
                         ? "Set up an AI model in Settings"
                         : "Write chapters from the clicks, zooms and typing"))
-                    .accessibilityIdentifier("captions.generate")
-                Button("Polish captions", action: polishCaptions)
-                    .disabled(chapters.isEmpty)
-                    .help(LocalizedStringKey(textCompletion == nil
-                        ? "Set up an AI model in Settings"
-                        : "Rewrite every caption concisely"))
-                    .accessibilityIdentifier("captions.polish")
+                    .accessibilityIdentifier("chapters.generate")
                 if isGeneratingChapters {
                     ProgressView().controlSize(.small)
                 }
@@ -1570,8 +1533,8 @@ extension EditorInspectorView {
             .font(.system(size: 10, weight: .medium))
             .controlSize(.small)
             .disabled(textCompletion == nil || isGeneratingChapters)
-            if let captionsMessage {
-                Text(verbatim: captionsMessage)
+            if let chapterError {
+                Text(verbatim: chapterError)
                     .font(.system(size: 9))
                     .foregroundStyle(StudioTheme.red)
                     .lineLimit(3)
@@ -1622,7 +1585,7 @@ extension EditorInspectorView {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text("Chapter \(number)"))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .accessibilityIdentifier("captions.chapter.\(chapter.id.uuidString)")
+        .accessibilityIdentifier("chapters.chapter.\(chapter.id.uuidString)")
     }
 
     private func seconds(_ value: Double) -> String {
@@ -1656,30 +1619,6 @@ extension EditorInspectorView {
         )
     }
 
-    private func captionStyleBinding<Value>(
-        _ keyPath: WritableKeyPath<CaptionStyle, Value>
-    ) -> Binding<Value> {
-        Binding(
-            get: { project.settings.resolvedCaptionStyle[keyPath: keyPath] },
-            set: { newValue in
-                var style = project.settings.resolvedCaptionStyle
-                style[keyPath: keyPath] = newValue
-                project.settings.captionStyle = style.sanitized
-            }
-        )
-    }
-
-    private var accentColorBinding: Binding<Color> {
-        hexColorBinding(Binding(
-            get: { project.settings.resolvedCaptionStyle.resolvedAccentColorHex },
-            set: { hex in
-                var style = project.settings.resolvedCaptionStyle
-                style.accentColor = hex
-                project.settings.captionStyle = style
-            }
-        ))
-    }
-
     private var productDescriptionBinding: Binding<String> {
         Binding(
             get: { project.settings.productDescription ?? "" },
@@ -1707,22 +1646,7 @@ extension EditorInspectorView {
         let derived = ChapterMath.chaptersFromZooms(project: project) { L10n.format("Chapter %lld", $0) }
         project.chapters = derived
         selectedChapterID = derived.first?.id
-        captionsMessage = nil
-    }
-
-    private func exportSRT() {
-        let panel = NSSavePanel()
-        panel.title = L10n.tr("Export captions")
-        panel.nameFieldStringValue = "\(project.title).srt"
-        panel.allowedContentTypes = [UTType(filenameExtension: "srt", conformingTo: .plainText) ?? .plainText]
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        let text = ChapterMath.srt(for: ChapterMath.sanitized(project.chapters ?? [], duration: project.duration))
-        do {
-            try text.write(to: url, atomically: true, encoding: .utf8)
-            captionsMessage = nil
-        } catch {
-            captionsMessage = error.localizedDescription
-        }
+        chapterError = nil
     }
 
     private func generateChapters() {
@@ -1730,7 +1654,7 @@ extension EditorInspectorView {
         let snapshot = project
         let language = L10n.locale.identifier
         isGeneratingChapters = true
-        captionsMessage = nil
+        chapterError = nil
         Task { @MainActor in
             defer { isGeneratingChapters = false }
             do {
@@ -1742,29 +1666,7 @@ extension EditorInspectorView {
                 project.chapters = chapters
                 selectedChapterID = chapters.first?.id
             } catch {
-                captionsMessage = L10n.tr(error.localizedDescription)
-            }
-        }
-    }
-
-    private func polishCaptions() {
-        guard let provider = textCompletion, !isGeneratingChapters else { return }
-        let snapshot = project
-        let chapters = sortedChapters
-        let language = L10n.locale.identifier
-        isGeneratingChapters = true
-        captionsMessage = nil
-        Task { @MainActor in
-            defer { isGeneratingChapters = false }
-            do {
-                project.chapters = try await DemoChapterGenerator.polishCaptions(
-                    chapters,
-                    project: snapshot,
-                    language: language,
-                    provider: provider
-                )
-            } catch {
-                captionsMessage = L10n.tr(error.localizedDescription)
+                chapterError = L10n.tr(error.localizedDescription)
             }
         }
     }

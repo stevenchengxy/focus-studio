@@ -58,18 +58,6 @@ extension AIAssistantTests {
         check(counts.0 == 0 && counts.1 == 0 && app.imported.isEmpty && box.writeCount == 0,
               "invalid plans do not spend money, import files or change a project")
 
-        let (longCaptionBox, longCaptionApp, longCaptionContext, longCaptionProbe) = fixture()
-        longCaptionBox.project!.settings.aspectRatio = .vertical
-        longCaptionBox.project!.settings.captionStyle = CaptionStyle(scale: 1.6)
-        longCaptionApp.projects = [longCaptionBox.project!]
-        await expectThrows("captions that cannot fit must be split before paid synthesis") {
-            _ = try await tool.run(arguments: ["segments": [["text": String(repeating: "界", count: 240), "start_time": 0]]],
-                                   context: longCaptionContext, progress: { _ in })
-        }
-        let longCounts = await longCaptionProbe.snapshot()
-        check(longCounts.0 == 0 && longCounts.1 == 0 && longCaptionApp.imported.isEmpty && longCaptionBox.writeCount == 0,
-              "caption fit preflight happens before approval, paid synthesis and import")
-
         var denied = context
         denied.isExternal = true
         denied.confirmSpeechGeneration = { _ in false }
@@ -94,15 +82,11 @@ extension AIAssistantTests {
                                                                   ["text": "Share the finished demo.", "start_time": 8]]],
                                          context: context, progress: { _ in })
         let voices = box.project!.settings.resolvedProductDemoAudio.voiceovers!
-        let chapters = box.project!.chapters!
         check(voices.count == 2 && voices[0].timelineStart == 0 && voices[0].timelineEnd == 6
               && voices[1].timelineStart == 8 && voices[1].timelineEnd == 14,
               "narration placement uses measured audio duration and requested output starts")
-        check(chapters.count == 2 && chapters[0].start == 0 && chapters[0].end == 6
-              && chapters[1].start == 8 && chapters[1].end == 14 && box.writeCount == 1,
-              "matching captions and narration are one atomic edit")
-        check(success.data?["subtitle_timing"] == "measured_segment_duration" && success.data?["word_aligned"] == false,
-              "receipt does not claim word alignment")
+        check(box.project!.chapters?.isEmpty != false && box.writeCount == 1 &&
+              success.data?["captions"] == nil, "narration adds only audio and commits once")
         counts = await probe.snapshot()
         check(counts.0 == 2 && counts.1 == 1 && counts.2.contains("exact-speech-model")
               && counts.2.contains("exact-voice") && counts.2.contains("See your work clearly.")
@@ -131,14 +115,12 @@ extension AIAssistantTests {
         let (captionBox, captionApp, captionContext, captionProbe) = fixture()
         captionBox.project!.chapters = [DemoChapter(start: 0, end: 3, title: "Keep this title")]
         captionApp.projects = [captionBox.project!]
-        let original = captionBox.project
-        await expectThrows("existing captions are never silently replaced") {
-            _ = try await tool.run(arguments: ["segments": [["text": "Narration here.", "start_time": 1]]],
-                                   context: captionContext, progress: { _ in })
-        }
+        let originalChapters = captionBox.project!.chapters
+        _ = try await tool.run(arguments: ["segments": [["text": "Narration here.", "start_time": 1]]],
+                               context: captionContext, progress: { _ in })
         counts = await captionProbe.snapshot()
-        check(counts.0 == 0 && captionBox.project == original && captionBox.writeCount == 0,
-              "caption conflicts are caught before synthesis without losing existing text")
+        check(counts.0 == 1 && captionBox.project!.chapters == originalChapters && captionBox.writeCount == 1,
+              "voiceovers can overlap chapter markers without changing them")
 
         let (movingBox, movingApp, baseMovingContext, movingProbe) = fixture()
         var movingContext = baseMovingContext

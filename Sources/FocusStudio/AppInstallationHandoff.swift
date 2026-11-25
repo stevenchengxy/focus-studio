@@ -29,7 +29,7 @@ struct AppInstallationHandoff {
         func others() -> [Instance] {
             runningInstances().filter {
                 $0.processID != currentProcessID && !$0.hasTerminated()
-                    && (destination == nil || $0.url?.standardizedFileURL != destination?.standardizedFileURL)
+                    && (destination == nil || $0.url?.standardizedFileURL.path != destination?.standardizedFileURL.path)
             }
         }
         let copies = others()

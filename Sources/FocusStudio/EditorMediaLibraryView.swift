@@ -53,8 +53,6 @@ struct EditorMediaLibraryView: View {
                 VStack(spacing: 6) {
                     Image(systemName: "photo.on.rectangle.angled")
                         .font(.system(size: 24))
-                    Text("Your media will appear here")
-                        .font(.system(size: 10, weight: .medium))
                     Text("Import a video or image, then drag it onto the video track.")
                         .font(.system(size: 9))
                         .multilineTextAlignment(.center)
@@ -65,10 +63,6 @@ struct EditorMediaLibraryView: View {
                 .padding(.horizontal, 8)
                 .background(StudioTheme.inset, in: RoundedRectangle(cornerRadius: 9))
             } else {
-                Text("Click to add at the playhead, or drag onto the video track.")
-                    .font(.system(size: 9))
-                    .foregroundStyle(StudioTheme.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
                 LazyVGrid(columns: columns, spacing: 8) {
                     ForEach(assets) { asset in
                         mediaCard(asset)
@@ -181,6 +175,7 @@ struct EditorMediaLibraryView: View {
         .onDrag { NSItemProvider(object: asset.id.uuidString as NSString) }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(asset.title), \(asset.kind == .image ? "image" : "video")")
+        .help("Click to add at the playhead, or drag onto the video track.")
         .accessibilityHint("Click to insert at playhead, or drag to the video track")
         .accessibilityIdentifier("media.asset.\(asset.id.uuidString)")
     }

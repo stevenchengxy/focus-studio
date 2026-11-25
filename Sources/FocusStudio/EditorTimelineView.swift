@@ -150,7 +150,7 @@ struct EditorTimelineView: View {
                                     .disabled(isVideoEditing)
                             }
 
-                            timelineRow(label: "Chapters", icon: "captions.bubble") {
+                            timelineRow(label: "Chapters", icon: "bookmark") {
                     ZStack(alignment: .leading) {
                         RoundedRectangle(cornerRadius: 5, style: .continuous)
                             .fill(StudioTheme.inset)
@@ -172,7 +172,7 @@ struct EditorTimelineView: View {
                                     selectedChapterID = chapter.id
                                     selectedZoomID = nil
                                     selectedClipID = nil
-                                    selectedTool = .captions
+                                    selectedTool = .chapters
                                 },
                                 onDelete: {
                                     let id = chapter.id
@@ -380,7 +380,7 @@ struct EditorTimelineView: View {
                     .accessibilityLabel("Select a region")
                     .accessibilityIdentifier("timeline.addRegionEffect")
             }
-            fixedLaneLabel("Chapters", icon: "captions.bubble", tool: .captions) {
+            fixedLaneLabel("Chapters", icon: "bookmark", tool: .chapters) {
                 Button {
                     addChapter(at: currentTime, duration: max(0, project.duration))
                 } label: { Image(systemName: "plus.circle.fill") }
@@ -451,7 +451,7 @@ struct EditorTimelineView: View {
         )
     }
 
-    /// Numbering follows playback order, matching the Inspector, SRT and video.
+    /// Numbering follows playback order, matching the inspector.
     private func chapterNumber(_ id: UUID) -> Int {
         let sorted = (project.chapters ?? []).sorted(by: ChapterMath.precedes)
         return (sorted.firstIndex { $0.id == id } ?? 0) + 1
@@ -470,7 +470,7 @@ struct EditorTimelineView: View {
         selectedChapterID = chapter.id
         selectedZoomID = nil
         selectedClipID = nil
-        selectedTool = .captions
+        selectedTool = .chapters
     }
 
     private func addChapter(at time: Double, duration: Double) {
@@ -488,7 +488,7 @@ struct EditorTimelineView: View {
             if selectedTool == .focus, let id = selectedRegionEffectID {
                 project.regionEffects?.removeAll { $0.id == id }
                 selectedRegionEffectID = nil
-            } else if selectedTool == .captions, let id = selectedChapterID {
+            } else if selectedTool == .chapters, let id = selectedChapterID {
                 project.chapters?.removeAll { $0.id == id }
                 selectedChapterID = nil
             } else if selectedTool == .zoom {
@@ -555,7 +555,7 @@ struct EditorTimelineView: View {
         case "Video": .video
         case "Zoom": .zoom
         case "Local emphasis": .focus
-        case "Chapters": .captions
+        case "Chapters": .chapters
         case "Cursor": .cursor
         case "Audio": .audio
         default: nil
@@ -1138,7 +1138,7 @@ private struct ChapterBlockView: View {
             Text(verbatim: "\(ordinal)")
                 .font(.system(size: 9, weight: .bold, design: .monospaced))
             if showTitle {
-                Text(verbatim: displayedChapter.displayText)
+                Text(verbatim: displayedChapter.title)
                     .font(.system(size: 9, weight: .medium))
                     .lineLimit(1)
                     .truncationMode(.tail)

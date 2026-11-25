@@ -121,7 +121,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // Do not leave a half-finished rename transaction or stale lock when
         // Cmd-Q arrives while the installation worker is still active.
-        guard !AppInstallationCoordinator.shared.isWorking else { return .terminateCancel }
+        guard !AppInstallationCoordinator.shared.isWorking,
+              AppUpdateService.shared.phase != .installing else { return .terminateCancel }
         let services = AppServices.shared
         // A normal Quit request from an updater must never discard a live
         // recording or interrupt the editor's export. Older releases did not
@@ -151,6 +152,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        AppUpdateService.shared.resetTransfer()
         // Helpers see the connection close and report the calls it cut short.
         AppServices.shared.controlServer.stop()
     }

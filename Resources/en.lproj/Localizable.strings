@@ -568,12 +568,10 @@
 "Update Codex CLI or fix ~/.codex/config.toml." = "Update Codex CLI or fix ~/.codex/config.toml.";
 
 /* 1.3: lower text density */
-"Record. Clicks become cinematic zooms. Edit, caption, export." = "Record. Clicks become cinematic zooms. Edit, caption, export.";
 "Uses your existing Codex sign-in." = "Uses your existing Codex sign-in.";
 "Nothing runs until you approve the plan." = "Nothing runs until you approve the plan.";
 
-/* 1.3: chapters and captions */
-"Captions" = "Captions";
+/* 1.3: chapters */
 "Chapters" = "Chapters";
 "Chapter %lld" = "Chapter %lld";
 "Chapter %lld start" = "Chapter %lld start";
@@ -586,24 +584,14 @@
 "Add a 4-second chapter after the last one" = "Add a 4-second chapter after the last one";
 "From zooms" = "From zooms";
 "Create chapters from the zoom blocks" = "Create chapters from the zoom blocks";
-"Export SRT…" = "Export SRT…";
-"Export captions" = "Export captions";
-"Save captions as a SubRip subtitle file" = "Save captions as a SubRip subtitle file";
 "Title" = "Title";
-"Caption" = "Caption";
-"Shown on the video; the title is used when empty" = "Shown on the video; the title is used when empty";
 "Untitled" = "Untitled";
 "Position" = "Position";
-"Chapter number" = "Chapter number";
-"Show the chapter number on the caption" = "Show the chapter number on the caption";
 "Accent" = "Accent";
 "AI" = "AI";
 "What does this demo show?" = "What does this demo show?";
-"Used to write chapter titles and captions" = "Used to write chapter titles and captions";
 "Generate chapters" = "Generate chapters";
-"Polish captions" = "Polish captions";
 "Write chapters from the clicks, zooms and typing" = "Write chapters from the clicks, zooms and typing";
-"Rewrite every caption concisely" = "Rewrite every caption concisely";
 "Set up an AI model in Settings" = "Set up an AI model in Settings";
 "The AI model returned an empty reply." = "The AI model returned an empty reply.";
 "The AI reply did not contain chapter JSON." = "The AI reply did not contain chapter JSON.";
@@ -661,7 +649,6 @@
 "Ask the assistant…" = "Ask the assistant…";
 "Generate a background image for this recording" = "Generate a background image for this recording";
 "Make a 5-second intro clip from the current look" = "Make a 5-second intro clip from the current look";
-"Create chapters and captions from my clicks" = "Create chapters and captions from my clicks";
 "Generate image" = "Generate image";
 "Generate video" = "Generate video";
 "Capture frame" = "Capture frame";
@@ -1208,7 +1195,6 @@
 "Zoom timeline in" = "Zoom timeline in";
 "Timeline zoom" = "Timeline zoom";
 "Fit" = "Fit";
-"Your media will appear here" = "Your media will appear here";
 "Import a video or image, then drag it onto the video track." = "Import a video or image, then drag it onto the video track.";
 "Click to add at the playhead, or drag onto the video track." = "Click to add at the playhead, or drag onto the video track.";
 "Still image" = "Still image";
@@ -1217,7 +1203,6 @@
 "Undo / Redo" = "Undo / Redo";
 "Undo edit" = "Undo edit";
 "Redo edit" = "Redo edit";
-"Connect the AI assistant in Focus Studio." = "Connect the AI assistant in Focus Studio.";
 "Advanced options" = "Advanced options";
 "Connect & test" = "Connect & test";
 "Test again" = "Test again";
@@ -1311,7 +1296,6 @@
 "Media actions: %@" = "Media actions: %@";
 "Move shared media to Trash?" = "Move shared media to Trash?";
 "Only shared copies will be moved to Trash. Media already added to a demo stays in that project." = "Only shared copies will be moved to Trash. Media already added to a demo stays in that project.";
-"Record. Edit. Export." = "Record. Edit. Export.";
 "Media unavailable" = "Media unavailable";
 "Missing media: %@" = "Missing media: %@";
 "No Ark key" = "No Ark key";
@@ -1488,7 +1472,6 @@
 "Could not save the key. Please try again." = "Could not save the key. Please try again.";
 "Checking credentials without generating audio…" = "Checking credentials without generating audio…";
 "Checks your key without generating audio." = "Checks your key without generating audio.";
-"Codex can turn your script into narration and captions. Generation asks for confirmation before using paid credits." = "Codex can turn your script into narration and captions. Generation asks for confirmation before using paid credits.";
 "Key verified. Audio generation has not been tested." = "Key verified. Audio generation has not been tested.";
 "Service reachable. Audio generation has not been tested." = "Service reachable. Audio generation has not been tested.";
 "Settings valid. This service has no model-list check; audio generation has not been tested." = "Settings valid. This service has no model-list check; audio generation has not been tested.";
@@ -1564,7 +1547,6 @@
 "Confirm that you are using Focus Studio on this Mac to enable community publishing. No project will be uploaded." = "Confirm that you are using Focus Studio on this Mac to enable community publishing. No project will be uploaded.";
 "Confirm this Mac" = "Confirm this Mac";
 "Connect with ChatGPT" = "Connect with ChatGPT";
-"Connect your ChatGPT account to share creations." = "Connect your ChatGPT account to share creations.";
 "Connection saved" = "Connection saved";
 "Connection saved. Refresh to verify your account." = "Connection saved. Refresh to verify your account.";
 "Copy code" = "Copy code";
@@ -1625,3 +1607,24 @@
 "This connection code expired. Connect again to get a new code." = "This connection code expired. Connect again to get a new code.";
 "Community connection is temporarily unavailable. Your local recordings and exports are unaffected." = "Community connection is temporarily unavailable. Your local recordings and exports are unaffected.";
 "Your browser could not open. Try connecting again." = "Your browser could not open. Try connecting again.";
+"Retry download" = "Retry download";
+"Install and restart" = "Install and restart";
+"Downloading update · %d%%" = "Downloading update · %d%%";
+"Downloading update…" = "Downloading update…";
+"Verifying update…" = "Verifying update…";
+"Focus Studio %@ is ready to install." = "Focus Studio %@ is ready to install.";
+"Preparing update…" = "Preparing update…";
+"Restarting Focus Studio…" = "Restarting Focus Studio…";
+"View update" = "View update";
+"Return to the library and finish active tasks to install the update." = "Return to the library and finish active tasks to install the update.";
+"The update download did not match the release. Try again." = "The update download did not match the release. Try again.";
+"The update could not be authenticated." = "The update could not be authenticated.";
+"The downloaded update did not pass verification." = "The downloaded update did not pass verification.";
+"Open Focus Studio from Applications to update." = "Open Focus Studio from Applications to update.";
+"The previous version is available for recovery." = "The previous version is available for recovery.";
+"The update helper is missing. Install a fresh copy of Focus Studio." = "The update helper is missing. Install a fresh copy of Focus Studio.";
+"The downloaded app does not match the update version." = "The downloaded app does not match the update version.";
+"The update could not be installed." = "The update could not be installed.";
+"Quit other copies of Focus Studio before updating." = "Quit other copies of Focus Studio before updating.";
+"An update is already in progress." = "An update is already in progress.";
+"The update helper could not start. Please retry." = "The update helper could not start. Please retry.";
