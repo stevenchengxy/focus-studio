@@ -752,7 +752,9 @@ public struct ProjectSettings: Codable, Hashable, Sendable {
     public var zoomEaseOut = Self.defaultZoomEaseOut
     /// Missing in older projects; only newly captured typing metadata uses it.
     public var typingZoom: TypingZoomSettings?
-    public var cursorScale = 1.35
+    public static let cursorScaleRange = 0.5...8.0
+    public static let defaultCursorScale = 1.35
+    public var cursorScale = Self.defaultCursorScale
     public var cursorAnimation: CursorAnimationStyle = .smooth
     /// New projects use our crisp outlined arrow. Optional so projects saved
     /// before cursor themes decode with the native system cursor unchanged.
@@ -824,6 +826,10 @@ public struct ProjectSettings: Codable, Hashable, Sendable {
 
     public var resolvedCursorAppearance: CursorAppearance {
         cursorAppearance ?? .system
+    }
+
+    public var resolvedCursorScale: Double {
+        cursorScale.isFinite ? cursorScale.clamped(to: Self.cursorScaleRange) : Self.defaultCursorScale
     }
 
     public var resolvedShowCursor: Bool {

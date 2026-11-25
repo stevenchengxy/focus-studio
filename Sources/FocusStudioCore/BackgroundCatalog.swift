@@ -2,11 +2,8 @@ import Foundation
 
 /// The background images Focus Studio ships with.
 ///
-/// Every image is output of `scripts/generate-background-assets.swift`, so the
-/// app can offer a full set of demo backgrounds without reading, copying or
-/// redistributing anyone else's artwork. Wallpapers already installed on the
-/// user's Mac remain available separately; those are only ever referenced by
-/// path and are never bundled.
+/// Bundled originals are available offline. System wallpapers and imported
+/// files are resolved separately.
 public struct BackgroundCatalog: Sendable {
     public struct Asset: Codable, Hashable, Sendable, Identifiable {
         public var id: String
@@ -48,6 +45,8 @@ public struct BackgroundCatalog: Sendable {
         var assets: [Asset]
     }
 
+    public static let bundled = try? loadBundled()
+
     public let directoryURL: URL
     public let assets: [Asset]
 
@@ -80,6 +79,30 @@ public struct BackgroundCatalog: Sendable {
             }
         }
         throw CatalogError.notFound
+    }
+
+    private static let referencePrefix = "focusstudio://background/"
+
+    /// The live editor uses a usable file path. Persist an ID only for files
+    /// that actually belong to this catalog, so a project can move to another Mac.
+    public func reference(forFilePath path: String?) -> String? {
+        guard let path, path.hasPrefix(directoryURL.path + "/"),
+              let asset = assets.first(where: { fileURL(for: $0).path == path }) else { return nil }
+        return Self.referencePrefix + asset.id
+    }
+
+    public func resolveStoredImage(_ path: String?) -> URL? {
+        guard let path else { return nil }
+        if path.hasPrefix(Self.referencePrefix) {
+            let id = path.dropFirst(Self.referencePrefix.count)
+            return assets.first(where: { $0.id == id }).map(fileURL(for:))
+        }
+        // Projects saved before portable IDs used the absolute path inside
+        // Focus Studio.app. An imported file with the same name stays external.
+        let directory = (path as NSString).deletingLastPathComponent
+        guard directory.hasSuffix("/Focus Studio.app/Contents/Resources/Backgrounds") else { return nil }
+        let name = (path as NSString).lastPathComponent
+        return assets.first(where: { $0.relativePath == name }).map(fileURL(for:))
     }
 
     public func fileURL(for asset: Asset) -> URL {

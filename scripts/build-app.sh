@@ -182,9 +182,7 @@ done
 ditto "$AUDIO_DIR" "$CONTENTS_DIR/Resources/Audio"
 ditto "$BACKGROUND_DIR" "$CONTENTS_DIR/Resources/Backgrounds"
 
-# Every bundled background is output of scripts/generate-background-assets.swift.
-# The digests recorded in its catalog are re-checked here so a swapped-in
-# third-party image cannot reach a build unnoticed.
+# Verify the catalog digests of the original procedural and ImageGen artwork.
 python3 - "$CONTENTS_DIR/Resources/Backgrounds" <<'PYCHECK'
 import hashlib, json, os, sys
 directory = sys.argv[1]

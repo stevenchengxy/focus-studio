@@ -221,7 +221,8 @@ enum FocusStudioE2E {
             return (path as NSString).isAbsolutePath ? path : directory.appendingPathComponent(path).standardizedFileURL.path
         }
         project.sourceVideoPath = resolve(project.sourceVideoPath)!
-        project.settings.backgroundImagePath = resolve(project.settings.backgroundImagePath)
+        let background = project.settings.backgroundImagePath
+        project.settings.backgroundImagePath = BackgroundCatalog.bundled?.resolveStoredImage(background)?.path ?? resolve(background)
         if var audio = project.settings.productDemoAudio {
             audio.backgroundMusicPath = resolve(audio.backgroundMusicPath)
             audio.clickSoundPath = resolve(audio.clickSoundPath)

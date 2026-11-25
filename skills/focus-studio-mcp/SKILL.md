@@ -205,7 +205,8 @@ recording tools for synchronized automated demos. There is no universal CUA even
 6. Edit: `add_zoom` (`start`, `end`, `x`, `y`, optional `scale` 1.1-3), `remove_zoom` (`id`, `index` or
    `all: true`), `set_zoom_style`, `set_chapters` (`chapters: [{start, end, title}]`, `append`),
    `update_settings` (background, padding, aspect ratio, `exportWidth`, `frameRate`, ...),
-   `set_background_image`, `set_background_music` (`track`: id, title, audio file or `"none"`; `volume`),
+   `set_background_image` (choose a `bundled_id` from `get_status.background_images` or supply a local `path`),
+   `set_background_music` (`track`: id, title, audio file or `"none"`; `volume`),
    `set_sound_effects` (`click`, `zoom`, volumes).
 7. `capture_frame` (`time` in seconds) to look at the result; it returns the rendered frame as an image.
 8. `export_project` with `path: "./demo.mp4"` (relative to your working directory), optional `width`

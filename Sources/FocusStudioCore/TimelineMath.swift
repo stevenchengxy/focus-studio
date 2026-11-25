@@ -554,7 +554,7 @@ public enum TimelineMath {
         }
     }
 
-    public static func cursorPosition(at time: Double, samples: [CursorSample]) -> CursorSample? {
+    public static func cursorPosition(at time: Double, samples: [CursorSample], interpolate: Bool = true) -> CursorSample? {
         guard let first = samples.first else { return nil }
         if time <= first.time { return first }
         guard let last = samples.last else { return first }
@@ -572,6 +572,7 @@ public enum TimelineMath {
         }
 
         let lhs = samples[low]
+        guard interpolate else { return lhs }
         let rhs = samples[high]
         let span = max(0.000_001, rhs.time - lhs.time)
         let raw = ((time - lhs.time) / span).clamped(to: 0...1)

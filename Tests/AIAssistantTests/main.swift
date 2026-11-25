@@ -656,6 +656,13 @@ struct AIAssistantTests {
         check(settings.zoomFollowsCursor == nil && settings.resolvedZoomFollowsCursor == ProjectSettings.defaultZoomFollowsCursor,
               "Unrelated edits preserve the existing cursor-follow default")
         let originalZooms = box.project!.zoomSegments
+        check(settings.resolvedCursorScale == 1.35, "Existing projects keep their original cursor size")
+        let largeCursor = try await tool.run(arguments: ["cursorScale": 6.5], context: context, progress: { _ in })
+        check(largeCursor.data?["look"]?["cursorScale"] == 6.5 && box.project!.settings.resolvedCursorScale == 6.5,
+              "A scale beyond the old slider limit is persisted and reported")
+        let cappedCursor = try await tool.run(arguments: ["cursorScale": 20], context: context, progress: { _ in })
+        check(cappedCursor.data?["look"]?["cursorScale"] == 8 && cappedCursor.text.contains("clamped") && box.project!.zoomSegments == originalZooms,
+              "MCP shares the editor's cursor limit without rewriting camera edits")
         let lockedCamera = try await tool.run(arguments: ["zoomFollowsCursor": 0], context: context, progress: { _ in })
         check(box.project!.settings.zoomFollowsCursor == 0 && lockedCamera.data?["look"]?["zoomFollowsCursor"] == 0,
               "A camera lock is stored and reported without changing zoom targets")
@@ -693,6 +700,8 @@ struct AIAssistantTests {
 
         // Export width and frame rate take exactly the editor's choices.
         let properties = tool.parametersSchema["properties"] as? [String: Any]
+        let sizeProperty = properties?["cursorScale"] as? [String: Any]
+        check(sizeProperty?["minimum"] as? Double == 0.5 && sizeProperty?["maximum"] as? Double == 8, "Cursor size is discoverable in the tool schema")
         let followProperty = properties?["zoomFollowsCursor"] as? [String: Any]
         check(followProperty?["type"] as? String == "number" && followProperty?["minimum"] as? Int == 0 && followProperty?["maximum"] as? Int == 1,
               "Cursor follow uses the existing editor's zero-to-one range")

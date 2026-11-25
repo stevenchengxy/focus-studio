@@ -1097,14 +1097,14 @@ struct CaptureFrameTool: AIAssistantTool {
 
 struct SetBackgroundImageTool: AIAssistantTool {
     let name = "set_background_image"
-    let summary = "Use an image file (generated or imported) as the recording's background."
+    let summary = "Set the recording background using a bundled_id from get_status, or the path of a generated or imported image."
 
     var parametersSchema: [String: Any] {
         [
             "type": "object",
-            "required": ["path"],
             "properties": [
-                "path": ["type": "string", "description": "Local image path or a file name from the assets folder."],
+                "bundled_id": ["type": "string", "description": "An ID from get_status.background_images. Supply exactly one of bundled_id and path."],
+                "path": ["type": "string", "description": "Local image path or a file name from the assets folder. Supply exactly one of path and bundled_id."],
             ],
         ]
     }
@@ -1115,7 +1115,19 @@ struct SetBackgroundImageTool: AIAssistantTool {
         progress: @escaping @Sendable (String) -> Void
     ) async throws -> AIToolResult {
         let arguments = AIToolArguments(raw)
-        let url = try AIToolPaths.existingLocalFile(try arguments.requiredString("path"), context: context)
+        guard arguments.has("path") != arguments.has("bundled_id") else {
+            throw AIToolError.invalidArgument("Supply exactly one of path and bundled_id.")
+        }
+        let url: URL
+        if arguments.has("bundled_id") {
+            let id = try arguments.requiredString("bundled_id")
+            guard let catalog = BackgroundCatalog.bundled, let asset = catalog.assets.first(where: { $0.id == id }) else {
+                throw AIToolError.invalidArgument("Unknown bundled background. See background_images in get_status.")
+            }
+            url = catalog.fileURL(for: asset)
+        } else {
+            url = try AIToolPaths.existingLocalFile(try arguments.requiredString("path"), context: context)
+        }
         guard let size = ArkMediaClient.imagePixelSize(at: url) else { throw AIToolError.invalidArgument("\(url.lastPathComponent) is not a readable image.") }
         let project = try await AIToolSupport.requireProject(context)
         let path = url.path
@@ -1137,7 +1149,7 @@ struct SetBackgroundImageTool: AIAssistantTool {
 
 struct UpdateSettingsTool: AIAssistantTool {
     let name = "update_settings"
-    let summary = "Change how the recording looks and exports: background (style, preset, colours, image, blur, brightness), padding, corner radius, shadow, screen animation, zoom scale and cursor following, aspect ratio, motion blur, the product description, and the export width and frame rate. Only the given keys change."
+    let summary = "Change how the recording looks and exports: background (style, preset, colours, image, blur, brightness), padding, corner radius, shadow, screen animation, zoom scale, cursor size and following, aspect ratio, motion blur, the product description, and the export width and frame rate. Only the given keys change."
 
     static let backgroundPresetNames = BackgroundPreset.allCases.map(\.rawValue)
     static let aspectRatioNames = CanvasAspectRatio.allCases.map(\.rawValue) + ["auto", "16:9", "9:16", "1:1", "4:3", "3:4"]
@@ -1150,6 +1162,7 @@ struct UpdateSettingsTool: AIAssistantTool {
         "cornerRadius": 0...52,
         "shadow": 0...0.8,
         "zoomScale": 1.1...3,
+        "cursorScale": ProjectSettings.cursorScaleRange,
         "zoomFollowsCursor": 0...1,
         "motionBlur": 0...0.3,
         "backgroundBlur": 0...60,
@@ -1159,7 +1172,7 @@ struct UpdateSettingsTool: AIAssistantTool {
     static let allowedKeys = [
         "backgroundStyle", "backgroundPreset", "backgroundColor", "secondaryBackgroundColor", "backgroundImagePath",
         "backgroundBlur", "backgroundBrightness", "padding", "cornerRadius", "shadow", "screenAnimation", "zoomScale", "zoomFollowsCursor",
-        "aspectRatio", "motionBlur", "productDescription",
+        "aspectRatio", "cursorScale", "motionBlur", "productDescription",
         "exportWidth", "frameRate",
     ]
 
@@ -1179,6 +1192,8 @@ struct UpdateSettingsTool: AIAssistantTool {
                 "shadow": ["type": "number", "minimum": 0, "maximum": 0.8, "description": "Shadow strength behind the screen, from 0 (none) to 0.8 (strongest)."],
                 "screenAnimation": ["type": "string", "enum": ScreenAnimationStyle.allCases.map(\.rawValue)],
                 "zoomScale": ["type": "number", "minimum": 1.1, "maximum": 3, "description": "Default magnification for automatic zooms and new manual zooms, from 1.1 to 3."],
+                "cursorScale": ["type": "number", "minimum": ProjectSettings.cursorScaleRange.lowerBound, "maximum": ProjectSettings.cursorScaleRange.upperBound,
+                                "description": "Size of the recorded pointer overlay, from 0.5 to 8 times its reference size. The click hotspot stays fixed. Applies to recordings with a separate pointer layer."],
                 "zoomFollowsCursor": ["type": "number", "minimum": 0, "maximum": 1, "description": "Camera following for the whole project: 0 holds each zoom's authored target; 1 fully follows the cursor. Leave omitted to preserve the current setting."],
                 "aspectRatio": ["type": "string", "enum": CanvasAspectRatio.allCases.map(\.rawValue), "description": "wide = 16:9, vertical = 9:16, square, classic = 4:3, tall = 3:4"],
                 "motionBlur": ["type": "number", "minimum": 0, "maximum": 0.3, "description": "Motion blur while the camera moves, from 0 (off) to 0.3."],
@@ -1309,6 +1324,10 @@ struct UpdateSettingsTool: AIAssistantTool {
         if let value = try number("zoomScale") {
             let scale = clamp("zoomScale", value)
             steps.append { $0.zoomScale = scale }
+        }
+        if let value = try number("cursorScale") {
+            let scale = clamp("cursorScale", value)
+            steps.append { $0.cursorScale = scale }
         }
         if let value = try number("zoomFollowsCursor") {
             let follow = clamp("zoomFollowsCursor", value)

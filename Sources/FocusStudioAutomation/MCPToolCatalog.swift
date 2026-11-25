@@ -232,7 +232,7 @@ public struct MCPToolCatalog: Sendable {
         // Status and the library.
         MCPToolSpec(
             tool: GetStatusTool(), title: "Get status",
-            description: "Report Focus Studio's state: its version, whether it is counting down or recording (recording.elapsed: seconds recorded, paused time left out; recording.paused: whether the person paused it; recording.remaining: seconds of recording left when a duration will stop it), which project is open in the editor, how many projects the library has, which macOS permissions it holds (Screen Recording is needed to record; Accessibility and Input Monitoring give automatic zooms on clicks and typing) and the bundled music tracks with their ids for set_background_music. Call it first to check that recording will work.",
+            description: "Report Focus Studio's state: its version, whether it is counting down or recording (recording.elapsed: seconds recorded, paused time left out; recording.paused: whether the person paused it; recording.remaining: seconds of recording left when a duration will stop it), which project is open in the editor, how many projects the library has, which macOS permissions it holds (Screen Recording is needed to record; Accessibility and Input Monitoring give automatic zooms on clicks and typing) and the bundled music and background image IDs for set_background_music and set_background_image. Call it first to check that recording will work.",
             scope: .global, annotations: .reads
         ),
         MCPToolSpec(
@@ -445,7 +445,7 @@ public struct MCPToolCatalog: Sendable {
         ),
         MCPToolSpec(
             tool: UpdateSettingsTool(), title: "Update settings",
-            description: "Edit background, frame, camera, product description and export settings. backgroundStyle none shows the cropped source without decoration; stored frame settings return when restored. zoomFollowsCursor: 0 locks authored targets, 1 follows the cursor. Only supplied keys change; bounded values are clamped and reported. Opens the editor.",
+            description: "Edit background, frame, camera, cursor size, product description and export settings. backgroundStyle none shows the cropped source without decoration; stored frame settings return when restored. zoomFollowsCursor: 0 locks authored targets, 1 follows the cursor. Only supplied keys change; bounded values are clamped and reported. Opens the editor.",
             scope: .project, annotations: MCPToolAnnotations(readOnly: false, destructive: true, idempotent: true),
             propertyDescriptions: ["backgroundImagePath": "An image file: an absolute path, or relative to your working directory."]
         ),
@@ -456,7 +456,7 @@ public struct MCPToolCatalog: Sendable {
         ),
         MCPToolSpec(
             tool: SetBackgroundImageTool(), title: "Set background image",
-            description: "Use an image file as a project's background behind the recording. Focus Studio opens the project in its editor.",
+            description: "Set a project's background using a bundled_id from get_status.background_images or a local image path. Supply exactly one. Focus Studio opens the project in its editor.",
             scope: .project, annotations: MCPToolAnnotations(readOnly: false, idempotent: true),
             propertyDescriptions: ["path": "The image file: an absolute path, or relative to your working directory."]
         ),

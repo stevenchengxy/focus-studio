@@ -309,12 +309,9 @@ public enum CursorMotion {
     }
 }
 
-/// While the camera is zoomed in, the focus tracks the pointer the way a
-/// camera operator would: small moves inside a soft central zone are ignored,
-/// larger moves pull the framing after the pointer. The response is a critically
-/// damped spring (no overshoot, a short natural lag), precomputed from the
-/// same data preview and export share and scaled by the zoom envelope so it
-/// vanishes exactly when the camera returns to the overview.
+/// Precomputed viewport framing shared by the player and the exporter. Follow
+/// is expressed in fractions of the visible frame, after sampling the pointer
+/// at the presentation time and applying the recording's source crop.
 public enum CursorFollow {
     public struct Sample: Hashable, Sendable {
         public var time: Double
@@ -328,12 +325,11 @@ public enum CursorFollow {
     }
 
     public static let sampleRate = 60.0
-    /// Fraction of the visible half-size inside which the pointer may roam freely.
-    public static let softZone = 0.62
-    /// Outer zone that triggers reframing; the inner zone is its release threshold.
-    public static let hardZone = 0.9
-    /// Seconds for the spring to settle (about 98%) after the pointer stops.
-    public static let response = 0.32
+    /// Distances from the viewport centre, as a fraction of its visible half-width/height.
+    public static let softZone = 0.42
+    public static let hardZone = 0.76
+    /// Time constant for ordinary tracking. The outer band limits lag on fast moves.
+    public static let response = 0.052
 
     public static func offsets(
         duration: Double,
@@ -341,126 +337,97 @@ public enum CursorFollow {
         settings: ProjectSettings,
         cursor: [CursorSample],
         strength: Double,
+        sourceCrop: SourceCropInsets = SourceCropInsets(),
         discontinuities: [Double] = [],
         cursorIsAvailable: ((Double) -> Bool)? = nil
     ) -> [Sample] {
         let strength = strength.isFinite ? strength.clamped(to: 0...1) : 0
-        guard strength > 0, duration.isFinite, duration > 0, cursor.count > 1,
-              segments.contains(where: { $0.isEnabled }) else { return [] }
-        let step = 1 / sampleRate
-        let count = max(1, Int((duration / step - 1e-9).rounded(.up))) + 1
-        let times = (0..<count).map { $0 == count - 1 ? duration : min(duration, Double($0) * step) }
-        let cameras = times.map { TimelineMath.zoomState(at: $0, segments: segments, settings: settings) }
-        func moved(_ a: ZoomState, _ b: ZoomState) -> Bool {
-            abs(a.scale - b.scale) > 0.000_01 || hypot(a.centerX - b.centerX, a.centerY - b.centerY) > 0.000_01
-                || abs(a.rotationRadians - b.rotationRadians) > 0.000_01
-                || hypot(a.offsetX - b.offsetX, a.offsetY - b.offsetY) > 0.000_01
-        }
-        let transitioning = cameras.indices.map { index in
-            cameras[index].scale > 1.001 && (cameras[index].progress < 0.999
-                || moved(cameras[max(0, index - 1)], cameras[index])
-                || moved(cameras[index], cameras[min(count - 1, index + 1)]))
-        }
-        // One fade follows the authored camera transition. Do not simultaneously
-        // spring toward the pointer while that camera is zooming/panning away.
-        var transitionEnd = [Double](repeating: duration, count: count)
-        var nextEnd = duration
-        for index in (0..<count).reversed() {
-            if !transitioning[index] { nextEnd = times[index] }
-            transitionEnd[index] = nextEnd
-        }
-        let omega = 5.8 / response
-        var positionX = 0.0, positionY = 0.0, velocityX = 0.0, velocityY = 0.0
-        var targetX = 0.0, targetY = 0.0
-        var trackingStartX: Double?, trackingStartY: Double?
-        var trackingOriginX = 0.0, trackingOriginY = 0.0
-        var transitionStart: Double?
-        var transitionX = 0.0, transitionY = 0.0
+        let cues = segments.filter { $0.isEnabled && $0.start.isFinite && $0.end.isFinite }
+            .sorted { $0.start < $1.start }
+        guard strength > 0, duration.isFinite, duration > 0, !cursor.isEmpty, !cues.isEmpty else { return [] }
+
+        let cuts = discontinuities.filter { $0.isFinite && $0 >= 0 }.sorted()
+        let count = max(1, Int((duration * sampleRate - 1e-9).rounded(.up))) + 1
+        let margin = softZone + (1 - strength) * 0.24
+        let limit = hardZone + (1 - strength) * 0.16
+        // Below the default follow strength the user can deliberately keep
+        // more of the authored framing. The default gets full travel at the
+        // edges; stronger settings start panning closer to the centre.
+        let travel = min(1, strength / ProjectSettings.defaultZoomFollowsCursor)
+        var x = 0.0, y = 0.0
+        var previous = ZoomState()
+        var startPointer: CGPoint?
+        var movedDuringTransition = false
+        var followSince: Double?
+        var nextCut = 0, nextCue = 0
+        var active: [ZoomSegment] = []
         var result: [Sample] = []
         result.reserveCapacity(count)
-        // Cursor samples are event-driven. A held sampling gap followed by a
-        // fresh observation is NOT a source/navigation cut and must not reset
-        // an already settled composition. Only explicit continuity information
-        // may clear camera position; otherwise hysteresis retains the framing.
-        let cuts = discontinuities.filter { $0.isFinite && $0 >= 0 }.sorted()
-        var cutIndex = 0
         for index in 0..<count {
-            let time = times[index], zoom = cameras[index]
-            let deltaTime = index == 0 ? 0 : time - times[index - 1]
+            let time = min(duration, Double(index) / sampleRate)
+            let dt = index > 0 ? time - Double(index - 1) / sampleRate : 0
+            while nextCue < cues.count, cues[nextCue].start <= time {
+                active.append(cues[nextCue])
+                nextCue += 1
+            }
+            active.removeAll { $0.end < time }
+            let zoom = TimelineMath.zoomState(at: time, segments: active, settings: settings)
+            let crossedCut = nextCut < cuts.count && cuts[nextCut] <= time
+            while nextCut < cuts.count, cuts[nextCut] <= time { nextCut += 1 }
             let available = cursorIsAvailable?(time) ?? true
-            var crossedCut = false
-            while cutIndex < cuts.count, cuts[cutIndex] <= time { cutIndex += 1; crossedCut = true }
             if crossedCut || !available || zoom.scale <= 1.001 {
-                positionX = 0; positionY = 0; velocityX = 0; velocityY = 0
-                targetX = 0; targetY = 0; trackingStartX = nil; trackingStartY = nil
-                transitionStart = nil
+                x = 0; y = 0; startPointer = nil; movedDuringTransition = false; followSince = nil
             }
-            if !available || zoom.scale <= 1.001 {
-                result.append(Sample(time: time, dx: 0, dy: 0))
-                continue
-            }
-            if transitioning[index] {
-                if transitionStart == nil {
-                    transitionStart = time
-                    transitionX = positionX; transitionY = positionY
-                }
-                let start = transitionStart ?? time
-                let amount = 1 - TimelineMath.smootherStep((time - start) / max(step, transitionEnd[index] - start))
-                positionX = transitionX * amount; positionY = transitionY * amount
-                velocityX = 0; velocityY = 0; targetX = 0; targetY = 0; trackingStartX = nil; trackingStartY = nil
-                result.append(Sample(time: time, dx: positionX * strength, dy: positionY * strength))
-                continue
-            }
-            if transitionStart != nil {
-                positionX = 0; positionY = 0; velocityX = 0; velocityY = 0
-                transitionStart = nil
-            }
-            if let pointer = TimelineMath.cursorPosition(at: time, samples: cursor) {
+            if available && zoom.scale > 1.001 && !crossedCut {
                 let half = 0.5 / zoom.scale
-                // Hysteresis is relative to the NEW framing, not the original
-                // zoom centre. Moving back inside that frame must not trigger an
-                // unnecessary camera return while the user reads or hovers.
-                let previousPointer = index > 0 ? TimelineMath.cursorPosition(at: times[index - 1], samples: cursor) : nil
-                func updatedTarget(_ target: Double, started: inout Double?, origin: inout Double,
-                                   pointer: Double, previous: Double?, base: Double) -> Double {
-                    let delta = pointer - base - target
-                    let speed = previous.map { abs(pointer - $0) / max(1e-9, deltaTime) } ?? 0
-                    if let start = started {
-                        if time - start >= 0.12 && abs(delta) < half * softZone {
-                            started = nil
-                            return target
-                        }
-                    } else {
-                        guard abs(delta) > half * hardZone else { return target }
-                        started = time
-                        origin = target
+                let sampled = TimelineMath.cursorPosition(at: time, samples: cursor, interpolate: settings.cursorAnimation != .none)
+                let pointer = sampled.flatMap { sourceCrop.croppedPoint(x: $0.x, y: $0.y) }
+                let transitioning = zoom.progress < 0.999
+                    || abs(zoom.centerX - previous.centerX) + abs(zoom.centerY - previous.centerY) > 0.00001
+                if transitioning {
+                    if startPointer == nil { startPointer = pointer }
+                    if let startPointer, let pointer,
+                       max(abs(pointer.x - startPointer.x), abs(pointer.y - startPointer.y)) > half * 0.10 {
+                        movedDuringTransition = true
                     }
-                    let desired = (pointer - base - (delta < 0 ? -1 : 1) * half * softZone)
-                        .clamped(to: (half - base)...(1 - half - base))
-                    let elapsed = time - (started ?? time)
-                    let updated = origin + (desired - origin) * TimelineMath.smootherStep(elapsed / 0.12)
-                    if elapsed >= 0.12 && speed < 0.008 { started = nil }
-                    return updated
+                } else {
+                    startPointer = nil
+                    movedDuringTransition = false
                 }
-                targetX = updatedTarget(targetX, started: &trackingStartX, origin: &trackingOriginX,
-                                        pointer: pointer.x, previous: previousPointer?.x, base: zoom.centerX)
-                targetY = updatedTarget(targetY, started: &trackingStartY, origin: &trackingOriginY,
-                                        pointer: pointer.y, previous: previousPointer?.y, base: zoom.centerY)
-            }
-            func advance(_ position: inout Double, _ velocity: inout Double, toward target: Double) {
-                let previous = position
-                let error = previous - target, momentum = velocity + omega * error
-                let decay = exp(-omega * deltaTime)
-                position = target + (error + momentum * deltaTime) * decay
-                velocity = (velocity - omega * momentum * deltaTime) * decay
-                if position < min(previous, target) || position > max(previous, target) {
-                    position = position.clamped(to: min(previous, target)...max(previous, target))
-                    velocity = 0
+                // A stationary pointer must not steer an authored entrance or
+                // handoff. During an automatic move a traveling pointer can
+                // already be leaving the shot before the entrance is complete.
+                let followTransition = movedDuringTransition && !active.contains { $0.kind == .manual }
+                if transitioning && !followTransition {
+                    followSince = nil
+                    let release = zoom.scale < previous.scale
+                        ? (zoom.scale - 1) / (previous.scale - 1)
+                        : exp(-dt / 0.15)
+                    x *= release
+                    y *= release
+                } else if let pointer {
+                    if followSince == nil { followSince = time }
+                    let engage = TimelineMath.smootherStep((time - (followSince ?? time)) / 0.10)
+                    let mix = -expm1(-dt / response)
+                    func track(_ offset: Double, pointer: Double, base: Double) -> Double {
+                        let delta = (pointer - base) * travel
+                        // The dead zone moves with the actual framing. A small
+                        // reversal or a settled hover therefore leaves it still.
+                        let desired = offset.clamped(to: (delta - half * margin)...(delta + half * margin))
+                        let eased = offset + (desired - offset) * mix
+                        let guarded = eased.clamped(to: (delta - half * limit)...(delta + half * limit))
+                        return offset + (guarded - offset) * engage
+                    }
+                    x = track(x, pointer: pointer.x, base: zoom.centerX)
+                    y = track(y, pointer: pointer.y, base: zoom.centerY)
                 }
+                // Store only camera travel the image can actually show. Latent
+                // offsets behind a source edge otherwise delay a reversal.
+                x = x.clamped(to: (half - zoom.centerX)...(1 - half - zoom.centerX))
+                y = y.clamped(to: (half - zoom.centerY)...(1 - half - zoom.centerY))
             }
-            advance(&positionX, &velocityX, toward: targetX)
-            advance(&positionY, &velocityY, toward: targetY)
-            result.append(Sample(time: time, dx: positionX * strength, dy: positionY * strength))
+            result.append(Sample(time: time, dx: x, dy: y))
+            previous = zoom
         }
         return result
     }

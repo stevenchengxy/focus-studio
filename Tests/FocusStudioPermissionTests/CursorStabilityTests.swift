@@ -196,6 +196,53 @@ func cursorStabilityFailures() -> [String] {
     expect(abs(CursorFollow.offset(at: 3, samples: entering).dx) < 1e-12,
            "camera following returns fully to overview after the authored exit")
 
+    // A fast diagonal crosses most of the *cropped* picture, then doubles
+    // back. Check the output hotspot at 120 fps, including between camera
+    // samples and while the authored automatic zoom is still entering.
+    let followCrop = SourceCropInsets(top: 0.10, leading: 0.08, bottom: 0.12, trailing: 0.20)
+    var travelSettings = settings
+    travelSettings.zoomEaseIn = 0.8
+    let fastCue = [ZoomSegment(start: 0, end: 3, targetX: 0.3, targetY: 0.35, scale: 2.5)]
+    let travel = (0...360).map { index -> CursorSample in
+        let time = Double(index) / 120
+        let out = ((time - 0.30) / 0.28).clamped(to: 0...1)
+        let back = ((time - 1.30) / 0.28).clamped(to: 0...1)
+        let source = followCrop.sourcePoint(x: 0.30 + 0.58 * (out - back), y: 0.35 + 0.44 * (out - back))
+        return CursorSample(time: time, x: source.x, y: source.y)
+    }
+    let fastFrame = CursorFollow.offsets(duration: 3, segments: fastCue, settings: travelSettings,
+                                         cursor: travel, strength: travelSettings.resolvedZoomFollowsCursor, sourceCrop: followCrop)
+    var worstDistanceFromCenter = 0.0
+    for sample in travel where (0.24...2).contains(sample.time) {
+        var camera = TimelineMath.zoomState(at: sample.time, segments: fastCue, settings: travelSettings)
+        let follow = CursorFollow.offset(at: sample.time, samples: fastFrame)
+        camera.centerX += follow.dx
+        camera.centerY += follow.dy
+        let cropped = followCrop.croppedPoint(x: sample.x, y: sample.y)!
+        let hotspot = ZoomFrameTransform(state: camera, width: 1280, height: 800).mappedPoint(x: cropped.x, y: cropped.y)
+        worstDistanceFromCenter = max(worstDistanceFromCenter, abs(hotspot.x - 0.5), abs(hotspot.y - 0.5))
+    }
+    expect(worstDistanceFromCenter < 0.44,
+           "a fast pointer stays inside the visible cropped frame through automatic zoom-in, hold and reversal (\(worstDistanceFromCenter))")
+
+    // Missing crop samples once created a fictional diagonal between the
+    // last and next visible points. Raw mode must sample the observed point
+    // first and freeze the framing when it falls outside the recorded crop.
+    var rawFollow = settings
+    rawFollow.cursorAnimation = .none
+    let rawPath: [CursorSample] = [
+        .init(time: 0, x: 0.44, y: 0.49), .init(time: 0.6, x: 0.97, y: 0.8),
+        .init(time: 1.8, x: 0.73, y: 0.75), .init(time: 2.5, x: 0.73, y: 0.75)
+    ]
+    let rawFrame = CursorFollow.offsets(duration: 3, segments: zooms, settings: rawFollow, cursor: rawPath,
+                                        strength: 1, sourceCrop: followCrop)
+    expect(TimelineMath.cursorPosition(at: 1.79, samples: rawPath, interpolate: false)?.x == 0.97,
+           "raw pointer stays on the last observed pixel until its next timestamp")
+    expect(rawFrame.filter { $0.time < 1.8 }.allSatisfy { abs($0.dx) + abs($0.dy) < 1e-10 },
+           "hidden raw samples cannot fabricate camera movement inside the crop")
+    expect(CursorFollow.offset(at: 2.4, samples: rawFrame).dx > 0.15,
+           "re-entering a crop uses the newly measured point in cropped coordinates")
+
     // Event-driven capture stores no samples while the pointer is still. The
     // tiny hold/jump inserted into its rendered path must not masquerade as a
     // navigation cut and snap a shifted camera back to its original centre.

@@ -165,6 +165,7 @@ public enum AIProjectReport {
             "screenAnimation": AIJSONValue(settings.screenAnimation.rawValue),
             "zoomScale": .rounded(settings.zoomScale),
             "zoomFollowsCursor": .rounded(settings.resolvedZoomFollowsCursor),
+            "cursorScale": .rounded(settings.resolvedCursorScale),
             "aspectRatio": AIJSONValue(settings.aspectRatio.rawValue),
             "effectiveFrame": [
                 "aspectRatio": AIJSONValue(settings.resolvedCanvasAspectRatio.rawValue),

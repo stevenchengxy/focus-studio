@@ -18,11 +18,12 @@ public enum InteractionCursorFollow {
         settings: ProjectSettings,
         cursor: [CursorSample],
         strength: Double,
+        sourceCrop: SourceCropInsets = SourceCropInsets(),
         discontinuities: [Double] = [],
         cursorIsAvailable: ((Double) -> Bool)? = nil
     ) -> [CursorFollow.Sample] {
         CursorFollow.offsets(duration: duration, segments: segments, settings: settings,
-                             cursor: cursor, strength: strength, discontinuities: discontinuities,
+                             cursor: cursor, strength: strength, sourceCrop: sourceCrop, discontinuities: discontinuities,
                              cursorIsAvailable: cursorIsAvailable)
     }
 }

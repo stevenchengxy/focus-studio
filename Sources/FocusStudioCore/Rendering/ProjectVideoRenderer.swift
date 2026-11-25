@@ -943,10 +943,10 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
     private let regionCompositor: RegionEffectCompositor
     private let interactions: InteractionTraceResolution
     private let sortedCursorSamples: [CursorSample]
-    private let cursorSampleTimes: [Double]
     private let cursorMotionTimes: [Double]
     /// Dense, smoothed and click-anchored path used for every style but `.none`.
     private let renderCursorSamples: [CursorSample]
+    private let interpolateCursor: Bool
     private let cursorKindChangeIndices: [Int]
     /// Camera drift after the pointer while zoomed in; empty when disabled.
     private let followOffsets: [CursorFollow.Sample]
@@ -989,14 +989,16 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
             .filter { $0.time.isFinite && $0.x.isFinite && $0.y.isFinite }
             .sorted { $0.time < $1.time }
         self.sortedCursorSamples = cursorSamples
-        self.cursorSampleTimes = cursorSamples.map(\.time)
         self.cursorMotionTimes = cursorSamples.indices.compactMap { index in
             guard index > 0 else { return cursorSamples[index].time }
             let lhs = cursorSamples[index - 1]
             let rhs = cursorSamples[index]
             return abs(lhs.x - rhs.x) + abs(lhs.y - rhs.y) > 0.0005 ? rhs.time : nil
         }
-        let smoothingSigma = CursorMotion.smoothingSigma(for: project.settings.cursorAnimation)
+        let embedded = project.interactionTrace?.source == .execution && project.interactionTrace?.cursorDisplayMode == .embedded
+        let visibleCursorAnimation = embedded ? CursorAnimationStyle.none : project.settings.cursorAnimation
+        self.interpolateCursor = visibleCursorAnimation != .none
+        let smoothingSigma = CursorMotion.smoothingSigma(for: visibleCursorAnimation)
         if project.interactionTrace?.source == .execution {
             self.renderCursorSamples = interactions.renderedCursorSamples(sigma: smoothingSigma)
         } else if !(project.editCutTimes ?? []).isEmpty {
@@ -1064,40 +1066,32 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
         // Durations are literal seconds in both editor and rendered output.
         // Animation style changes the curve, never secretly rescales its timing.
         self.timelineSettings = project.settings
-        let croppedCursorPath = self.renderCursorSamples.compactMap { sample -> CursorSample? in
-            guard let point = sourceCropInsets.croppedPoint(x: sample.x, y: sample.y) else { return nil }
-            return CursorSample(time: sample.time, x: point.x, y: point.y, cursorKind: sample.cursorKind, isDragging: sample.isDragging)
-        }
-        // Pointer pixels can already be embedded in a browser recording. The
-        // same measured trace still drives the camera without a second arrow.
         if project.interactionTrace?.source == .execution {
+            // Embedded cursor pixels follow the observed input, even if the user selected
+            // an easing style for the separately drawn overlay.
+            var followSettings = project.settings
+            followSettings.cursorAnimation = visibleCursorAnimation
             self.followOffsets = InteractionCursorFollow.offsets(
-                duration: project.duration,
-                segments: zoomSegments,
-                settings: project.settings,
-                cursor: croppedCursorPath,
-                strength: project.settings.resolvedZoomFollowsCursor,
+                duration: project.duration, segments: zoomSegments, settings: followSettings,
+                cursor: self.renderCursorSamples,
+                strength: project.settings.resolvedZoomFollowsCursor, sourceCrop: sourceCropInsets,
                 discontinuities: interactions.discontinuityTimes,
                 cursorIsAvailable: { interactions.cursorIsAvailable(at: $0) }
             )
+        } else if !project.settings.resolvedShowCursor {
+            self.followOffsets = []
         } else if !(project.editCutTimes ?? []).isEmpty {
-            self.followOffsets = project.settings.resolvedShowCursor
-                ? EditedTimelineMotion.followOffsets(
-                    duration: project.duration, segments: zoomSegments,
-                    settings: project.settings, cursor: croppedCursorPath,
-                    strength: project.settings.resolvedZoomFollowsCursor,
-                    cutTimes: project.editCutTimes ?? []
-                ) : []
+            self.followOffsets = EditedTimelineMotion.followOffsets(
+                duration: project.duration, segments: zoomSegments, settings: project.settings,
+                cursor: self.renderCursorSamples, strength: project.settings.resolvedZoomFollowsCursor,
+                cutTimes: project.editCutTimes ?? [], sourceCrop: sourceCropInsets
+            )
         } else {
-            self.followOffsets = project.settings.resolvedShowCursor
-                ? CursorFollow.offsets(
-                    duration: project.duration,
-                    segments: zoomSegments,
-                    settings: project.settings,
-                    cursor: croppedCursorPath,
-                    strength: project.settings.resolvedZoomFollowsCursor
-                )
-                : []
+            self.followOffsets = CursorFollow.offsets(
+                duration: project.duration, segments: zoomSegments, settings: project.settings,
+                cursor: self.renderCursorSamples, strength: project.settings.resolvedZoomFollowsCursor,
+                sourceCrop: sourceCropInsets
+            )
         }
         self.primaryColor = CIColor(hex: project.settings.backgroundColor)
             ?? CIColor(red: 0.427, green: 0.365, blue: 0.984, alpha: 1)
@@ -1167,9 +1161,16 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
         let zoom = zoomState(at: seconds)
         let sourceSize = sourceCropRect.size
         let zoomScale = max(1, zoom.scale)
+        var protectedHotspot: CGPoint?
+        if zoom.rotationRadians != 0 || zoom.offsetX != 0 || zoom.offsetY != 0 {
+            let follow = CursorFollow.offset(at: seconds, samples: followOffsets)
+            if abs(follow.dx) + abs(follow.dy) > 0.00001, let pointer = cursorPosition(at: seconds) {
+                protectedHotspot = sourceCropInsets.croppedPoint(x: pointer.x, y: pointer.y)
+            }
+        }
         let camera = ZoomFrameTransform(
-            state: zoom,
-            width: Double(sourceSize.width), height: Double(sourceSize.height)
+            state: zoom, width: Double(sourceSize.width), height: Double(sourceSize.height),
+            keepingVisible: protectedHotspot
         )
         let zoomedSource = croppedSource
             .transformed(by: camera.affineTransform)
@@ -1406,7 +1407,8 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
     private static func loadBackgroundImage(path: String?, relativeTo directory: URL) -> CIImage? {
         guard let rawPath = path?.trimmingCharacters(in: .whitespacesAndNewlines),
               !rawPath.isEmpty else { return nil }
-        let expandedPath = NSString(string: rawPath).expandingTildeInPath
+        let expandedPath = BackgroundCatalog.bundled?.resolveStoredImage(rawPath)?.path
+            ?? NSString(string: rawPath).expandingTildeInPath
         let url: URL
         if let parsed = URL(string: expandedPath), parsed.isFileURL {
             url = parsed
@@ -1481,7 +1483,7 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
             y: geometry.screenFrame.maxY - point.y * geometry.screenFrame.height
         )
         let sourceReferenceScale = geometry.screenFrame.width / CGFloat(visibleSourceReferenceWidth)
-        let baseScale = max(0.5, sourceReferenceScale) * max(0.1, project.settings.cursorScale)
+        let baseScale = max(0.5, sourceReferenceScale) * project.settings.resolvedCursorScale
             * cursorPressScale(at: seconds)
         let opacity = cursorOpacity(at: seconds)
         func placed(_ graphic: CursorArtwork.Graphic, scaleMultiplier: CGFloat, alpha: Double) -> CIImage {
@@ -1589,16 +1591,8 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
 
     private func cursorPosition(at seconds: Double) -> CursorSample? {
         guard interactions.cursorIsAvailable(at: seconds) else { return nil }
-        guard let first = sortedCursorSamples.first else { return nil }
-        if project.settings.cursorAnimation == .none {
-            // Raw samples, held until the next one: the pointer teleports as recorded.
-            if seconds <= first.time { return first }
-            let lowerIndex = insertionIndex(atOrBefore: seconds, times: cursorSampleTimes)
-            return lowerIndex >= 0 ? sortedCursorSamples[lowerIndex] : first
-        }
-        // Monotone Hermite interpolation over the dense smoothed path keeps
-        // velocity continuous between the 120 Hz samples.
-        return TimelineMath.cursorPosition(at: seconds, samples: renderCursorSamples)
+        return TimelineMath.cursorPosition(at: seconds, samples: renderCursorSamples,
+                                           interpolate: interpolateCursor)
     }
 
     private func cursorOpacity(at seconds: Double) -> Double {
@@ -1637,7 +1631,7 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
             settings: timelineSettings
         )
         guard !followOffsets.isEmpty, zoom.scale > 1 else { return zoom }
-        // Drift after the pointer, then re-clamp so the source edge stays hidden.
+        // Interpolated follow samples must still fit the current frame during a zoom.
         let offset = CursorFollow.offset(at: seconds, samples: followOffsets)
         let halfVisible = 0.5 / zoom.scale
         zoom.centerX = (zoom.centerX + offset.dx).clamped(to: halfVisible...(1 - halfVisible))

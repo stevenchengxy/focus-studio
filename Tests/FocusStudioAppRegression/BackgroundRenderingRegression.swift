@@ -42,6 +42,8 @@ enum BackgroundRenderingRegression {
         let framed = try await preview(project, at: 0.5)
         try expect(pixel(framed, x: 3, y: 3).matches(.magenta), "wallpaper really renders outside the frame")
 
+        try await bundledGallery(project, root: root)
+
         project.settings.backgroundStyle = .none
         let geometry = ProjectVideoRenderer.geometry(for: project)
         try expect(geometry.outputSize == CGSize(width: 640, height: 480)
@@ -110,6 +112,41 @@ enum BackgroundRenderingRegression {
                    && pixel(video, x: 636, y: 476).matches(.red)
                    && pixel(video, x: 320, y: 240).matches(.green),
                    "imported video has no saved wallpaper, padding, shadow or rounded corners")
+    }
+
+    private static func bundledGallery(_ original: RecordingProject, root: URL) async throws {
+        let catalog = try BackgroundCatalog.loadBundled()
+        guard let artwork = catalog.assets.first(where: { $0.id == "tidal-glass" }) else {
+            throw Failure(message: "Missing bundled tidal-glass image")
+        }
+        let url = catalog.fileURL(for: artwork)
+        var project = original
+        project.settings.backgroundImagePath = url.path
+        let store = ProjectStore(projectsDirectory: root.appendingPathComponent("Projects"))
+        let directory = try await store.projectDirectory(for: project.id)
+        let source = URL(fileURLWithPath: original.sourceVideoPath)
+        try FileManager.default.copyItem(at: source, to: directory.appendingPathComponent(source.lastPathComponent))
+        try await store.save(project)
+        let json = try JSONSerialization.jsonObject(with: Data(contentsOf: directory.appendingPathComponent("project.json"))) as? [String: Any]
+        let stored = (json?["settings"] as? [String: Any])?["backgroundImagePath"] as? String
+        try expect(stored == "focusstudio://background/tidal-glass", "save a portable ID for the catalog image")
+        let restored = try await store.loadProjects().first
+        try expect(restored?.settings.backgroundImagePath == url.path, "reopen the built-in background from the active installation")
+        let legacy = "/Old Installation/Focus Studio.app/Contents/Resources/Backgrounds/tidal-glass.jpg"
+        try expect(catalog.resolveStoredImage(legacy) == url && catalog.resolveStoredImage("/Pictures/tidal-glass.jpg") == nil
+                   && catalog.reference(forFilePath: "/Pictures/tidal-glass.jpg") == nil, "relocate old bundled images and preserve same-name imports")
+
+        // Render from the serialized reference, as an independent export consumer can do.
+        project.settings.backgroundImagePath = stored
+        let frame = try await preview(project, at: 0.5)
+        let output = root.appendingPathComponent("tidal.mp4")
+        _ = try await ProjectVideoRenderer.export(project: project, to: output)
+        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: output))
+        let encoded = try await generator.image(at: CMTime(seconds: 0.5, preferredTimescale: 600)).image
+        let screen = pixel(frame, x: 10, y: 10)
+        let movie = pixel(encoded, x: 10, y: 10)
+        try expect(screen.g > screen.r + 20 && abs(screen.r - movie.r) < 25 && abs(screen.g - movie.g) < 25
+                   && abs(screen.b - movie.b) < 25, "the bundled teal photograph matches in preview and exported MP4")
     }
 
     private static func preview(_ project: RecordingProject, at time: Double) async throws -> CGImage {

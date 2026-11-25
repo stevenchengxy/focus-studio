@@ -104,8 +104,7 @@ struct EditorInspectorView: View {
     @State private var isClipSoundExpanded = false
     @State private var isTransitionDetailExpanded = false
     private let systemWallpapers = SystemWallpaperCatalog.installed
-    private let bundledBackgrounds = (try? BackgroundCatalog.loadBundled())?.assets ?? []
-    private let bundledBackgroundCatalog = try? BackgroundCatalog.loadBundled()
+    @State private var showsAllBackgrounds = false
 
     private var selectedZoomIndex: Int? {
         guard let selectedZoomID else { return nil }
@@ -357,6 +356,14 @@ struct EditorInspectorView: View {
         }
     }
 
+    private func backgroundDisplayName(_ path: String) -> String {
+        if let catalog = BackgroundCatalog.bundled,
+           let asset = catalog.assets.first(where: { catalog.fileURL(for: $0).path == path }) {
+            return L10n.tr(asset.title)
+        }
+        return URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+    }
+
     private var designInspector: some View {
         Group {
             InspectorSection("Background") {
@@ -397,29 +404,33 @@ struct EditorInspectorView: View {
                     }
                 }
                 if project.settings.backgroundStyle == .image {
-                    if let catalog = bundledBackgroundCatalog, !bundledBackgrounds.isEmpty {
+                    if let catalog = BackgroundCatalog.bundled, !catalog.assets.isEmpty {
                         Text("FOCUS STUDIO BACKGROUNDS")
                             .font(.system(size: 8, weight: .bold))
                             .tracking(0.55)
                             .foregroundStyle(StudioTheme.secondaryText)
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                ForEach(bundledBackgrounds) { asset in
-                                    let path = catalog.fileURL(for: asset).path
-                                    Button {
-                                        project.settings.backgroundStyle = .image
-                                        project.settings.backgroundImagePath = path
-                                    } label: {
-                                        BackgroundAssetSwatch(
-                                            url: catalog.fileURL(for: asset),
-                                            isSelected: project.settings.backgroundImagePath == path
-                                        )
-                                    }
-                                    .buttonStyle(.plain)
-                                    .help(Text(verbatim: "\(asset.title) · \(asset.mood)"))
-                                    .accessibilityLabel(Text(verbatim: asset.title))
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
+                            ForEach(catalog.assets.prefix(showsAllBackgrounds ? catalog.assets.count : 6)) { asset in
+                                let url = catalog.fileURL(for: asset)
+                                Button {
+                                    project.settings.backgroundImagePath = url.path
+                                } label: {
+                                    WallpaperSwatch(url: url, isSelected: project.settings.backgroundImagePath == url.path)
                                 }
+                                .buttonStyle(.plain)
+                                .help(Text(verbatim: L10n.tr(asset.title)))
+                                .accessibilityLabel(Text(verbatim: L10n.tr(asset.title)))
                             }
+                        }
+                        if catalog.assets.count > 6 {
+                            Button {
+                                showsAllBackgrounds.toggle()
+                            } label: {
+                                Label(showsAllBackgrounds ? LocalizedStringKey("Show fewer backgrounds") : LocalizedStringKey("Show all backgrounds"),
+                                      systemImage: showsAllBackgrounds ? "chevron.up" : "chevron.down")
+                            }
+                            .font(.caption)
+                            .buttonStyle(.plain)
                         }
                     }
                     if systemWallpapers.isEmpty {
@@ -432,16 +443,17 @@ struct EditorInspectorView: View {
                             .tracking(0.55)
                             .foregroundStyle(StudioTheme.secondaryText)
                         ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
+                            LazyHStack(spacing: 8) {
                                 ForEach(Array(systemWallpapers.prefix(16))) { wallpaper in
                                     Button {
                                         project.settings.backgroundStyle = .image
                                         project.settings.backgroundImagePath = wallpaper.path
                                     } label: {
                                         WallpaperSwatch(
-                                            wallpaper: wallpaper,
+                                            url: wallpaper.url,
                                             isSelected: project.settings.backgroundImagePath == wallpaper.path
                                         )
+                                        .frame(width: 82)
                                     }
                                     .buttonStyle(.plain)
                                     .help(wallpaper.displayName)
@@ -471,7 +483,7 @@ struct EditorInspectorView: View {
                     .font(.system(size: 9, weight: .medium))
 
                     if let path = project.settings.backgroundImagePath {
-                        Text(URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent)
+                        Text(verbatim: backgroundDisplayName(path))
                             .font(.system(size: 9, weight: .medium))
                             .foregroundStyle(StudioTheme.secondaryText)
                             .lineLimit(1)
@@ -580,8 +592,12 @@ struct EditorInspectorView: View {
                         .font(.system(size: 11))
                         .disabled(!project.settings.resolvedShowCursor)
                 }
-                LabeledSlider(value: $project.settings.cursorScale, range: 0.5...3, label: "Size", suffix: "×", decimals: 2)
-                    .disabled(!project.settings.resolvedShowCursor)
+                LabeledSlider(value: Binding(
+                    get: { project.settings.resolvedCursorScale },
+                    set: { project.settings.cursorScale = $0 }
+                ), range: ProjectSettings.cursorScaleRange, label: "Size", suffix: "×", decimals: 2)
+                .accessibilityIdentifier("cursor.size")
+                .disabled(!project.settings.resolvedShowCursor)
                 Picker("Cursor press", selection: pressStyleBinding) {
                     ForEach(ClickPressStyle.allCases, id: \.self) { style in
                         Text(LocalizedStringKey(style.title)).tag(style)
@@ -1706,95 +1722,62 @@ private enum ContentCropPreset: String, CaseIterable, Identifiable {
     }
 }
 
-/// The same treatment as a system wallpaper swatch, for an image that ships
-/// with the app rather than one found on the Mac.
-private struct BackgroundAssetSwatch: View {
+private struct WallpaperSwatch: View {
     let url: URL
     let isSelected: Bool
-    @State private var thumbnail: NSImage?
+    @State private var thumbnail: CGImage?
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(StudioTheme.inset)
-            if let thumbnail {
-                Image(nsImage: thumbnail)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                Image(systemName: "photo")
-                    .foregroundStyle(StudioTheme.secondaryText)
+        RoundedRectangle(cornerRadius: 7, style: .continuous)
+            .fill(StudioTheme.inset)
+            .frame(maxWidth: .infinity)
+            .frame(height: 48)
+            .overlay {
+                if let thumbnail {
+                    Image(decorative: thumbnail, scale: 1)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Image(systemName: "photo")
+                        .foregroundStyle(StudioTheme.secondaryText)
+                }
             }
-        }
-        .frame(width: 82, height: 48)
-        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .stroke(
-                    isSelected ? StudioTheme.purple : StudioTheme.line,
-                    lineWidth: isSelected ? 2 : 1
-                )
-        }
-        .overlay(alignment: .bottomTrailing) {
-            if isSelected {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .shadow(color: .black.opacity(0.55), radius: 2, y: 1)
-                    .padding(4)
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(
+                        isSelected ? StudioTheme.purple : StudioTheme.line,
+                        lineWidth: isSelected ? 2 : 1
+                    )
             }
-        }
-        .task(id: url.path) {
-            guard thumbnail == nil else { return }
-            thumbnail = WallpaperSwatch.loadThumbnail(from: url)
-        }
+            .overlay(alignment: .bottomTrailing) {
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.55), radius: 2, y: 1)
+                        .padding(4)
+                }
+            }
+            .accessibilityAddTraits(isSelected ? .isSelected : [])
+            .task(id: url) {
+                let decoded = await WallpaperThumbnails.shared.thumbnail(at: url)
+                if !Task.isCancelled { thumbnail = decoded }
+            }
     }
 }
 
-private struct WallpaperSwatch: View {
-    let wallpaper: SystemWallpaper
-    let isSelected: Bool
-    @State private var thumbnail: NSImage?
+/// Decode only the small swatches, off the UI thread. Opening the inspector
+/// again or scrolling back through the system gallery reuses its thumbnails.
+private actor WallpaperThumbnails {
+    static let shared = WallpaperThumbnails()
+    private let images = NSCache<NSURL, CGImage>()
 
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(StudioTheme.inset)
-            if let thumbnail {
-                Image(nsImage: thumbnail)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                Image(systemName: "photo")
-                    .foregroundStyle(StudioTheme.secondaryText)
-            }
-        }
-        .frame(width: 82, height: 48)
-        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .stroke(
-                    isSelected ? StudioTheme.purple : StudioTheme.line,
-                    lineWidth: isSelected ? 2 : 1
-                )
-        }
-        .overlay(alignment: .bottomTrailing) {
-            if isSelected {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .shadow(color: .black.opacity(0.55), radius: 2, y: 1)
-                    .padding(4)
-            }
-        }
-        .task(id: wallpaper.path) {
-            guard thumbnail == nil else { return }
-            thumbnail = Self.loadThumbnail(from: wallpaper.url)
-        }
-    }
+    private init() { images.countLimit = 48 }
 
-    static func loadThumbnail(from url: URL) -> NSImage? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+    func thumbnail(at url: URL) -> CGImage? {
+        if let cached = images.object(forKey: url as NSURL) { return cached }
+        guard !Task.isCancelled, let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
@@ -1806,7 +1789,8 @@ private struct WallpaperSwatch: View {
             0,
             options as CFDictionary
         ) else { return nil }
-        return NSImage(cgImage: image, size: .zero)
+        images.setObject(image, forKey: url as NSURL)
+        return image
     }
 }
 

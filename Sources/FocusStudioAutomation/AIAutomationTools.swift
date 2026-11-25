@@ -67,7 +67,7 @@ public struct GetProjectTool: AIAssistantTool {
 /// open project, the library size, permissions and the bundled music.
 public struct GetStatusTool: AIAssistantTool {
     public let name = "get_status"
-    public let summary = "Report Focus Studio's state: version, whether it is counting down or recording (for how long, whether the person paused it, and when it stops by itself), which project is open in the editor, how many projects the library has, which permissions are granted (Screen Recording, Accessibility, Input Monitoring) and the bundled music tracks."
+    public let summary = "Report Focus Studio's state: version, whether it is counting down or recording (for how long, whether the person paused it, and when it stops by itself), which project is open in the editor, how many projects the library has, which permissions are granted (Screen Recording, Accessibility, Input Monitoring) and the bundled music tracks and background image IDs."
 
     public init() {}
 
@@ -111,6 +111,11 @@ public struct GetStatusTool: AIAssistantTool {
             lines.append("Bundled music: " + tracks.map { "\($0.title) (\($0.id))" }.joined(separator: ", "))
         }
 
+        let backgrounds = BackgroundCatalog.bundled?.assets ?? []
+        if !backgrounds.isEmpty {
+            lines.append("Bundled background IDs: " + backgrounds.map(\.id).joined(separator: ", "))
+        }
+
         var failure = AIJSONValue.null
         if case let .failed(message) = phase { failure = AIJSONValue(message) }
         let data: AIJSONValue = [
@@ -138,6 +143,7 @@ public struct GetStatusTool: AIAssistantTool {
                 "accessibility": AIJSONValue(permissions.accessibility),
                 "input_monitoring": AIJSONValue(permissions.inputMonitoring),
             ],
+            "background_images": .array(backgrounds.map { ["id": AIJSONValue($0.id), "title": AIJSONValue($0.title)] }),
             "music_tracks": .array(tracks.map { track in
                 [
                     "id": AIJSONValue(track.id),

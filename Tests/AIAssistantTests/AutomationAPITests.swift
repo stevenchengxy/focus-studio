@@ -249,6 +249,9 @@ extension AIAssistantTests {
 
         let image = root.appendingPathComponent("structured-background.jpg")
         try Pixels.writeJPEG(width: 32, height: 18, color: (0.3, 0.3, 0.3), to: image)
+        let bundled = try structured(try await SetBackgroundImageTool().run(arguments: ["bundled_id": "alpine-silence"], context: context, progress: { _ in }), "set_background_image")
+        check(bundled["project_id"] == projectID && bundled["path"]?.stringValue?.hasSuffix("/alpine-silence.jpg") == true
+              && box.project?.settings.backgroundStyle == .image, "select a bundled wallpaper by ID")
         let background = try structured(try await SetBackgroundImageTool().run(arguments: ["path": image.path], context: context, progress: { _ in }), "set_background_image")
         check(background == ["project_id": projectID, "path": AIJSONValue(image), "width": 32, "height": 18], "set_background_image: \(background)")
         let music = try structured(try await SetBackgroundMusicTool().run(arguments: ["track": "calm", "volume": 0.4], context: context, progress: { _ in }), "set_background_music")
@@ -515,6 +518,8 @@ extension AIAssistantTests {
         let data = try structured(idle, "get_status")
         check(data["recording"] == ["state": "idle", "elapsed": nil, "remaining": nil, "paused": false, "error": nil] && data["open_project_id"] == .null && data["library_count"] == 2, "idle state: \(data)")
         check(data["permissions"] == ["screen_recording": false, "accessibility": true, "input_monitoring": false], "permissions: \(data["permissions"] ?? .null)")
+        check(data["background_images"]?.arrayValue?.contains(where: { $0["id"] == "paper-arc" && $0["title"] == "Paper Arc" }) == true,
+              "get_status lists built-in backgrounds by ID and title")
         check(data["music_tracks"] == [["id": "calm-gradient", "title": "Calm Gradient", "mood": "Soft, airy pads", "duration": 61.3, "suggested_volume": 0.17]], "bundled music: \(data["music_tracks"] ?? .null)")
         check(data["app"]?["name"] == "Focus Studio" && data["app"]?["path"]?.stringValue?.isEmpty == false && data["app"]?["version"] != nil, "app identity (version from Bundle.main, null outside the app): \(data["app"] ?? .null)")
         check(idle.text.contains("Recording: idle") && idle.text.contains("Editor: closed") && idle.text.contains("Library: 2 projects")

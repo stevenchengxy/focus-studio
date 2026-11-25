@@ -155,6 +155,8 @@ while IFS= read -r entry; do
         Contents/Resources/Audio/ui-click.wav|Contents/Resources/Audio/soft-tap.wav|Contents/Resources/Audio/typing-key.wav|Contents/Resources/Audio/zoom-whoosh.wav) ;;
         Contents/Resources/Audio/city-loop.mp3|Contents/Resources/Audio/overworld.mp3|Contents/Resources/Audio/calm-loop.mp3|Contents/Resources/Audio/loading-screen-loop.wav) ;;
         Contents/Resources/Backgrounds/catalog.json) ;;
+        Contents/Resources/Backgrounds/alpine-silence.jpg|Contents/Resources/Backgrounds/dune-light.jpg|Contents/Resources/Backgrounds/tidal-glass.jpg) ;;
+        Contents/Resources/Backgrounds/paper-arc.jpg|Contents/Resources/Backgrounds/basalt-lines.jpg|Contents/Resources/Backgrounds/morning-grove.jpg) ;;
         Contents/Resources/Backgrounds/aurora-drift.jpg|Contents/Resources/Backgrounds/deep-ocean.jpg|Contents/Resources/Backgrounds/sunset-haze.jpg|Contents/Resources/Backgrounds/blossom.jpg) ;;
         Contents/Resources/Backgrounds/citrus-fold.jpg|Contents/Resources/Backgrounds/midnight-ink.jpg|Contents/Resources/Backgrounds/graphite.jpg|Contents/Resources/Backgrounds/cloud-deck.jpg) ;;
         Contents/Resources/Backgrounds/emerald-dusk.jpg|Contents/Resources/Backgrounds/copper-sand.jpg|Contents/Resources/Backgrounds/arctic.jpg|Contents/Resources/Backgrounds/plum-velvet.jpg) ;;

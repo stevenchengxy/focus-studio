@@ -100,6 +100,28 @@ func zoomMotionFailures() -> [String] {
     let classicCamera = ZoomFrameTransform(state: ordinary, width: 1920, height: 1080)
     expect(abs(classicCamera.effectiveScale - ordinary.scale) < 1e-9,
            "classic adds no overscan or surprise magnification")
+    // A tilted, zoomed-in ultrawide frame crops more vertical ground than a
+    // square frame. Its actual matrix must still contain a tracked corner.
+    for x in [0.025, 0.975] {
+        for y in [0.025, 0.975] {
+            let pointer = CGPoint(x: x, y: y)
+            var edge = tiltMid
+            edge.scale = 2.35
+            let half = 0.5 / edge.scale
+            edge.centerX = x.clamped(to: half...(1 - half))
+            edge.centerY = y.clamped(to: half...(1 - half))
+            for size in [(2560.0, 1080.0), (1080.0, 1920.0)] {
+                let protected = ZoomFrameTransform(state: edge, width: size.0, height: size.1, keepingVisible: pointer)
+                let mapped = protected.mappedPoint(x: x, y: y)
+                expect((0.029...0.971).contains(mapped.x) && (0.029...0.971).contains(mapped.y),
+                       "the camera preset keeps the visible corner hotspot inside the actual rotated frame")
+                let central = ZoomFrameTransform(state: edge, width: size.0, height: size.1,
+                                                 keepingVisible: CGPoint(x: edge.centerX, y: edge.centerY))
+                expect(central.affineTransform == ZoomFrameTransform(state: edge, width: size.0, height: size.1).affineTransform,
+                       "a safely framed pointer preserves the exact authored tilt")
+            }
+        }
+    }
     if let encoded = try? JSONEncoder().encode(presetZoom),
        var legacy = (try? JSONSerialization.jsonObject(with: encoded)) as? [String: Any] {
         legacy.removeValue(forKey: "motionPreset")

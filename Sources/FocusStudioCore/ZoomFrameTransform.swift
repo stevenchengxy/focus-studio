@@ -62,6 +62,42 @@ public struct ZoomFrameTransform {
         )
     }
 
+    /// When following a visible pointer into a source corner, rotated overscan
+    /// can crop it even after the pan has reached the last valid frame centre.
+    /// Keep the greatest part of the authored pose that still shows the hotspot.
+    public init(state: ZoomState, width: Double, height: Double, keepingVisible point: CGPoint?) {
+        self.init(state: state, width: width, height: height)
+        guard let point, state.rotationRadians != 0 || state.offsetX != 0 || state.offsetY != 0 else { return }
+        func transform(at weight: Double) -> Self {
+            var pose = state
+            pose.rotationRadians *= weight
+            pose.offsetX *= weight
+            pose.offsetY *= weight
+            return Self(state: pose, width: width, height: height)
+        }
+        let level = transform(at: 0)
+        let levelPoint = level.mappedPoint(x: point.x, y: point.y)
+        guard (0...1).contains(levelPoint.x), (0...1).contains(levelPoint.y) else { return }
+        // At the exact source edge even a level camera has zero padding.
+        let marginX = min(0.03, levelPoint.x, 1 - levelPoint.x)
+        let marginY = min(0.03, levelPoint.y, 1 - levelPoint.y)
+        func keepsHotspot(_ transform: Self) -> Bool {
+            let mapped = transform.mappedPoint(x: point.x, y: point.y)
+            return mapped.x >= marginX && mapped.x <= 1 - marginX
+                && mapped.y >= marginY && mapped.y <= 1 - marginY
+        }
+        guard !keepsHotspot(self) else { return }
+        var lower = 0.0, upper = 1.0
+        var best = level
+        for _ in 0..<8 {
+            let middle = (lower + upper) / 2
+            let candidate = transform(at: middle)
+            if keepsHotspot(candidate) { best = candidate; lower = middle }
+            else { upper = middle }
+        }
+        self = best
+    }
+
     /// Map top-left normalized source coordinates into the visible frame.
     /// The cursor hotspot and click feedback must use this exact same matrix.
     public func mappedPoint(x: Double, y: Double) -> CGPoint {

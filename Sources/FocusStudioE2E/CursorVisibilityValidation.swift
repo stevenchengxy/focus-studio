@@ -31,6 +31,9 @@ enum CursorVisibilityValidation {
         visible.settings.hideIdleCursor = false
         visible.settings.cursorScale = 2.5
         visible.settings.motionBlur = 0
+        // Compare pointer pixels with identical camera framing in every render.
+        // Default cursor following can otherwise move the underlying footage.
+        visible.settings.zoomFollowsCursor = 0
         // Keep the synthetic pointer inside both test zooms; otherwise a
         // roaming fixture can move it off screen and falsely fail visibility.
         visible.cursorSamples = [
@@ -57,6 +60,12 @@ enum CursorVisibilityValidation {
         restoredVisible.settings.showCursor = true
         let restoredGenerator = generator(try await ProjectVideoRenderer.prepare(project: restoredVisible))
 
+        var enlarged = visible
+        enlarged.settings.cursorScale = ProjectSettings.cursorScaleRange.upperBound
+        let reopened = try JSONDecoder().decode(RecordingProject.self, from: JSONEncoder().encode(enlarged))
+        try check(reopened.settings.resolvedCursorScale == 8, "presentation-size pointer survives reopening")
+        let largeGenerator = generator(try await ProjectVideoRenderer.prepare(project: reopened))
+
         // The synthetic project includes arrow and I-beam samples.
         var pointerChangedPixels = [Int]()
         for seconds in [0.25, 1.0] {
@@ -72,6 +81,10 @@ enum CursorVisibilityValidation {
             try check(difference(absent, empty).mean < 0.001, "hidden pointer must render exactly like absent cursor metadata")
             try check(difference(shown, shownAgain).mean < 0.001, "turning the pointer back on must restore its rendered appearance")
             pointerChangedPixels.append(changed.changedPixels)
+            let large = try await frame(largeGenerator, at: time)
+            let largeArea = difference(large, absent).changedPixels
+            try check(largeArea > changed.changedPixels * 5,
+                      "8× pointer must cover more area at \(seconds)s (\(largeArea) vs \(changed.changedPixels) pixels)")
         }
 
         var noFeedback = hidden
@@ -106,9 +119,22 @@ enum CursorVisibilityValidation {
             try check(delta < 3, "preview and exported hidden-cursor frame diverged at \(seconds)s")
             exportDifference = max(exportDifference, delta)
         }
+        let largeURL = outputDirectory.appendingPathComponent("focus-studio-large-cursor.mp4")
+        _ = try await ProjectVideoRenderer.export(project: reopened, to: largeURL)
+        let largeExport = AVAssetImageGenerator(asset: AVURLAsset(url: largeURL))
+        largeExport.requestedTimeToleranceBefore = .zero
+        largeExport.requestedTimeToleranceAfter = .zero
+        let arrowTime = CMTime(seconds: 0.25, preferredTimescale: 600)
+        let largePreview = try await frame(largeGenerator, at: arrowTime)
+        let largeEncoded = try await frame(largeExport, at: arrowTime)
+        let hiddenEncoded = try await frame(exported, at: arrowTime)
+        let largePixels = difference(largeEncoded, hiddenEncoded).changedPixels
+        try check(difference(largePreview, largeEncoded).mean < 3 && largePixels > pointerChangedPixels[0] * 5,
+                  "export must preserve the enlarged pointer seen in the preview")
         let report: [String: Any] = [
             "status": "PASS", "legacyDefaultVisible": true,
             "pointerChangedPixels": pointerChangedPixels,
+            "largePointerExportChangedPixels": largePixels,
             "hiddenPointerClickFeedbackPixels": clickPixels,
             "hiddenPointerZoomDifference": zoomDifference,
             "maximumPreviewExportDifference": exportDifference,

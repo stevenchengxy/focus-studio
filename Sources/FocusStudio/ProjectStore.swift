@@ -195,10 +195,9 @@ actor ProjectStore {
             audio.zoomTransitionSoundPath = relativeAssetPath(audio.zoomTransitionSoundPath, in: directory)
             persistedProject.settings.productDemoAudio = audio
         }
-        persistedProject.settings.backgroundImagePath = relativeAssetPath(
-            persistedProject.settings.backgroundImagePath,
-            in: directory
-        )
+        let background = persistedProject.settings.backgroundImagePath
+        persistedProject.settings.backgroundImagePath = BackgroundCatalog.bundled?.reference(forFilePath: background)
+            ?? relativeAssetPath(background, in: directory)
         if var assets = persistedProject.mediaAssets {
             for index in assets.indices {
                 assets[index].filePath = relativeAssetPath(assets[index].filePath, in: directory)
@@ -396,7 +395,9 @@ actor ProjectStore {
             audio.zoomTransitionSoundPath = resolvedAssetPath(audio.zoomTransitionSoundPath, in: directory)
             project.settings.productDemoAudio = audio
         }
-        project.settings.backgroundImagePath = resolvedAssetPath(project.settings.backgroundImagePath, in: directory)
+        let background = project.settings.backgroundImagePath
+        project.settings.backgroundImagePath = BackgroundCatalog.bundled?.resolveStoredImage(background)?.path
+            ?? resolvedAssetPath(background, in: directory)
         if var assets = project.mediaAssets {
             for index in assets.indices {
                 assets[index].filePath = resolvedAssetPath(assets[index].filePath, in: directory)

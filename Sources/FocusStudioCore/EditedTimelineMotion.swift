@@ -30,7 +30,7 @@ public enum EditedTimelineMotion {
         return result
     }
 
-    public static func followOffsets(duration: Double, segments: [ZoomSegment], settings: ProjectSettings, cursor: [CursorSample], strength: Double, cutTimes: [Double]) -> [CursorFollow.Sample] {
+    public static func followOffsets(duration: Double, segments: [ZoomSegment], settings: ProjectSettings, cursor: [CursorSample], strength: Double, cutTimes: [Double], sourceCrop: SourceCropInsets = SourceCropInsets()) -> [CursorFollow.Sample] {
         var result: [CursorFollow.Sample] = []
         for shot in shots(duration: duration, cutTimes: cutTimes) {
             let localCursor = cursor.filter { $0.time >= shot.start && ($0.time < shot.end || shot.end == duration && $0.time == duration) }.map {
@@ -43,7 +43,7 @@ public enum EditedTimelineMotion {
                 copy.end = min(shot.end, zoom.end) - shot.start
                 return copy
             }
-            let localOffsets = CursorFollow.offsets(duration: shot.duration, segments: localZooms, settings: settings, cursor: localCursor, strength: strength)
+            let localOffsets = CursorFollow.offsets(duration: shot.duration, segments: localZooms, settings: settings, cursor: localCursor, strength: strength, sourceCrop: sourceCrop)
             if localOffsets.isEmpty {
                 result.append(.init(time: shot.start, dx: 0, dy: 0))
                 result.append(.init(time: shot.end == duration ? shot.end : shot.end - boundaryEpsilon, dx: 0, dy: 0))
