@@ -205,13 +205,20 @@ struct EditorView: View {
 
             Spacer()
 
-            Picker("Aspect", selection: $project.settings.aspectRatio) {
+            Picker("Aspect", selection: Binding(
+                get: { project.settings.resolvedCanvasAspectRatio },
+                set: { project.settings.aspectRatio = $0 }
+            )) {
                 ForEach(CanvasAspectRatio.allCases, id: \.self) { ratio in
                     Text(LocalizedStringKey(ratio.title)).tag(ratio)
                 }
             }
             .labelsHidden()
             .frame(width: 90)
+            .disabled(!project.settings.hasDecorativeBackground)
+            .help(LocalizedStringKey(project.settings.hasDecorativeBackground
+                ? "Canvas aspect ratio"
+                : "No background uses the source aspect ratio without padding, corners or shadow."))
 
             Button {
                 seek(to: currentTime - 5)

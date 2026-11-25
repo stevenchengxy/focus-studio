@@ -141,6 +141,7 @@ struct AppRegression {
         EditorPlaybackRegression.run()
         try await ProjectLibraryRegression.run()
         try await DemoEditingRegression.run()
+        try await BackgroundRenderingRegression.run()
         try await GlobalMediaLibraryRegression.run()
         try await AssistantTranscriptScrollRegression.run()
         try await RecordingLifecycleRegression.run()

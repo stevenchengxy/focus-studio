@@ -56,9 +56,9 @@ struct ProjectPreviewView: View {
             }
         }
         .aspectRatio(previewRatio, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: project.settings.hasDecorativeBackground ? 9 : 0, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
+            RoundedRectangle(cornerRadius: project.settings.hasDecorativeBackground ? 9 : 0, style: .continuous)
                 .stroke(Color.white.opacity(0.09), lineWidth: 1)
         )
         // A name change or a media-library import does not alter visible
@@ -174,7 +174,7 @@ struct ProjectPreviewView: View {
     }
 
     private var previewRatio: CGFloat {
-        if let ratio = project.settings.aspectRatio.ratio {
+        if let ratio = project.settings.resolvedCanvasAspectRatio.ratio {
             return CGFloat(ratio)
         }
         let sourceSize = CGSize(

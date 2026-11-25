@@ -328,6 +328,8 @@ public enum CanvasAspectRatio: String, Codable, Sendable, CaseIterable {
 }
 
 public enum BackgroundStyle: String, Codable, Sendable, CaseIterable {
+    /// Show the recording at its own cropped aspect ratio without a frame.
+    case none
     case solid
     case gradient
     case image
@@ -798,6 +800,18 @@ public struct ProjectSettings: Codable, Hashable, Sendable {
     public var productDescription: String?
 
     public init() {}
+
+    /// Decoration settings remain stored while the original-frame mode is on,
+    /// so switching backgrounds never destroys the previous composition.
+    public var hasDecorativeBackground: Bool { backgroundStyle != .none }
+
+    public var resolvedCanvasAspectRatio: CanvasAspectRatio {
+        hasDecorativeBackground ? aspectRatio : .automatic
+    }
+
+    public var resolvedFramePadding: Double { hasDecorativeBackground ? padding : 0 }
+    public var resolvedFrameCornerRadius: Double { hasDecorativeBackground ? cornerRadius : 0 }
+    public var resolvedFrameShadow: Double { hasDecorativeBackground ? shadow : 0 }
 
     public var resolvedCaptionStyle: CaptionStyle {
         (captionStyle ?? CaptionStyle()).sanitized

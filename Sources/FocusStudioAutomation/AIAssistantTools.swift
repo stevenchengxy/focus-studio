@@ -1168,7 +1168,7 @@ struct UpdateSettingsTool: AIAssistantTool {
         [
             "type": "object",
             "properties": [
-                "backgroundStyle": ["type": "string", "enum": BackgroundStyle.allCases.map(\.rawValue)],
+                "backgroundStyle": ["type": "string", "enum": BackgroundStyle.allCases.map(\.rawValue), "description": "none: cropped source aspect, no frame decoration. Keeps stored settings for restoring a background."],
                 "backgroundPreset": ["type": "string", "enum": Self.backgroundPresetNames, "description": "Curated gradient; sets both colours."],
                 "backgroundColor": ["type": "string", "description": "Hex like #6D5DFB"],
                 "secondaryBackgroundColor": ["type": "string", "description": "Hex; second gradient stop"],

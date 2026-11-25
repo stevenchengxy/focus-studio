@@ -2,6 +2,8 @@
 "Medium" = "适中";
 "Rapid" = "快速";
 "None" = "无";
+"No background uses the source aspect ratio without padding, corners or shadow." = "无背景时按原画比例显示，不添加留白、圆角或阴影。";
+"Canvas aspect ratio" = "画面比例";
 "screen" = "屏幕";
 "Captured: %lld clicks · %lld input updates" = "已捕获：%lld 次点击 · %lld 次输入更新";
 "%@s" = "%@ 秒";

@@ -150,6 +150,10 @@ extension AIAssistantTests {
         check(catalog.tool(named: "stop_recording")!.description.contains("joined"), "stop_recording says a stop under way is joined")
         check(catalog.tool(named: "get_project")!.inputSchema["required"] == ["project_id"], "get_project's own optional project_id becomes required")
         let cameraFollow = catalog.tool(named: "update_settings")!.inputSchema["properties"]?["zoomFollowsCursor"]
+        let backgroundStyle = catalog.tool(named: "update_settings")!.inputSchema["properties"]?["backgroundStyle"]
+        check(backgroundStyle?["enum"]?.arrayValue?.contains(.string("none")) == true
+              && backgroundStyle?["description"]?.stringValue?.contains("cropped source") == true,
+              "MCP exposes source-only background mode with its geometry semantics")
         check(cameraFollow?["type"] == "number" && cameraFollow?["minimum"] == 0 && cameraFollow?["maximum"] == 1,
               "MCP exposes the same project camera-follow control without adding a tool")
         check(catalog.tool(named: "rename_project")!.inputSchema["required"] == ["project_id", "title"], "rename_project requires the id and the title")

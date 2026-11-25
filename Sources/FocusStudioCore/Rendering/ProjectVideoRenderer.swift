@@ -96,14 +96,14 @@ public enum ProjectVideoRenderer {
         let sourceWidth = max(1, visibleSourceRect.width)
         let sourceHeight = max(1, visibleSourceRect.height)
         let sourceRatio = Double(sourceWidth) / Double(sourceHeight)
-        let canvasRatio = project.settings.aspectRatio.ratio ?? sourceRatio
+        let canvasRatio = project.settings.resolvedCanvasAspectRatio.ratio ?? sourceRatio
 
         let width = evenPixelCount(project.settings.exportWidth, minimum: 320, maximum: 7_680)
         let rawHeight = Int((Double(width) / max(0.01, canvasRatio)).rounded())
         let height = evenPixelCount(rawHeight, minimum: 180, maximum: 7_680)
         let outputSize = CGSize(width: width, height: height)
 
-        let requestedPadding = project.settings.padding.isFinite ? project.settings.padding : 0
+        let requestedPadding = project.settings.resolvedFramePadding.isFinite ? project.settings.resolvedFramePadding : 0
         let maxPadding = max(0, min(outputSize.width, outputSize.height) / 2 - 2)
         let padding = requestedPadding.clamped(to: 0...maxPadding)
         let available = CGRect(
@@ -1114,11 +1114,11 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
                 secondary: project.settings.secondaryBackgroundColor
             )
         }
-        self.backgroundImage = Self.loadBackgroundImage(
+        self.backgroundImage = project.settings.backgroundStyle == .image ? Self.loadBackgroundImage(
             path: project.settings.backgroundImagePath,
             relativeTo: URL(fileURLWithPath: project.sourceVideoPath)
                 .deletingLastPathComponent()
-        )
+        ) : nil
         // Captions are part of the immutable compositor state: text is drawn
         // once here, never per frame, and the same pills feed preview and export.
         let captionStyle = project.settings.resolvedCaptionStyle
@@ -1142,14 +1142,14 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
         let canvasRect = CGRect(origin: .zero, size: geometry.outputSize)
         let background = background(in: canvasRect)
         self.staticBackground = background
-        let radius = max(0, project.settings.cornerRadius)
+        let radius = max(0, project.settings.resolvedFrameCornerRadius)
             .clamped(to: 0...min(geometry.screenFrame.width, geometry.screenFrame.height) / 2)
         let mask = roundedRectangleMask(frame: geometry.screenFrame, radius: radius)
         self.staticScreenMask = mask
         let transparent = CIImage(color: .clear).cropped(to: canvasRect)
         self.staticTransparentCanvas = transparent
-        if project.settings.shadow > 0 {
-            let strength = project.settings.shadow.clamped(to: 0...1)
+        if project.settings.resolvedFrameShadow > 0 {
+            let strength = project.settings.resolvedFrameShadow.clamped(to: 0...1)
             let blurRadius = max(4, 32 * strength)
             let shadowMask = mask
                 .transformed(by: CGAffineTransform(translationX: 0, y: -10 * strength))
@@ -1321,7 +1321,7 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
             .cropped(to: CGRect(origin: .zero, size: source.size))
             .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
             .transformed(by: CGAffineTransform(translationX: frame.minX, y: frame.minY))
-        let radius = max(0, project.settings.cornerRadius)
+        let radius = max(0, project.settings.resolvedFrameCornerRadius)
             .clamped(to: 0...min(frame.width, frame.height) / 2)
         let mask = roundedRectangleMask(frame: frame, radius: radius)
         let transparent = staticTransparentCanvas
@@ -1370,6 +1370,10 @@ private final class ProjectFrameRenderer: @unchecked Sendable {
 
     private func background(in rect: CGRect) -> CIImage {
         switch project.settings.backgroundStyle {
+        case .none:
+            // MP4 is opaque. This is only exposed by mismatched imported media
+            // or camera transforms; the original recording fills the canvas.
+            return CIImage(color: .black).cropped(to: rect)
         case .solid:
             return CIImage(color: primaryColor).cropped(to: rect)
         case .gradient:

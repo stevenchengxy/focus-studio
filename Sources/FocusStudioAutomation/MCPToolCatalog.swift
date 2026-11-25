@@ -445,7 +445,7 @@ public struct MCPToolCatalog: Sendable {
         ),
         MCPToolSpec(
             tool: UpdateSettingsTool(), title: "Update settings",
-            description: "Change how a project looks and exports: background (style, preset, colours, image, blur, brightness), padding, corner radius, shadow, screen animation, zoom scale and cursor following, aspect ratio, motion blur, caption style, the product description, and export width/frame rate. zoomFollowsCursor 0 holds authored camera targets for reading; 1 fully follows the cursor. Only supplied keys change; numbers out of range are clamped and reported. Focus Studio opens the project in its editor.",
+            description: "Edit background, frame, camera, captions, product description and export settings. backgroundStyle none shows the cropped source without decoration; stored frame settings return when restored. zoomFollowsCursor: 0 locks authored targets, 1 follows the cursor. Only supplied keys change; bounded values are clamped and reported. Opens the editor.",
             scope: .project, annotations: MCPToolAnnotations(readOnly: false, destructive: true, idempotent: true),
             propertyDescriptions: ["backgroundImagePath": "An image file: an absolute path, or relative to your working directory."]
         ),

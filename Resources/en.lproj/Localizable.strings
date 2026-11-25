@@ -2,6 +2,8 @@
 "Medium" = "Medium";
 "Rapid" = "Rapid";
 "None" = "None";
+"No background uses the source aspect ratio without padding, corners or shadow." = "No background uses the source aspect ratio without padding, corners or shadow.";
+"Canvas aspect ratio" = "Canvas aspect ratio";
 "screen" = "screen";
 "Captured: %lld clicks · %lld input updates" = "Captured: %lld clicks · %lld input updates";
 "%@s" = "%@s";

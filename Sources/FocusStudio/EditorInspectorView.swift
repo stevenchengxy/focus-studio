@@ -67,6 +67,7 @@ extension ZoomMotionPreset {
 struct EditorInspectorView: View {
     @EnvironmentObject private var model: StudioModel
     @Environment(\.textCompletion) private var textCompletion
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var project: RecordingProject
     @Binding var selectedZoomID: UUID?
     @Binding var selectedChapterID: UUID?
@@ -359,91 +360,42 @@ struct EditorInspectorView: View {
 
     private var designInspector: some View {
         Group {
-            InspectorSection("Canvas") {
-                Picker("Aspect ratio", selection: $project.settings.aspectRatio) {
-                    ForEach(CanvasAspectRatio.allCases, id: \.self) { ratio in
-                        Text(LocalizedStringKey(ratio.title)).tag(ratio)
-                    }
-                }
-                LabeledSlider(value: $project.settings.padding, range: 0...160, label: "Padding", suffix: "px", decimals: 0)
-                LabeledSlider(value: $project.settings.cornerRadius, range: 0...52, label: "Corners", suffix: "px", decimals: 0)
-                LabeledSlider(value: $project.settings.shadow, range: 0...0.8, label: "Shadow", suffix: "%", multiplier: 100, decimals: 0)
-            }
-            InspectorSection("Content crop") {
-                Picker("Preset", selection: cropPresetBinding) {
-                    ForEach(ContentCropPreset.allCases) { preset in
-                        Text(LocalizedStringKey(preset.title)).tag(preset)
-                    }
-                }
-                LabeledSlider(
-                    value: cropInsetBinding(\.top),
-                    range: 0...0.30,
-                    label: "Top",
-                    suffix: "%",
-                    multiplier: 100,
-                    decimals: 0
-                )
-                DisclosureGroup("More edges") {
-                    VStack(spacing: 9) {
-                        LabeledSlider(
-                            value: cropInsetBinding(\.leading),
-                            range: 0...0.30,
-                            label: "Left",
-                            suffix: "%",
-                            multiplier: 100,
-                            decimals: 0
-                        )
-                        LabeledSlider(
-                            value: cropInsetBinding(\.trailing),
-                            range: 0...0.30,
-                            label: "Right",
-                            suffix: "%",
-                            multiplier: 100,
-                            decimals: 0
-                        )
-                        LabeledSlider(
-                            value: cropInsetBinding(\.bottom),
-                            range: 0...0.30,
-                            label: "Bottom",
-                            suffix: "%",
-                            multiplier: 100,
-                            decimals: 0
-                        )
-                    }
-                    .padding(.top, 8)
-                }
-                .font(.system(size: 10, weight: .medium))
-
-            }
             InspectorSection("Background") {
-                LazyVGrid(
-                    columns: Array(repeating: GridItem(.flexible(), spacing: 7), count: 4),
-                    spacing: 8
-                ) {
-                    ForEach(BackgroundPreset.allCases) { preset in
-                        Button {
-                            project.settings.backgroundStyle = .gradient
-                            project.settings.backgroundColor = preset.primaryHex
-                            project.settings.secondaryBackgroundColor = preset.secondaryHex
-                        } label: {
-                            BackgroundPresetSwatch(
-                                preset: preset,
-                                isSelected: project.settings.backgroundStyle == .gradient
-                                    && preset.matches(
-                                        primary: project.settings.backgroundColor,
-                                        secondary: project.settings.secondaryBackgroundColor
-                                    )
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        .help(preset.title)
-                        .accessibilityLabel("\(preset.title) background")
-                    }
-                }
-                Picker("Style", selection: $project.settings.backgroundStyle) {
+                Picker("Background", selection: $project.settings.backgroundStyle) {
+                    Text("None").tag(BackgroundStyle.none)
                     Text("Solid").tag(BackgroundStyle.solid)
                     Text("Gradient").tag(BackgroundStyle.gradient)
                     Text("Image").tag(BackgroundStyle.image)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .accessibilityIdentifier("design.backgroundStyle")
+                .help("No background uses the source aspect ratio without padding, corners or shadow.")
+                if project.settings.backgroundStyle == .gradient {
+                    LazyVGrid(
+                        columns: Array(repeating: GridItem(.flexible(), spacing: 7), count: 4),
+                        spacing: 8
+                    ) {
+                        ForEach(BackgroundPreset.allCases) { preset in
+                            Button {
+                                project.settings.backgroundStyle = .gradient
+                                project.settings.backgroundColor = preset.primaryHex
+                                project.settings.secondaryBackgroundColor = preset.secondaryHex
+                            } label: {
+                                BackgroundPresetSwatch(
+                                    preset: preset,
+                                    isSelected: project.settings.backgroundStyle == .gradient
+                                        && preset.matches(
+                                            primary: project.settings.backgroundColor,
+                                            secondary: project.settings.secondaryBackgroundColor
+                                        )
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .help(preset.title)
+                            .accessibilityLabel("\(preset.title) background")
+                        }
+                    }
                 }
                 if project.settings.backgroundStyle == .image {
                     if let catalog = bundledBackgroundCatalog, !bundledBackgrounds.isEmpty {
@@ -540,7 +492,7 @@ struct EditorInspectorView: View {
                             decimals: 0
                         )
                     }
-                } else {
+                } else if project.settings.hasDecorativeBackground {
                     ColorPicker("Primary", selection: hexColorBinding($project.settings.backgroundColor))
                         .font(.system(size: 11))
                     if project.settings.backgroundStyle == .gradient {
@@ -549,7 +501,66 @@ struct EditorInspectorView: View {
                     }
                 }
             }
+            if project.settings.hasDecorativeBackground {
+                InspectorSection("Canvas") {
+                    Picker("Aspect ratio", selection: $project.settings.aspectRatio) {
+                        ForEach(CanvasAspectRatio.allCases, id: \.self) { ratio in
+                            Text(LocalizedStringKey(ratio.title)).tag(ratio)
+                        }
+                    }
+                    LabeledSlider(value: $project.settings.padding, range: 0...160, label: "Padding", suffix: "px", decimals: 0)
+                    LabeledSlider(value: $project.settings.cornerRadius, range: 0...52, label: "Corners", suffix: "px", decimals: 0)
+                    LabeledSlider(value: $project.settings.shadow, range: 0...0.8, label: "Shadow", suffix: "%", multiplier: 100, decimals: 0)
+                }
+            }
+            InspectorSection("Content crop") {
+                Picker("Preset", selection: cropPresetBinding) {
+                    ForEach(ContentCropPreset.allCases) { preset in
+                        Text(LocalizedStringKey(preset.title)).tag(preset)
+                    }
+                }
+                LabeledSlider(
+                    value: cropInsetBinding(\.top),
+                    range: 0...0.30,
+                    label: "Top",
+                    suffix: "%",
+                    multiplier: 100,
+                    decimals: 0
+                )
+                DisclosureGroup("More edges") {
+                    VStack(spacing: 9) {
+                        LabeledSlider(
+                            value: cropInsetBinding(\.leading),
+                            range: 0...0.30,
+                            label: "Left",
+                            suffix: "%",
+                            multiplier: 100,
+                            decimals: 0
+                        )
+                        LabeledSlider(
+                            value: cropInsetBinding(\.trailing),
+                            range: 0...0.30,
+                            label: "Right",
+                            suffix: "%",
+                            multiplier: 100,
+                            decimals: 0
+                        )
+                        LabeledSlider(
+                            value: cropInsetBinding(\.bottom),
+                            range: 0...0.30,
+                            label: "Bottom",
+                            suffix: "%",
+                            multiplier: 100,
+                            decimals: 0
+                        )
+                    }
+                    .padding(.top, 8)
+                }
+                .font(.system(size: 10, weight: .medium))
+
+            }
         }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: project.settings.backgroundStyle)
     }
 
     private var cursorInspector: some View {

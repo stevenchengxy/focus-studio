@@ -39,6 +39,7 @@ struct AIAssistantTests {
         step("recording text arguments"); try await recordingTextArguments(root: root)
         step("visible demo page preparation"); try await demoPageArguments(root: root)
         step("update_settings"); try await updateSettingsValidation(root: root)
+        step("background visibility settings"); try await backgroundVisibilitySettings(root: root)
         step("set_chapters"); try await setChaptersSanitization(root: root)
         step("dropped writes"); try await droppedWrites(root: root)
         step("interleaved edits"); try await interleavedEdits(root: root)
@@ -601,6 +602,42 @@ struct AIAssistantTests {
     }
 
     // MARK: - Tool validation
+
+    @MainActor
+    static func backgroundVisibilitySettings(root: URL) async throws {
+        let image = root.appendingPathComponent("retained-background.jpg")
+        try Pixels.writeJPEG(width: 64, height: 36, color: (0.2, 0.3, 0.6), to: image)
+        let box = ProjectBox(makeProject(sourceVideoPath: "/nonexistent.mp4", duration: 12))
+        let context = makeContext(root: root, box: box)
+        let tool = UpdateSettingsTool()
+        _ = try await tool.run(arguments: ["backgroundImagePath": image.path, "padding": 48,
+            "cornerRadius": 24, "shadow": 0.4, "aspectRatio": "vertical", "backgroundBlur": 12,
+            "backgroundBrightness": 0.2], context: context, progress: { _ in })
+        let decorated = box.project!.settings
+        let hidden = try await tool.run(arguments: ["backgroundStyle": "none"], context: context, progress: { _ in })
+        var expected = decorated
+        expected.backgroundStyle = .none
+        check(box.project!.settings == expected, "hiding the background changes only its style, preserving the image, colours and framing")
+        check(hidden.data?["look"]?["padding"] == 48 && hidden.data?["look"]?["aspectRatio"] == "vertical"
+              && hidden.data?["look"]?["effectiveFrame"]?["padding"] == 0
+              && hidden.data?["look"]?["effectiveFrame"]?["cornerRadius"] == 0
+              && hidden.data?["look"]?["effectiveFrame"]?["shadow"] == 0
+              && hidden.data?["look"]?["effectiveFrame"]?["aspectRatio"] == "automatic",
+              "automation distinguishes retained settings from effective source-only framing")
+        let summary = AIProjectReport.summary(of: box.project, assetsDirectory: root)
+        check(summary.contains("background none (cropped source") && summary.contains("padding 0 px | corner radius 0 px | shadow 0"),
+              "the assistant reads the actual undecorated frame")
+        _ = try await tool.run(arguments: ["backgroundStyle": "none"], context: context, progress: { _ in })
+        check(box.project!.settings == expected, "repeating source-only mode is idempotent")
+        let restored = try JSONDecoder().decode(RecordingProject.self, from: JSONEncoder().encode(box.project!))
+        check(restored.settings == expected, "source-only mode and retained decoration survive save and reopen")
+        _ = try await tool.run(arguments: ["backgroundStyle": "image"], context: context, progress: { _ in })
+        check(box.project!.settings == decorated, "restoring the background needs no path re-import and restores all former framing")
+        let properties = tool.parametersSchema["properties"] as? [String: Any]
+        let style = properties?["backgroundStyle"] as? [String: Any]
+        check((style?["enum"] as? [String])?.contains("none") == true,
+              "the in-app assistant can request source-only mode")
+    }
 
     @MainActor
     static func updateSettingsValidation(root: URL) async throws {

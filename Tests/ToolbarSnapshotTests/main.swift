@@ -201,7 +201,8 @@ struct ToolbarSnapshotTests {
                 onImportSharedMedia: { _ in },
                 onSaveMediaToShared: { _ in },
                 isImportingMedia: false,
-                onSelectRegion: { _ in }
+                onSelectRegion: { _ in },
+                onPausePlayback: {}
             )
             .environmentObject(model)
             .preferredColorScheme(.dark)
@@ -221,11 +222,10 @@ struct ToolbarSnapshotTests {
             reports.append(["path": url.path, "width": image.width, "height": image.height,
                             "distinctColors": variedPixels, "bytes": size])
         }
-        // The design inspector in image-background mode, which is where the
-        // bundled background set and the macOS wallpapers are offered.
-        do {
+        // Capture each real background mode at the narrow sidebar width.
+        for style in [BackgroundStyle.none, .solid, .gradient, .image] {
             var designProject = inspectorProject
-            designProject.settings.backgroundStyle = .image
+            designProject.settings.backgroundStyle = style
             let binding = Binding<RecordingProject>(
                 get: { designProject },
                 set: { designProject = $0 }
@@ -251,15 +251,16 @@ struct ToolbarSnapshotTests {
                 onImportSharedMedia: { _ in },
                 onSaveMediaToShared: { _ in },
                 isImportingMedia: false,
-                onSelectRegion: { _ in }
+                onSelectRegion: { _ in },
+                onPausePlayback: {}
             )
             .environmentObject(model)
             .preferredColorScheme(.dark)
-            .frame(width: 330, height: 900)
-            let image = try renderOffscreen(view, width: 330, height: 900)
+            .frame(width: 292, height: 900)
+            let image = try renderOffscreen(view, width: 292, height: 900)
             let variedPixels = countDistinctColors(image)
             precondition(variedPixels > 80, "The design inspector snapshot must contain rendered controls")
-            let url = output.appendingPathComponent("inspector-background.png")
+            let url = output.appendingPathComponent("inspector-background-\(style.rawValue).png")
             guard let destination = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) else {
                 throw SnapshotError.renderFailed
             }
