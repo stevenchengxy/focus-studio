@@ -22,6 +22,7 @@ app.whenReady().then(async () => {
   const entry = `
 import React from 'react';
 import { createRoot } from 'react-dom/client';
+import { LocaleProvider } from '@/components/locale/locale-provider';
 import { DesktopGate } from '${website}/app/studio/desktop-gate';
 import { savePendingExport } from '${website}/app/studio/local-export-store';
 window.accountRequests = 0;
@@ -48,7 +49,7 @@ window.loadTestMovie = async () => {
   const input=document.querySelector('input[type=file][accept="video/*"]');input.files=dt.files;input.dispatchEvent(new Event('change',{bubbles:true}));
 };
 window.seedLegacyRender = async () => savePendingExport({blob:await window.makeMovie(),exportId:crypto.randomUUID(),name:'legacy-export.webm',accountId:'different-old-account',reservationKey:crypto.randomUUID(),confirmed:false});
-createRoot(document.getElementById('root')).render(<DesktopGate />);
+createRoot(document.getElementById('root')).render(<LocaleProvider><DesktopGate /></LocaleProvider>);
 `;
   const stub = path.join(directory, 'visual-stubs.jsx');
   await fs.writeFile(stub, `import React from '${website}/node_modules/react';export const Brand=()=> <a href="/">Focus Studio</a>;export const ThemeToggle=()=>null;`);
@@ -72,7 +73,7 @@ createRoot(document.getElementById('root')).render(<DesktopGate />);
   console.log('PASS: ordinary browsers receive downloads, without a recorder or media input.');
   await window.loadURL(`${origin}/studio?desktop=1`);
   await until(()=>ui(`!!document.querySelector('input[type=file][accept="video/*"]')`));
-  assert.equal(await ui(`document.body.textContent.includes('Free local exports. No account required.')`),true);
+  assert.equal(await ui(`document.querySelector('.studio-title h1').textContent`), 'Recording studio');
   assert.equal(await ui(`document.body.textContent.includes('Connect account')`),false);
   await ui(`window.loadTestMovie()`);
   await until(()=>ui(`[...document.querySelectorAll('button')].some(b=>b.textContent.includes('Export video')&&!b.disabled)`));

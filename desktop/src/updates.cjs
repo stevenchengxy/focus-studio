@@ -72,12 +72,12 @@ async function responseJSON(response) {
   } finally { await reader.cancel().catch(() => {}); }
 }
 
-/// Version checks never download, install or relaunch the app. All external links
-/// are validated in the main process, separate from the renderer's account bridge.
+// Update actions live exclusively in the main process; the remote renderer
+// cannot choose a release, executable, URL or installer arguments.
 class UpdateController {
   constructor({directory, platform = process.platform, version, fetcher = fetch, now = Date.now,
-    isIdle = () => false, present, openExternal, onChanged = () => {}}) {
-    Object.assign(this, {directory, version, fetcher, now, isIdle, present, openExternal, onChanged});
+    isIdle = () => false, present, download, install, onChanged = () => {}}) {
+    Object.assign(this, {directory, version, fetcher, now, isIdle, present, download, install, onChanged});
     this.platform = platform === 'win32' ? 'windows' : platform === 'linux' ? 'linux' : null;
     this.file = path.join(directory, 'updates.json'); this.writes = Promise.resolve();
     this.settings = {channel: 'preview', automatic: true, lastCheckedAt: null, lastAttemptAt: null, notifiedVersion: null};
@@ -115,7 +115,7 @@ class UpdateController {
   }
   setChannel(channel) {
     if (!['preview', 'stable'].includes(channel) || this.settings.channel === channel) return;
-    this.epoch++; this.controller?.abort(); this.pending = null;
+    this.epoch++; this.controller?.abort(); this.transfer?.abort(); this.pending = null;
     this.settings = {...this.settings, channel, lastCheckedAt: null, lastAttemptAt: null, notifiedVersion: null};
     this.onChanged(this.settings); void this.persist();
   }
@@ -164,19 +164,31 @@ class UpdateController {
     const notice = this.pending; this.pending = null; this.presenting = true;
     try {
       const answer = await this.present(notice);
-      if (this.disposed || (notice.kind === 'available' && notice.release.requested_channel !== this.settings.channel)) return;
+      if (this.disposed || (notice.release && notice.release.requested_channel !== this.settings.channel)) return;
       if (notice.kind === 'available') {
         this.settings.notifiedVersion = notice.release.version; await this.persist();
-        // Check again after an awaited dialog, and only open a download after
-        // the person explicitly chose it. It never touches the installed app.
-        if (answer === 'download' && officialDownload(notice.release.download_url, this.platform, notice.release.requested_channel, notice.release.version)) {
-          await this.openExternal(notice.release.download_url);
+        if (answer === 'download') {
+          const epoch = this.epoch;
+          this.transfer = new AbortController();
+          const signal = AbortSignal.any([this.transfer.signal, AbortSignal.timeout(10 * 60 * 1000)]);
+          const pkg = await this.download(notice.release, signal);
+          if (!this.disposed && this.epoch === epoch) this.pending = {kind: 'ready', release: notice.release, pkg};
         }
+      } else if (notice.kind === 'ready' && answer === 'install') {
+        if (this.isIdle()) await this.install(notice.pkg);
+        else this.pending = notice;
       }
-    } catch { /* Browser/dialog failure cannot break recording or clear user media. */ }
-    finally { this.presenting = false; }
+    } catch (error) {
+      if (notice.kind !== 'message' && !this.disposed && (!notice.release || notice.release.requested_channel === this.settings.channel)) {
+        this.pending = {kind: 'message', manual: true, message: error.message || 'Update failed. Please try again.'};
+      }
+    } finally {
+      this.transfer = null;
+      this.presenting = false;
+    }
+    if (this.pending) await this.flush();
   }
-  dispose() { this.disposed = true; this.epoch++; clearTimeout(this.startTimer); clearInterval(this.timer); this.controller?.abort(); this.pending = null; }
+  dispose() { this.disposed = true; this.epoch++; clearTimeout(this.startTimer); clearInterval(this.timer); this.controller?.abort(); this.transfer?.abort(); this.pending = null; }
 }
 
 module.exports = {UpdateController, parseVersion, compareVersions, officialDownload, validateRelease, responseJSON, DAY, RETRY};

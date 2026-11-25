@@ -8,6 +8,7 @@ const {TokenVault} = require('./vault.cjs');
 const {CommunityClient, CommunityVault} = require('./community.cjs');
 const {CaptureController} = require('./capture.cjs');
 const {UpdateController} = require('./updates.cjs');
+const {downloadPackage, installPackage} = require('./update-installer.cjs');
 
 const SHELL_ORIGIN = 'focus-desktop://shell';
 const safePreferences = {nodeIntegration: false, nodeIntegrationInWorker: false, nodeIntegrationInSubFrames: false,
@@ -128,18 +129,30 @@ async function createDesktop({show = true, checkUpdates = true} = {}) {
   }
   const capture = new CaptureController({getContents: contents, getSources: () => desktopCapturer.getSources({
     types: ['screen', 'window'], thumbnailSize: {width: 320, height: 200}, fetchWindowIcons: false}), choose});
+  const safeToRestart = () => Boolean(mainWindow && !mainWindow.isDestroyed() &&
+    !capture.busy && !chooser && !microphonePrompt && !pairingPrompt && !community.active() &&
+    (contents().getURL() === `${SHELL_ORIGIN}/unavailable.html` || (activity && !activity.recording && !activity.exporting)));
   const updates = new UpdateController({directory: app.getPath('userData'), version: app.getVersion(),
-    isIdle: () => Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() && mainWindow.isFocused() &&
-      !capture.busy && !chooser && !microphonePrompt && !pairingPrompt && !community.active() &&
-      (contents().getURL() === `${SHELL_ORIGIN}/unavailable.html` || (activity && !activity.recording && !activity.exporting))),
-    openExternal: url => shell.openExternal(url),
+    isIdle: () => safeToRestart() && mainWindow.isVisible() && mainWindow.isFocused(),
+    download: (release, signal) => {
+      if (!app.isPackaged) throw new Error('Open the installed desktop app to update.');
+      const kind = process.platform === 'win32' ? 'windows' : process.env.APPIMAGE ? 'appimage' : 'deb';
+      return downloadPackage({release, signal, kind, directory: app.getPath('userData'),
+        progress: fraction => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setProgressBar(fraction); }});
+    },
+    install: async pkg => {
+      mainWindow?.setEnabled(false);
+      try { await installPackage({pkg, isIdle: safeToRestart, quit: () => app.quit(), relaunch: () => app.relaunch()}); }
+      finally { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setEnabled(true); }
+    },
     present: async notice => {
-      if (notice.kind === 'available') {
+      if (notice.kind === 'available' || notice.kind === 'ready') {
+        const ready = notice.kind === 'ready';
         const result = await dialog.showMessageBox(mainWindow, {type: 'info', title: 'Focus Studio update',
-          message: `Focus Studio Desktop ${notice.release.version} is available`,
-          detail: `${notice.release.title}\nInstalled: ${app.getVersion()} · ${notice.release.channel === 'preview' ? 'Preview' : 'Stable'} release\nDownload the installer, then close Focus Studio before installing. Your saved media stays on this computer.`,
-          buttons: ['Download update', 'Later'], defaultId: 0, cancelId: 1, noLink: true});
-        return result.response === 0 ? 'download' : 'later';
+          message: `Focus Studio Desktop ${notice.release.version} ${ready ? 'is ready to install' : 'is available'}`,
+          detail: ready ? 'Save your current demo before restarting.' : notice.release.title,
+          buttons: [ready ? 'Install and restart' : 'Download update', 'Later'], defaultId: 0, cancelId: 1, noLink: true});
+        return result.response === 0 ? (ready ? 'install' : 'download') : 'later';
       }
       await dialog.showMessageBox(mainWindow, {type: 'info', title: 'Focus Studio updates', message: notice.message, buttons: ['OK']});
       return 'dismiss';

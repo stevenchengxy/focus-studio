@@ -19,7 +19,8 @@ async function controller(t, overrides = {}) {
   const notices = [], opened = [], calls = []; let now = 1_000_000; let idle = true;
   const value = new UpdateController({directory, platform: 'win32', version: '0.1.0', now: () => now,
     isIdle: () => idle, present: async notice => { notices.push(notice); return 'later'; },
-    openExternal: async url => { opened.push(url); }, fetcher: async (...args) => { calls.push(args); return response(release()); }, ...overrides});
+    download: async release => { opened.push(release.download_url); return {file: 'verified-package'}; },
+    install: async () => {}, fetcher: async (...args) => { calls.push(args); return response(release()); }, ...overrides});
   t.after(async () => { value.dispose(); await value.writes.catch(() => {}); await fs.rm(directory, {recursive: true, force: true}); });
   return {value, directory, notices, opened, calls, advance: ms => { now += ms; }, setIdle: flag => { idle = flag; }};
 }
@@ -56,13 +57,34 @@ test('network checks are daily, public and redirect-free; automatic checks never
   f.advance(1); await f.value.check(); assert.equal(f.calls.length, 2); assert.equal(f.notices.length, 1);
 });
 
-test('recording/exporting defers prompts until idle; only an explicit download opens the validated installer', async t => {
+test('recording/exporting defers prompts until idle; download and installation are separate choices', async t => {
   let presentCount = 0;
-  const f = await controller(t, {present: async () => { presentCount++; return 'download'; }});
+  const f = await controller(t, {present: async notice => { presentCount++; return notice.kind === 'ready' ? 'later' : 'download'; }});
   f.setIdle(false); await f.value.check(); assert.equal(presentCount, 0); assert.equal(f.opened.length, 0);
   await f.value.flush(); assert.equal(presentCount, 0);
-  f.setIdle(true); await f.value.flush(); assert.equal(presentCount, 1); assert.deepEqual(f.opened, [release().download_url]);
+  f.setIdle(true); await f.value.flush(); assert.equal(presentCount, 2); assert.deepEqual(f.opened, [release().download_url]);
   assert.equal(f.value.settings.notifiedVersion, '0.1.1');
+});
+
+test('a downloaded package waits through recording and installs only after the user confirms', async t => {
+  const events = [];
+  const pkg = {file: 'verified-package'};
+  const f = await controller(t, {
+    present: async notice => {
+      events.push(notice.kind);
+      return notice.kind === 'available' ? 'download' : 'install';
+    },
+    download: async () => {
+      f.setIdle(false);
+      return pkg;
+    },
+    install: async value => { events.push(value); },
+  });
+  await f.value.check({manual: true});
+  assert.deepEqual(events, ['available']);
+  f.setIdle(true);
+  await f.value.flush();
+  assert.deepEqual(events, ['available', 'ready', pkg]);
 });
 
 test('simultaneous automatic/manual requests share one check and manual checks remain available for a previously dismissed release', async t => {
