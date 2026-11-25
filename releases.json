@@ -2,6 +2,44 @@
   {
     "assets": [
       {
+        "browser_download_url": "https://github.com/stevenchengxy/focus-studio/releases/download/v1.14.12-preview.1/Focus-Studio-1.14.12-universal-local.dmg",
+        "digest": "sha256:dd6200e75a4e96f6cd5a4b7c19c383293b6d8a23bb429d890f1f5b0eac8f6240",
+        "name": "Focus-Studio-1.14.12-universal-local.dmg",
+        "size": 72271385,
+        "state": "uploaded"
+      },
+      {
+        "browser_download_url": "https://github.com/stevenchengxy/focus-studio/releases/download/v1.14.12-preview.1/Focus-Studio-Desktop-0.1.4-linux-amd64.deb",
+        "digest": "sha256:e58ef17c41cd0f9dbd47d9630e910b663344b25f1e0bd46ea3cbabefe315d235",
+        "name": "Focus-Studio-Desktop-0.1.4-linux-amd64.deb",
+        "size": 99710416,
+        "state": "uploaded"
+      },
+      {
+        "browser_download_url": "https://github.com/stevenchengxy/focus-studio/releases/download/v1.14.12-preview.1/Focus-Studio-Desktop-0.1.4-linux-x86_64.AppImage",
+        "digest": "sha256:e4254ac4cfff34450deea67ff36dcdf63330ceffa3c1c6915fb4555a5d4a5bdf",
+        "name": "Focus-Studio-Desktop-0.1.4-linux-x86_64.AppImage",
+        "size": 125018797,
+        "state": "uploaded"
+      },
+      {
+        "browser_download_url": "https://github.com/stevenchengxy/focus-studio/releases/download/v1.14.12-preview.1/Focus-Studio-Desktop-0.1.4-windows-x64.exe",
+        "digest": "sha256:0a99c7e003fbee7bc37ae89109b945fd03b748015b6a8cce9dd251aee6c412ea",
+        "name": "Focus-Studio-Desktop-0.1.4-windows-x64.exe",
+        "size": 111583084,
+        "state": "uploaded"
+      }
+    ],
+    "draft": false,
+    "html_url": "https://github.com/stevenchengxy/focus-studio/releases/tag/v1.14.12-preview.1",
+    "name": "Focus Studio 1.14.12-preview.1",
+    "prerelease": true,
+    "published_at": "2026-11-25T14:19:36Z",
+    "tag_name": "v1.14.12-preview.1"
+  },
+  {
+    "assets": [
+      {
         "browser_download_url": "https://github.com/stevenchengxy/focus-studio/releases/download/v1.14.11-preview.1/Focus-Studio-1.14.11-universal-local.dmg",
         "digest": "sha256:cfbb4644fdc8878b9a4f1202c1d67a6bd1166c9ed2bdf7aa487f2cbdd25ec376",
         "name": "Focus-Studio-1.14.11-universal-local.dmg",
