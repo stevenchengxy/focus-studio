@@ -40,7 +40,7 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
       - name: Install Linux desktop dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb libgtk-3-0 libnss3 libxss1 libasound2 libgbm1 libsecret-1-0 libfuse2
+        run: sudo apt-get update && sudo apt-get install -y xvfb libgtk-3-0 libnss3 libxss1 libasound2 libgbm1 libsecret-1-0 libfuse2 policykit-1
       - run: npm ci
       - run: npm test
       - name: Electron integration smoke (Windows)
@@ -64,6 +64,12 @@ jobs:
           dpkg-deb --info dist/*.deb
           chmod +x dist/*.AppImage
           dist/*.AppImage --appimage-version
+      - name: Upgrade a published Windows installation
+        if: runner.os == 'Windows'
+        run: node test/native-upgrade.cjs
+      - name: Upgrade published Debian and AppImage installations
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum node test/native-upgrade.cjs
       - uses: actions/upload-artifact@v4
         with:
           name: focus-studio-desktop-${{ matrix.platform }}-x64
