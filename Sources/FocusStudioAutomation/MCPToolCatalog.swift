@@ -445,7 +445,7 @@ public struct MCPToolCatalog: Sendable {
         ),
         MCPToolSpec(
             tool: UpdateSettingsTool(), title: "Update settings",
-            description: "Edit background, frame, camera, cursor size, product description and export settings. backgroundStyle none shows the cropped source without decoration; stored frame settings return when restored. zoomFollowsCursor: 0 locks authored targets, 1 follows the cursor. Only supplied keys change; bounded values are clamped and reported. Opens the editor.",
+            description: "Edit the project's appearance, camera and export settings. Opens the editor. Only supplied keys change. Reports any clamped values.",
             scope: .project, annotations: MCPToolAnnotations(readOnly: false, destructive: true, idempotent: true),
             propertyDescriptions: ["backgroundImagePath": "An image file: an absolute path, or relative to your working directory."]
         ),

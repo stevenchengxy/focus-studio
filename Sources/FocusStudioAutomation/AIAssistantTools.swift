@@ -1149,7 +1149,7 @@ struct SetBackgroundImageTool: AIAssistantTool {
 
 struct UpdateSettingsTool: AIAssistantTool {
     let name = "update_settings"
-    let summary = "Change how the recording looks and exports: background (style, preset, colours, image, blur, brightness), padding, corner radius, shadow, screen animation, zoom scale, cursor size and following, aspect ratio, motion blur, the product description, and the export width and frame rate. Only the given keys change."
+    let summary = "Change how the recording looks and exports: background (style, preset, colours, image, blur, brightness), padding, corner radius, shadow, screen animation, zoom scale, cursor size, camera follow strength and speed, aspect ratio, motion blur, the product description, and the export width and frame rate. Only the given keys change."
 
     static let backgroundPresetNames = BackgroundPreset.allCases.map(\.rawValue)
     static let aspectRatioNames = CanvasAspectRatio.allCases.map(\.rawValue) + ["auto", "16:9", "9:16", "1:1", "4:3", "3:4"]
@@ -1164,6 +1164,7 @@ struct UpdateSettingsTool: AIAssistantTool {
         "zoomScale": 1.1...3,
         "cursorScale": ProjectSettings.cursorScaleRange,
         "zoomFollowsCursor": 0...1,
+        "zoomFollowSpeed": ProjectSettings.zoomFollowSpeedRange,
         "motionBlur": 0...0.3,
         "backgroundBlur": 0...60,
         "backgroundBrightness": -0.5...0.35,
@@ -1172,7 +1173,7 @@ struct UpdateSettingsTool: AIAssistantTool {
     static let allowedKeys = [
         "backgroundStyle", "backgroundPreset", "backgroundColor", "secondaryBackgroundColor", "backgroundImagePath",
         "backgroundBlur", "backgroundBrightness", "padding", "cornerRadius", "shadow", "screenAnimation", "zoomScale", "zoomFollowsCursor",
-        "aspectRatio", "cursorScale", "motionBlur", "productDescription",
+        "zoomFollowSpeed", "aspectRatio", "cursorScale", "motionBlur", "productDescription",
         "exportWidth", "frameRate",
     ]
 
@@ -1194,7 +1195,9 @@ struct UpdateSettingsTool: AIAssistantTool {
                 "zoomScale": ["type": "number", "minimum": 1.1, "maximum": 3, "description": "Default magnification for automatic zooms and new manual zooms, from 1.1 to 3."],
                 "cursorScale": ["type": "number", "minimum": ProjectSettings.cursorScaleRange.lowerBound, "maximum": ProjectSettings.cursorScaleRange.upperBound,
                                 "description": "Size of the recorded pointer overlay, from 0.5 to 8 times its reference size. The click hotspot stays fixed. Applies to recordings with a separate pointer layer."],
-                "zoomFollowsCursor": ["type": "number", "minimum": 0, "maximum": 1, "description": "Camera following for the whole project: 0 holds each zoom's authored target; 1 fully follows the cursor. Leave omitted to preserve the current setting."],
+                "zoomFollowsCursor": ["type": "number", "minimum": 0, "maximum": 1, "description": "Follow strength. 0 holds the authored zoom target. 1 fully follows the pointer."],
+                "zoomFollowSpeed": ["type": "number", "minimum": ProjectSettings.zoomFollowSpeedRange.lowerBound, "maximum": ProjectSettings.zoomFollowSpeedRange.upperBound,
+                                    "description": "Camera follow speed, 0.25× to 2×. Lower is slower. New projects use 0.75×, older projects 1×."],
                 "aspectRatio": ["type": "string", "enum": CanvasAspectRatio.allCases.map(\.rawValue), "description": "wide = 16:9, vertical = 9:16, square, classic = 4:3, tall = 3:4"],
                 "motionBlur": ["type": "number", "minimum": 0, "maximum": 0.3, "description": "Motion blur while the camera moves, from 0 (off) to 0.3."],
                 "productDescription": ["type": "string", "description": "What the demo shows, in the user's words."],
@@ -1332,6 +1335,10 @@ struct UpdateSettingsTool: AIAssistantTool {
         if let value = try number("zoomFollowsCursor") {
             let follow = clamp("zoomFollowsCursor", value)
             steps.append { $0.zoomFollowsCursor = follow }
+        }
+        if let value = try number("zoomFollowSpeed") {
+            let speed = clamp("zoomFollowSpeed", value)
+            steps.append { $0.zoomFollowSpeed = speed }
         }
         if let value = try number("motionBlur") {
             let blur = clamp("motionBlur", value)

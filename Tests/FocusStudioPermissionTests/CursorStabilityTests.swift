@@ -196,12 +196,36 @@ func cursorStabilityFailures() -> [String] {
     expect(abs(CursorFollow.offset(at: 3, samples: entering).dx) < 1e-12,
            "camera following returns fully to overview after the authored exit")
 
+    // One measured move inside the outer safety band, after the camera has
+    // engaged. Compare its response while keeping the shot and pointer fixed.
+    let singleMove = [CursorSample(time: 0, x: 0.5, y: 0.5), CursorSample(time: 1, x: 0.68, y: 0.5)]
+    func followAtSpeed(_ speed: Double?) -> [CursorFollow.Sample] {
+        var speedSettings = settings
+        speedSettings.cursorAnimation = .none
+        speedSettings.zoomFollowSpeed = speed
+        return CursorFollow.offsets(duration: 3, segments: zooms, settings: speedSettings,
+                                    cursor: singleMove, strength: 1)
+    }
+    let slowPan = followAtSpeed(0.25), originalPan = followAtSpeed(1), fastPan = followAtSpeed(2)
+    let earlySlow = CursorFollow.offset(at: 1.05, samples: slowPan).dx
+    let earlyOriginal = CursorFollow.offset(at: 1.05, samples: originalPan).dx
+    let earlyFast = CursorFollow.offset(at: 1.05, samples: fastPan).dx
+    expect(earlyOriginal - earlySlow > 0.025 && earlyFast - earlyOriginal > 0.01,
+           "slow and fast response visibly change the same pan at fixed strength")
+    let target = 0.18 - 0.25 * CursorFollow.softZone
+    let originalResponse = target * (1 - exp(-(4.0 / 60) / 0.052))
+    expect(abs(earlyOriginal - originalResponse) < 1e-9 && followAtSpeed(nil) == originalPan,
+           "1× and legacy projects reproduce the original 52 ms response")
+    expect([slowPan, originalPan, fastPan].allSatisfy { abs(CursorFollow.offset(at: 2.8, samples: $0).dx - target) < 0.0001 },
+           "all speeds settle on the same composition")
+
     // A fast diagonal crosses most of the *cropped* picture, then doubles
     // back. Check the output hotspot at 120 fps, including between camera
     // samples and while the authored automatic zoom is still entering.
     let followCrop = SourceCropInsets(top: 0.10, leading: 0.08, bottom: 0.12, trailing: 0.20)
     var travelSettings = settings
     travelSettings.zoomEaseIn = 0.8
+    travelSettings.zoomFollowSpeed = ProjectSettings.zoomFollowSpeedRange.lowerBound
     let fastCue = [ZoomSegment(start: 0, end: 3, targetX: 0.3, targetY: 0.35, scale: 2.5)]
     let travel = (0...360).map { index -> CursorSample in
         let time = Double(index) / 120
@@ -277,6 +301,19 @@ func cursorStabilityFailures() -> [String] {
            "post-cut motion starts from its own shot, without smoothing across a splice")
 
     do {
+        var versioned = ProjectSettings()
+        expect(versioned.resolvedZoomFollowSpeed == 0.75, "new projects start with gentler follow")
+        versioned.zoomFollowSpeed = nil
+        let legacySettings = try JSONDecoder().decode(ProjectSettings.self, from: JSONEncoder().encode(versioned))
+        expect(legacySettings.zoomFollowSpeed == nil && legacySettings.resolvedZoomFollowSpeed == 1,
+               "settings written before follow speed decode at the original speed")
+        versioned.zoomFollowSpeed = 1.45
+        let savedSettings = try JSONDecoder().decode(ProjectSettings.self, from: JSONEncoder().encode(versioned))
+        expect(savedSettings.resolvedZoomFollowSpeed == 1.45, "custom follow speed survives a project reload")
+        for (value, expected) in [(-3.0, 0.25), (3, 2), (Double.nan, 1)] {
+            versioned.zoomFollowSpeed = value
+            expect(versioned.resolvedZoomFollowSpeed == expected, "malformed follow speeds stay safe")
+        }
         let project = RecordingProject(title: "Motion regression", sourceVideoPath: "/synthetic.mov", duration: 1.4,
                                        sourceWidth: 1920, sourceHeight: 1080, cursorSamples: actions)
         let edit = try DemoTimelineEdit(keepRanges: [.init(start: 0.4, end: 0.8)], sourceDuration: 1.4)

@@ -75,12 +75,16 @@ def run(options):
     zoom, _ = call(helper, "add_zoom", {"project_id": project_id, "start": 0.2, "end": 1.2, "x": 0.25, "y": 0.75, "scale": 1.8})
     check(zoom.get("zoom_count") == 1, f"add_zoom: {zoom}")
 
-    settings, _ = call(helper, "update_settings", {"project_id": project_id, "padding": 24, "cornerRadius": 12, "frameRate": 24})
+    settings, _ = call(helper, "update_settings", {
+        "project_id": project_id, "padding": 24, "cornerRadius": 12, "frameRate": 24, "zoomFollowSpeed": 0.5,
+    })
     after, _ = call(helper, "get_project", {"project_id": project_id})
     zooms = after.get("zooms", [])
     check(len(zooms) == 1 and zooms[0].get("start") == 0.2 and zooms[0].get("end") == 1.2 and zooms[0].get("x") == 0.25,
           f"the zoom is in the project: {zooms}")
     look = after.get("look", {})
+    check(look.get("zoomFollowSpeed") == 0.5 and look.get("zoomFollowsCursor") == project["look"]["zoomFollowsCursor"],
+          f"the camera speed changes independently of follow strength: {look}")
     check(look.get("padding") == 24 and look.get("cornerRadius") == 12 and after.get("frame_rate") == 24,
           f"the settings are in the project: {look}, {after.get('frame_rate')} fps (update said {settings.get('changes')})")
 

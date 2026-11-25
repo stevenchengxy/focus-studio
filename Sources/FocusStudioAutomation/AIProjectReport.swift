@@ -38,7 +38,7 @@ public enum AIProjectReport {
         lines.append("Title: \(title.isEmpty ? "Untitled" : title) | Duration: \(seconds(project.duration)) s | Source: \(project.sourceWidth)×\(project.sourceHeight) | Clicks: \(project.clickEvents.count) | Zooms: \(project.zoomSegments.filter(\.isEnabled).count) | Chapters: \(project.chapters?.count ?? 0)")
         let interactions = project.resolvedInteractions
         lines.append("Interaction trace: source \(project.interactionTrace?.source.rawValue ?? "system") | cursor display \(project.interactionTrace?.cursorDisplayMode.rawValue ?? "overlay") | cursor samples \(interactions.cursorSamples.count) | events \(project.interactionTrace?.events.count ?? 0) | typing events \(project.resolvedTypingActivity.count) | rejected events \(interactions.rejectedEventCount)")
-        lines.append("Look: background \(backgroundDescription(settings)) | aspect \(settings.resolvedCanvasAspectRatio.title) | padding \(Int(settings.resolvedFramePadding)) px | corner radius \(Int(settings.resolvedFrameCornerRadius)) px | shadow \(seconds(settings.resolvedFrameShadow)) | screen animation \(settings.screenAnimation.rawValue) | zoom scale \(seconds(settings.zoomScale))× | cursor follow \(seconds(settings.resolvedZoomFollowsCursor)) (0 = fixed target)")
+        lines.append("Look: background \(backgroundDescription(settings)) | aspect \(settings.resolvedCanvasAspectRatio.title) | padding \(Int(settings.resolvedFramePadding)) px | corner radius \(Int(settings.resolvedFrameCornerRadius)) px | shadow \(seconds(settings.resolvedFrameShadow)) | screen animation \(settings.screenAnimation.rawValue) | zoom scale \(seconds(settings.zoomScale))× | cursor follow \(seconds(settings.resolvedZoomFollowsCursor)) (0 = fixed target) | follow speed \(seconds(settings.resolvedZoomFollowSpeed))×")
         if let description = settings.productDescription?.trimmingCharacters(in: .whitespacesAndNewlines), !description.isEmpty {
             lines.append("Product: \(String(description.prefix(400)))")
         }
@@ -165,6 +165,7 @@ public enum AIProjectReport {
             "screenAnimation": AIJSONValue(settings.screenAnimation.rawValue),
             "zoomScale": .rounded(settings.zoomScale),
             "zoomFollowsCursor": .rounded(settings.resolvedZoomFollowsCursor),
+            "zoomFollowSpeed": .rounded(settings.resolvedZoomFollowSpeed),
             "cursorScale": .rounded(settings.resolvedCursorScale),
             "aspectRatio": AIJSONValue(settings.aspectRatio.rawValue),
             "effectiveFrame": [

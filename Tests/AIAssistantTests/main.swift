@@ -666,24 +666,37 @@ struct AIAssistantTests {
         let lockedCamera = try await tool.run(arguments: ["zoomFollowsCursor": 0], context: context, progress: { _ in })
         check(box.project!.settings.zoomFollowsCursor == 0 && lockedCamera.data?["look"]?["zoomFollowsCursor"] == 0,
               "A camera lock is stored and reported without changing zoom targets")
+        var expectedSlow = box.project!.settings
+        expectedSlow.zoomFollowSpeed = 0.55
+        let slowCamera = try await tool.run(arguments: ["zoomFollowSpeed": 0.55], context: context, progress: { _ in })
+        check(box.project!.settings == expectedSlow && slowCamera.data?["look"]?["zoomFollowSpeed"] == 0.55,
+              "Changing speed while locked preserves framing, zoom timing and cursor size")
         check(AIProjectReport.summary(of: box.project, assetsDirectory: root).contains("cursor follow 0"),
               "The assistant's project summary exposes a fixed camera for diagnosing result framing")
         let restored = try JSONDecoder().decode(RecordingProject.self, from: JSONEncoder().encode(box.project!))
-        check(restored.settings.zoomFollowsCursor == 0 && restored.zoomSegments == originalZooms,
-              "A saved project retains the explicit zero follow setting and all authored zooms")
+        check(restored.settings.zoomFollowsCursor == 0 && restored.settings.zoomFollowSpeed == 0.55 && restored.zoomSegments == originalZooms,
+              "A saved project retains the explicit lock, follow speed and authored zooms")
         let lowFollow = try await tool.run(arguments: ["zoomFollowsCursor": -2], context: context, progress: { _ in })
         check(box.project!.settings.zoomFollowsCursor == 0 && lowFollow.text.contains("clamped"), "Negative cursor follow clamps to zero")
         let highFollow = try await tool.run(arguments: ["zoomFollowsCursor": 3], context: context, progress: { _ in })
         check(box.project!.settings.zoomFollowsCursor == 1 && highFollow.text.contains("clamped"), "Cursor follow above one clamps to one")
         _ = try await tool.run(arguments: ["zoomFollowsCursor": 0.37], context: context, progress: { _ in })
         _ = try await tool.run(arguments: ["padding": 160], context: context, progress: { _ in })
-        check(box.project!.settings.zoomFollowsCursor == 0.37 && box.project!.zoomSegments == originalZooms,
-              "Later unrelated edits preserve the selected follow strength and existing zoom IDs")
+        check(box.project!.settings.zoomFollowsCursor == 0.37 && box.project!.settings.zoomFollowSpeed == 0.55 && box.project!.zoomSegments == originalZooms,
+              "Re-enabling follow and editing the frame preserve the selected speed and existing zoom IDs")
+        for (requestedSpeed, expectedSpeed) in [(0.0, 0.25), (10.0, 2.0)] {
+            let bounded = try await tool.run(arguments: ["zoomFollowSpeed": requestedSpeed], context: context, progress: { _ in })
+            check(bounded.data?["look"]?["zoomFollowSpeed"]?.doubleValue == expectedSpeed && bounded.text.contains("clamped"),
+                  "Out-of-range follow speed is reported and limited to the inspector range")
+        }
 
         let before = box.project!.settings
         for invalid in ["cursor" as Any, Double.nan, Double.infinity] {
             await expectThrows("invalid cursor follow") {
                 _ = try await tool.run(arguments: ["zoomFollowsCursor": invalid, "padding": 20], context: context, progress: { _ in })
+            }
+            await expectThrows("invalid camera follow speed") {
+                _ = try await tool.run(arguments: ["zoomFollowSpeed": invalid, "padding": 20], context: context, progress: { _ in })
             }
         }
         await expectThrows("unknown key") { _ = try await tool.run(arguments: ["bogus": 1], context: context, progress: { _ in }) }

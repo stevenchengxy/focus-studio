@@ -770,6 +770,11 @@ public struct ProjectSettings: Codable, Hashable, Sendable {
     /// How strongly the camera drifts after the pointer while zoomed in (0 off,
     /// 1 full). Optional so earlier projects decode unchanged.
     public var zoomFollowsCursor: Double?
+    /// Camera response relative to the original follow algorithm. Older
+    /// projects decode a missing value as nil and retain their original timing.
+    public static let zoomFollowSpeedRange = 0.25...2.0
+    public static let defaultZoomFollowSpeed = 0.75
+    public var zoomFollowSpeed: Double? = Self.defaultZoomFollowSpeed
     public var hideIdleCursor = true
     public var showClickRing = true
     /// Optional to keep recordings saved before editable click feedback readable.
@@ -852,6 +857,11 @@ public struct ProjectSettings: Codable, Hashable, Sendable {
     public var resolvedZoomFollowsCursor: Double {
         guard let zoomFollowsCursor, zoomFollowsCursor.isFinite else { return Self.defaultZoomFollowsCursor }
         return zoomFollowsCursor.clamped(to: 0...1)
+    }
+
+    public var resolvedZoomFollowSpeed: Double {
+        guard let zoomFollowSpeed, zoomFollowSpeed.isFinite else { return 1 }
+        return zoomFollowSpeed.clamped(to: Self.zoomFollowSpeedRange)
     }
 
     public var resolvedZoomChainGap: Double {

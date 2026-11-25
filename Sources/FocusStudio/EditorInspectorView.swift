@@ -1140,6 +1140,12 @@ struct EditorInspectorView: View {
                 LabeledSlider(value: zoomTimingBinding(\.zoomEaseOut), range: 0.05...1.4, label: "Zoom out", suffix: "s", decimals: 2)
                 LabeledSlider(value: zoomChainGapBinding, range: 0...ProjectSettings.maximumZoomChainGap, label: "Link nearby clicks", suffix: "s", decimals: 1)
                 LabeledSlider(value: zoomFollowBinding, range: 0...1, label: "Follow cursor", suffix: "%", multiplier: 100, decimals: 0)
+                LabeledSlider(value: Binding(
+                    get: { project.settings.resolvedZoomFollowSpeed },
+                    set: { project.settings.zoomFollowSpeed = $0 }
+                ), range: ProjectSettings.zoomFollowSpeedRange, label: "Follow speed", suffix: "×", decimals: 2)
+                .disabled(project.settings.resolvedZoomFollowsCursor == 0)
+                .accessibilityIdentifier("animation.zoomFollowSpeed")
             }
             InspectorSection("Typing focus") {
                 Toggle("Hold zoom while typing", isOn: typingZoomBinding(\.enabled))
@@ -1969,12 +1975,16 @@ private struct LabeledSlider: View {
     var multiplier = 1.0
     var decimals = 1
 
+    private var displayValue: String {
+        (value * multiplier).formatted(.number.precision(.fractionLength(decimals))) + suffix
+    }
+
     var body: some View {
         VStack(spacing: 6) {
             HStack {
                 Text(LocalizedStringKey(label))
                 Spacer()
-                Text("\((value * multiplier).formatted(.number.precision(.fractionLength(decimals))))\(suffix)")
+                Text(verbatim: displayValue)
                     .fontDesign(.monospaced)
                     .foregroundStyle(StudioTheme.secondaryText)
             }
@@ -1982,6 +1992,7 @@ private struct LabeledSlider: View {
             Slider(value: $value, in: range)
                 .controlSize(.small)
                 .accessibilityLabel(Text(LocalizedStringKey(label)))
+                .accessibilityValue(Text(verbatim: displayValue))
         }
     }
 }

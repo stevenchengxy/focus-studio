@@ -150,12 +150,15 @@ extension AIAssistantTests {
         check(catalog.tool(named: "stop_recording")!.description.contains("joined"), "stop_recording says a stop under way is joined")
         check(catalog.tool(named: "get_project")!.inputSchema["required"] == ["project_id"], "get_project's own optional project_id becomes required")
         let cameraFollow = catalog.tool(named: "update_settings")!.inputSchema["properties"]?["zoomFollowsCursor"]
+        let followSpeed = catalog.tool(named: "update_settings")!.inputSchema["properties"]?["zoomFollowSpeed"]
         let backgroundStyle = catalog.tool(named: "update_settings")!.inputSchema["properties"]?["backgroundStyle"]
         check(backgroundStyle?["enum"]?.arrayValue?.contains(.string("none")) == true
               && backgroundStyle?["description"]?.stringValue?.contains("cropped source") == true,
               "MCP exposes source-only background mode with its geometry semantics")
         check(cameraFollow?["type"] == "number" && cameraFollow?["minimum"] == 0 && cameraFollow?["maximum"] == 1,
               "MCP exposes the same project camera-follow control without adding a tool")
+        check(followSpeed?["type"] == "number" && followSpeed?["minimum"] == 0.25 && followSpeed?["maximum"] == 2,
+              "MCP exposes the camera follow speed range separately from strength")
         check(catalog.tool(named: "rename_project")!.inputSchema["required"] == ["project_id", "title"], "rename_project requires the id and the title")
         check(catalog.tool(named: "list_assets")!.inputSchema["required"] == nil, "list_assets requires nothing")
         check(catalog.tool(named: "wait_for_job")!.inputSchema["required"] == ["job_id"] && catalog.tool(named: "wait_for_job")!.inputSchema["properties"]?["timeout_seconds"]?["maximum"] == 240, "wait_for_job takes a job id and a bounded timeout")

@@ -796,6 +796,7 @@
 "Capture console" = "Capture console";
 "Choose recording source" = "Choose recording source";
 "Follow cursor" = "Follow cursor";
+"Follow speed" = "Follow speed";
 
 /* zoom transition boundaries */
 "Zoom in ends" = "Zoom in ends";

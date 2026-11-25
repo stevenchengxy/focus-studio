@@ -796,6 +796,7 @@
 "Capture console" = "录制控制台";
 "Choose recording source" = "选择录制来源";
 "Follow cursor" = "跟随光标";
+"Follow speed" = "跟随速度";
 
 /* zoom transition boundaries */
 "Zoom in ends" = "放大完成于";

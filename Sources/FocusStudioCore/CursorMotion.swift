@@ -350,6 +350,7 @@ public enum CursorFollow {
         let count = max(1, Int((duration * sampleRate - 1e-9).rounded(.up))) + 1
         let margin = softZone + (1 - strength) * 0.24
         let limit = hardZone + (1 - strength) * 0.16
+        let responseTime = response / settings.resolvedZoomFollowSpeed
         // Below the default follow strength the user can deliberately keep
         // more of the authored framing. The default gets full travel at the
         // edges; stronger settings start panning closer to the centre.
@@ -408,7 +409,7 @@ public enum CursorFollow {
                 } else if let pointer {
                     if followSince == nil { followSince = time }
                     let engage = TimelineMath.smootherStep((time - (followSince ?? time)) / 0.10)
-                    let mix = -expm1(-dt / response)
+                    let mix = -expm1(-dt / responseTime)
                     func track(_ offset: Double, pointer: Double, base: Double) -> Double {
                         let delta = (pointer - base) * travel
                         // The dead zone moves with the actual framing. A small

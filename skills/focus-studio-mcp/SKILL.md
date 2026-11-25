@@ -59,6 +59,8 @@ a candidate cut; inspect generated answers, loading animations and audio before 
 Use `update_zoom` with an existing `zoom_id` for individual start/end/target/scale or `motion_preset` changes. `get_project.zooms[]` reports each preset; `get_project.zoom_motion_presets` lists valid values: `classic` (direct, best for dense UI), `tiltReveal` (diagonal tilt then restore), `slideFocus` (sideward reveal), and `softDrift` (gentle floating move). `add_zoom` also accepts `motion_preset`; omission keeps `classic`. Preview moving frames or a draft export to assess the effect; a single still frame cannot prove the motion.
 Use
 `set_zoom_style` for global motion, before those local edits; automatic regeneration can change segments.
+To slow or quicken camera tracking, read `get_project.look.zoomFollowSpeed` and change it with
+`update_settings` (0.25–2×). Camera follow strength is set separately with `zoomFollowsCursor`.
 If these newer tools are absent from the connected catalog, update Focus Studio before claiming to use them.
 
 For a local highlight (a button, chart or card), inspect `get_timeline`, then

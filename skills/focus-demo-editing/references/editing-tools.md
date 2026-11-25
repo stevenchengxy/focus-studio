@@ -135,6 +135,10 @@ to all shots, so preview the other zooms too. Use this only when fixed framing i
 setting unchanged. If the user requests cursor following again, restore the previously recorded value.
 This changes camera framing only; the recorded cursor and click metadata stay available.
 
+When the camera catches up too quickly, read `get_project.look.zoomFollowSpeed` and lower it with
+`update_settings` (0.25–2×). For example, try 0.5× for a slow walkthrough. Keep the follow strength
+and zoom timings as set. Judge the result in motion across a pointer move and a change of direction.
+
 For a larger recorded pointer, set `cursorScale` with `update_settings` (0.5–8×, default 1.35×).
 Read the current value in `get_project.look.cursorScale` and check the result with `capture_frame`.
 This control sizes the editable pointer overlay. A pointer embedded in source footage is part of the image.

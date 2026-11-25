@@ -410,8 +410,9 @@ extension AIAssistantTests {
         check(data["id"]?.stringValue == project.id.uuidString && data["title"] == "Checkout flow" && data["duration"] == 20 && data["source_width"] == 640 && data["source_height"] == 360 && data["open_in_editor"] == false, "identity and size: \(data)")
         check(data["created_at"]?.stringValue?.contains("T") == true && data["export_width"] == 1_920 && data["frame_rate"] == 60, "dates and export settings")
         check(data["look"]?["padding"] == 40 && data["look"]?["backgroundStyle"] == "gradient" && data["look"]?["aspectRatio"] == "wide" && data["look"]?["captionPosition"] == nil, "look under update_settings' names: \(data["look"] ?? .null)")
-        check(data["look"]?["zoomFollowsCursor"] == AIJSONValue(project.settings.resolvedZoomFollowsCursor),
-              "get_project reports the resolved camera-follow value that editing can restore")
+        check(data["look"]?["zoomFollowsCursor"] == AIJSONValue(project.settings.resolvedZoomFollowsCursor)
+              && data["look"]?["zoomFollowSpeed"] == AIJSONValue(project.settings.resolvedZoomFollowSpeed),
+              "get_project reports the resolved camera-follow strength and speed that editing can restore")
         check(data["zoom_style"]?["autoZoomEnabled"] == true && data["zoom_style"]?["zoomHold"]?.doubleValue != nil, "zoom style under set_zoom_style's names")
         check(data["audio"]?["background_music"]?["track_id"] == "calm-gradient" && data["audio"]?["background_music"]?["volume"] == 0.3 && data["audio"]?["click"] == true && data["audio"]?["zoom"] == false, "audio under set_sound_effects' names: \(data["audio"] ?? .null)")
         let zoomID = project.zoomSegments[0].id.uuidString
