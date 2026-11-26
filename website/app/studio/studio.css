@@ -17,7 +17,6 @@
 .desktop-download-gate { min-height: 100svh; padding: clamp(24px, 6vw, 72px); background: var(--background, #f5f3eb); color: var(--foreground, #242326); }
 .desktop-download-gate > div { max-width: 700px; margin: 12vh auto 0; }
 .desktop-download-gate h1 { font-size: clamp(44px, 7vw, 80px); line-height: 1.05; letter-spacing: -.055em; margin-bottom: 24px; }
-.desktop-download-gate p { color: var(--muted-foreground, #77727d); font-size: 18px; }
 .desktop-download-gate nav { display: flex; gap: 12px; flex-wrap: wrap; margin: 32px 0 20px; }
 .desktop-download-gate nav a { background: var(--foreground, #242326); color: var(--background, #f5f3eb); padding: 14px 22px; border-radius: 12px; text-decoration: none; }
 .desktop-download-gate small { display: block; max-width: 540px; line-height: 1.6; opacity: .7; }

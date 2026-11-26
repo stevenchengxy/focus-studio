@@ -9,8 +9,7 @@ export default function HelpContent() {
   const { t } = useLocale();
   return <main className="document-shell">
     <div className="document-nav"><Brand/><div style={{display:'flex',alignItems:'center',gap:14}}><LocaleToggle/><ThemeToggle/></div></div>
-    <span className="eyebrow">{t('GETTING STARTED', '快速上手')}</span><h1>{t('Less setup.', '少一点设置。')}<br/>{t('More story.', '多一点创作。')}</h1>
-    <p>{t('Record, edit and export for free. Use the Mac app for the full workflow, or explore the Windows and Linux desktop previews.', '录制、剪辑和导出，目前全部免费。Mac 版提供完整工作流，也可以体验 Windows 和 Linux 桌面预览版。')}</p>
+    <h1>{t('Getting started', '快速上手')}</h1>
     <section id="installation"><h2>{t('Install on your Mac', '在 Mac 上安装')}</h2><ol>
       <li><a href="/api/download/mac">{t('Download the Mac installer (.dmg)', '下载 Mac 安装包（.dmg）')}</a>{t('. Requires macOS 15 or later.', '。需要 macOS 15 或更高版本。')}</li>
       <li>{t('Open the DMG and double-click Focus Studio. From version 1.14.6, the setup screen offers Install and open, or Update and open if an older copy is found. For older installers without this screen, use Settings → Installation.', '打开 DMG，双击 Focus Studio。1.14.6 起会显示安装引导，点击“安装并打开”；发现旧版时点击“更新并打开”。较早的安装包没有此引导时，可进入“设置 → 安装”。')}</li>

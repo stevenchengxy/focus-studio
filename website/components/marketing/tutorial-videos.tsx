@@ -74,7 +74,7 @@ export function TutorialVideos({ captions = defaultCaptions }: { captions?: Part
       <a href="/help">{t("Getting started", "快速上手")} <ArrowUpRight size={16} aria-hidden="true"/></a>
     </div>
     <div className={styles.grid}>
-      {tutorials.map((tutorial, index) => <button
+      {tutorials.map(tutorial => <button
         type="button"
         key={tutorial.id}
         className={styles.card}
@@ -92,7 +92,7 @@ export function TutorialVideos({ captions = defaultCaptions }: { captions?: Part
           <img src={`/media/tutorial-${tutorial.id}.jpg`} alt="" width="960" height="600" loading="lazy" decoding="async"/>
           <span className={styles.play}><Play size={20} fill="currentColor" aria-hidden="true"/></span>
         </span>
-        <span className={styles.cardFooter}><span className={styles.number}>{String(index + 1).padStart(2, "0")}</span><span>{t(tutorial.title[0], tutorial.title[1])}</span><ArrowUpRight size={19} aria-hidden="true"/></span>
+        <span className={styles.cardFooter}><span>{t(tutorial.title[0], tutorial.title[1])}</span><ArrowUpRight size={19} aria-hidden="true"/></span>
       </button>)}
     </div>
     <dialog id="tutorial-player" ref={dialogRef} className={styles.dialog} aria-labelledby="tutorial-video-title"

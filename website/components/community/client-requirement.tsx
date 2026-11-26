@@ -11,7 +11,6 @@ export function CommunityClientRequirement({onRefresh,checking=false}:{onRefresh
   return <section className={styles.clientRequirement} aria-labelledby="community-client-title">
     <div className={styles.clientConnectionMark}><Monitor size={25} aria-hidden="true"/><span><Check size={11}/></span></div>
     <h2 id="community-client-title">{t('Connect your app','连接你的客户端')}</h2>
-    <p>{t('One connection. Then share whenever you like.','首次连接后，即可随时分享作品。')}</p>
     <ol className={styles.clientSteps}>
       <li><Settings2 size={16}/><span>{t('Open Settings','打开设置')}</span></li>
       <li><span className={styles.clientStepNumber}>2</span><span>{t('Connect ChatGPT','连接 ChatGPT')}</span></li>
@@ -26,6 +25,5 @@ export function CommunityClientRequirement({onRefresh,checking=false}:{onRefresh
       <p>{t('Windows / Linux: open Community publishing in the desktop app.','Windows / Linux：在客户端中打开「社区发布」。')}</p>
       <a href="/?download=1" target="_blank" rel="noreferrer"><ArrowDown size={14}/>{t('Get the latest app','下载最新版客户端')}</a>
     </details>
-    <small>{t('Local recording and export stay free. No sign-in needed.','本地录制与导出始终免费，无需登录。')}</small>
   </section>;
 }

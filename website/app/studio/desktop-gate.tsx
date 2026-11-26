@@ -24,8 +24,7 @@ export function DesktopGate() {
   }, []);
   if (desktop) return <Suspense fallback={<main className="desktop-download-gate" role="status">{t('Opening Focus Studio…','正在打开 Focus Studio…')}</main>}><DesktopEditor /></Suspense>;
   return <main className="desktop-download-gate"><Brand /><LocaleToggle/><div>
-    <h1>{t('Your studio.','你的创作空间。')}<br />{t('On your desktop.','就在桌面。')}</h1>
-    <p>{t('Download Focus Studio to record, edit and export for free.','下载 Focus Studio，免费录制、剪辑与导出。')}</p>
+    <h1>{t('Download Focus Studio','下载 Focus Studio')}</h1>
     <nav aria-label="Download Focus Studio">
       <a href="/api/download/mac">{t('Download for Mac','下载 Mac 版')}</a>
       <a href="/api/download/windows?channel=preview">{t('Windows preview','Windows 预览版')}</a>

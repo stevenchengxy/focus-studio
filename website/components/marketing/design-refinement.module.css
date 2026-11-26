@@ -12,7 +12,7 @@
 .compositionFrame i:nth-child(3) { bottom: 48px; left: 47px; border-bottom-width: 1px; border-left-width: 1px; }
 .compositionFrame i:nth-child(4) { bottom: 48px; right: 47px; border-bottom-width: 1px; border-right-width: 1px; }
 .orbitDot { position: absolute; width: 7px; height: 7px; background: #a792d3; border: 1px solid #f9f7ff; box-shadow: 0 1px 5px #836f9b29; border-radius: 50%; top: 82%; right: 17%; }
-.refinedSite :global(.hero-copy) { position: relative; z-index: 1; }
+.refinedSite :global(.hero-copy) { position: relative; z-index: 1; margin-bottom: clamp(26px, 4vw, 48px); }
 .refinedSite :global(.hero h1) { text-wrap: balance; }
 .refinedSite :global(.hero-actions .button-dark) { box-shadow: 0 5px 0 -3px #51495433, inset 0 1px 0 #ffffff25; }
 .refinedSite :global(.best-light svg) { stroke-width: 4; }
@@ -32,8 +32,7 @@
 .refinedSite :global(.possibilities) { padding-top: 85px; }
 .refinedSite :global(.feature-art) { box-shadow: inset 0 1px 0 #ffffff7d, 0 8px 28px -22px #52406540; }
 .refinedSite :global(.feature-art)::after { content: ""; position: absolute; inset: 12px; border: 1px solid #ffffff50; border-radius: 7px; pointer-events: none; }
-.refinedSite :global(.step-index) { display: inline-flex; align-items: center; gap: 10px; }
-.refinedSite :global(.step-index)::before { content: ""; width: 17px; height: 1px; background: #a294b5; }
+.refinedSite :global(.feature-copy h3) { margin: 0; }
 .editorStage { position: relative; isolation: isolate; }
 .editorContours { position: absolute; inset: -15px 22px 15px; border: 1px solid #b3a7c752; border-radius: 22px; z-index: -1; }
 .editorContours::before { content: ""; position: absolute; inset: -15px 18px 15px; border: 1px solid #b3a7c72c; border-radius: 28px; }
@@ -87,7 +86,7 @@
   .refinedSite :global(.nav-actions) { gap: 8px; }
   .refinedSite :global(.nav-actions .sign-in) { display: none; }
   .refinedSite :global(.main-nav.is-open) { top: 68px; }
-  .refinedSite :global(.hero-note span) { display: block; border: 0; margin: 7px 0 0; padding: 0; }
+  .refinedSite :global(.hero-footnote) { display: flex; }
 }
 
 /* Real assistant window, kept level and free of decorative UI replicas. */

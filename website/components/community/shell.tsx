@@ -23,7 +23,7 @@ export function CommunityShell({children, active='explore', search}:{children:Re
   return <div className={styles.shell}>
     <a href="#community-main" className="skip-link">{t('Skip to content','跳转到内容')}</a>
     <header className={styles.header}>
-      <a className={styles.brand} href="/" aria-label={t('Focus Studio home','Focus Studio 官网')}><img src="/icons/icon-192.png" alt="" width="30" height="30"/><span>Focus Studio<small>{t('Community','创作社区')}</small></span></a>
+      <a className={styles.brand} href="/" aria-label={t('Focus Studio home','Focus Studio 官网')}><img src="/icons/icon-192.png" alt="" width="30" height="30"/><span>Focus Studio</span></a>
       <form className={styles.headerSearch} role="search" action={active==='ai'?'/community/ai':active==='mine'?'/community/mine':active==='moderation'?'/community/moderation':'/community'} onSubmit={search?event=>event.preventDefault():undefined}>
         <Search size={17} aria-hidden="true"/><input name="q" type="search" maxLength={120} placeholder={search?.placeholder||t('Search creations','搜索作品')} aria-label={t('Search creations','搜索作品')} {...(search?{value:search.value,onChange:(event:React.ChangeEvent<HTMLInputElement>)=>search.onChange(event.target.value)}:{})}/>
       </form>

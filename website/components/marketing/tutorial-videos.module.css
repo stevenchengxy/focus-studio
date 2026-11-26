@@ -10,7 +10,6 @@
 .play { position: absolute; inset: 0; margin: auto; width: 48px; height: 48px; display: grid; place-items: center; border-radius: 50%; background: #24212adb; color: #fff; border: 1px solid #ffffff47; box-shadow: 0 4px 18px #14101c20; transition: transform .25s ease, background .25s ease; }
 .play svg { margin-left: 2px; }
 .cardFooter { display: flex; width: 100%; align-items: center; gap: 11px; padding: 19px 2px 5px; font-size: 16px; font-weight: 500; line-height: 1.5; }
-.number { font-size: 10px; letter-spacing: .05em; color: var(--muted, #79747e); font-variant-numeric: tabular-nums; }
 .cardFooter > svg { flex-shrink: 0; margin-left: auto; color: var(--muted, #79747e); transition: transform .25s ease; }
 @media (hover: hover) {
   .card:hover .poster { box-shadow: 0 12px 32px #2f203b15; }

@@ -50,17 +50,16 @@ export default function AccountPanel({code,signInUrl,signOutUrl,communityConnect
       <a href="/" className={styles.brand}><img src="/icons/icon-192.png" width="34" height="34" alt=""/>Focus Studio</a>
       <div className={styles.navActions}><a href="/community">{t('Community','作品社区')}</a><LocaleToggle/><ThemeToggle/></div>
     </nav>
-    <header><p className={styles.eyebrow}>{t('YOUR CREATIVE SPACE','你的创作空间')}</p><h1>{t('Make it yours.','把想法变成作品。')}</h1><p>{t('Your shared work and connected devices, in one place.','在这里管理你的分享作品与已连接设备。')}</p></header>
+    <header><h1>{t('Your account','我的账户')}</h1></header>
     {error&&<div role="alert" className={styles.error}>{errorText}<button onClick={()=>{setError(null);void load();}}>{t('Retry','重试')}</button></div>}
     {!account&&!error&&<p role="status">{t('Loading your account…','正在加载账户…')}</p>}
     {account&&!account.authenticated&&<section className={styles.card}>
-      <h2>{t('A space for your best work.','给好作品一个空间。')}</h2><p>{t('Sign in to share demos and manage your devices. Recording, editing and exporting are currently free.','登录后分享 Demo、管理设备。目前录制、剪辑与导出全部免费。')}</p>
       <a className={styles.primary} href={signInUrl} target="_top">{t('Continue with ChatGPT','使用 ChatGPT 登录')}<ArrowUpRight size={16}/></a>
-      <p className={styles.note}>{t('Use the same ChatGPT account for your community posts and devices.','请使用同一 ChatGPT 账户管理社区作品和设备。')}</p>
+      {communityConnection && <p className={styles.note}>{t('Use the ChatGPT account you use for community posts.','请使用发布社区作品的 ChatGPT 账户。')}</p>}
     </section>}
     {account?.authenticated&&<>
       <section className={styles.card}>
-        <div className={styles.row}><div><p className={styles.eyebrow}>{t('ACCOUNT','账户')}</p><h2>{account.account?.email || account.viewerName || t('Your ChatGPT account','你的 ChatGPT 账户')}</h2></div><button className={styles.textButton} disabled={!!busy} onClick={()=>void action('logout','/api/auth/logout')}>{t('Sign out','退出登录')}</button></div>
+        <div className={styles.row}><h2>{account.account?.email || account.viewerName || t('Your ChatGPT account','你的 ChatGPT 账户')}</h2><button className={styles.textButton} disabled={!!busy} onClick={()=>void action('logout','/api/auth/logout')}>{t('Sign out','退出登录')}</button></div>
         <div className={styles.quickLinks}>
           <a href="/community/mine"><Monitor size={19}/><span>{t('My shared work','我分享的作品')}</span><ArrowUpRight size={16}/></a>
           <a href="/community/new"><Plus size={19}/><span>{t('Share a demo','分享 Demo')}</span><ArrowUpRight size={16}/></a>
