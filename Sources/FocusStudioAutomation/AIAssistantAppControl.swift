@@ -462,6 +462,8 @@ public protocol AppControlling: AnyObject, Sendable {
     var libraryDirectory: URL { get }
     /// The project shown in the editor, or nil when the editor is closed.
     var openProjectID: UUID? { get }
+    /// The zoom selected on the open project's timeline or in its inspector.
+    var selectedEditorZoomID: UUID? { get }
     func openProject(id: UUID) throws
     func closeEditor()
     var bundledMusicTracks: [AIMusicTrack] { get }
@@ -517,6 +519,8 @@ public protocol AppControlling: AnyObject, Sendable {
 }
 
 extension AppControlling {
+    public var selectedEditorZoomID: UUID? { nil }
+
     public func discardImportedVoiceovers(_ clips: [VoiceoverClip], projectID: UUID) async {}
     public func importVoiceover(from url: URL, projectID: UUID) async throws -> VoiceoverClip {
         throw AIToolError.failed("Importing voiceover is unavailable in this app.")
@@ -748,6 +752,7 @@ extension AIToolSupport {
     static func zoomLine(_ segment: ZoomSegment) -> String {
         var text = "\(seconds(segment.start))–\(seconds(segment.end)) s at (\(String(format: "%.2f", segment.targetX)), \(String(format: "%.2f", segment.targetY))) ×\(String(format: "%.2f", segment.scale)) \(segment.kind.rawValue), motion \(segment.motionPreset.rawValue)"
         if !segment.isEnabled { text += " (disabled)" }
+        if let speed = segment.zoomFollowSpeed { text += ", follow \(seconds(speed))×" }
         return text
     }
 }
@@ -1602,6 +1607,7 @@ public struct AddZoomTool: AIAssistantTool {
                 "y": ["type": "number", "minimum": 0, "maximum": 1, "description": "Vertical centre, 0 = top, 1 = bottom."],
                 "scale": ["type": "number", "minimum": 1.1, "maximum": 3, "description": "Magnification, from 1.1 to 3; by default the project's zoom scale."],
                 "motion_preset": ZoomMotionToolSupport.property,
+                "follow_speed": ZoomMotionToolSupport.followSpeedProperty,
             ],
         ]
     }
@@ -1614,6 +1620,7 @@ public struct AddZoomTool: AIAssistantTool {
         let arguments = AIToolArguments(raw)
         let project = try await AIToolSupport.requireProject(context)
         let motionPreset = try ZoomMotionToolSupport.requested(arguments) ?? .classic
+        let speed = try ZoomMotionToolSupport.followSpeed(arguments)
         func number(_ key: String) throws -> Double {
             guard arguments.has(key) else { throw AIToolError.invalidArgument("Missing required argument \"\(key)\".") }
             guard let value = arguments.double(key) else { throw AIToolError.invalidArgument("\"\(key)\" must be a number.") }
@@ -1640,11 +1647,11 @@ public struct AddZoomTool: AIAssistantTool {
             scale = requested.clamped(to: Self.scaleRange)
             if scale != requested { notes.append("scale clamped to \(String(format: "%.2f", scale))") }
         }
-        let segment = ZoomSegment(start: start, end: min(end, duration), targetX: x, targetY: y, scale: scale, kind: .manual, motionPreset: motionPreset)
-        let updated = try await AIToolSupport.edit(context, projectID: project.id) { current -> (index: Int, count: Int) in
+        let segment = ZoomSegment(start: start, end: min(end, duration), targetX: x, targetY: y, scale: scale, kind: .manual, zoomFollowSpeed: speed, motionPreset: motionPreset)
+        let updated = try await AIToolSupport.edit(context, projectID: project.id) { current -> (index: Int, count: Int, zoom: AIJSONValue) in
             current.zoomSegments.append(segment)
             let index = AIToolSupport.orderedZooms(current).first { $0.segment.id == segment.id }?.index ?? current.zoomSegments.count
-            return (index, current.zoomSegments.count)
+            return (index, current.zoomSegments.count, AIProjectReport.zoomData(index: index, segment: segment, settings: current.settings))
         }
         var text = "Added zoom #\(updated.index): \(AIToolSupport.zoomLine(segment)). The project now has \(updated.count) zooms."
         if !notes.isEmpty { text += " (\(notes.joined(separator: ", ")))" }
@@ -1652,7 +1659,7 @@ public struct AddZoomTool: AIAssistantTool {
             "project_id": AIJSONValue(project.id.uuidString),
             "index": AIJSONValue(updated.index),
             "zoom_id": AIJSONValue(segment.id.uuidString),
-            "zoom": AIProjectReport.zoomData(index: updated.index, segment: segment),
+            "zoom": updated.zoom,
             "zoom_count": AIJSONValue(updated.count),
             "notes": .array(notes.map { AIJSONValue($0) }),
         ]
@@ -1745,7 +1752,7 @@ struct RemoveZoomTool: AIAssistantTool {
         }
         let data: AIJSONValue = [
             "project_id": AIJSONValue(project.id.uuidString),
-            "removed": AIProjectReport.zoomData(index: index, segment: entry.segment),
+            "removed": AIProjectReport.zoomData(index: index, segment: entry.segment, settings: project.settings),
             "removed_count": 1,
             "remaining": AIJSONValue(remaining),
         ]

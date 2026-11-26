@@ -1,4 +1,5 @@
 @preconcurrency import AVFoundation
+import CoreFoundation
 import Foundation
 import FocusStudioCore
 
@@ -31,6 +32,22 @@ enum ZoomMotionToolSupport {
 
     static var property: [String: Any] {
         ["type": "string", "enum": ZoomMotionPreset.allCases.map(\.rawValue), "description": description]
+    }
+
+    static var followSpeedProperty: [String: Any] {
+        ["type": "number", "minimum": ProjectSettings.zoomFollowSpeedRange.lowerBound,
+         "maximum": ProjectSettings.zoomFollowSpeedRange.upperBound,
+         "description": "Tracking speed for this zoom, 0.25× to 2×."]
+    }
+
+    static func followSpeed(_ args: AIToolArguments) throws -> Double? {
+        guard args.has("follow_speed") else { return nil }
+        guard let number = args.raw["follow_speed"] as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID(),
+              ProjectSettings.zoomFollowSpeedRange.contains(number.doubleValue) else {
+            throw AIToolError.invalidArgument("follow_speed must be a number from 0.25 to 2.")
+        }
+        return number.doubleValue
     }
 
     static func requested(_ args: AIToolArguments) throws -> ZoomMotionPreset? {
@@ -137,7 +154,7 @@ public struct CreateDemoCutTool: AIAssistantTool {
 
 public struct UpdateZoomTool: AIAssistantTool {
     public let name = "update_zoom"
-    public let summary = "Adjust one zoom's timing, target, scale, motion preset, easing or enabled state by stable zoom_id; preserve all other zooms. The zoom becomes manual, retaining automatic-event provenance so regeneration cannot replace it."
+    public let summary = "Adjust one zoom by stable zoom_id. Follow speed can be overridden or restored to the project speed while keeping the cue automatic. Timing, target, scale, preset, easing or enabled changes mark it manual."
     public init() {}
     public var parametersSchema: [String: Any] {
         ["type": "object", "required": ["zoom_id"], "properties": [
@@ -147,6 +164,8 @@ public struct UpdateZoomTool: AIAssistantTool {
             "y": ["type": "number", "minimum": 0, "maximum": 1, "description": "Vertical focus, from 0 (top) to 1 (bottom)."],
             "scale": ["type": "number", "minimum": 1.1, "maximum": 3, "description": "Magnification, from 1.1 to 3."],
             "motion_preset": ZoomMotionToolSupport.property,
+            "follow_speed": ZoomMotionToolSupport.followSpeedProperty,
+            "inherit_follow_speed": ["type": "boolean", "description": "Set true to restore project speed. Omit follow_speed."],
             "ease_in": ["type": "number", "minimum": 0, "maximum": 5, "description": "Seconds to zoom in, from 0 to 5; omitted preserves the existing value."],
             "ease_out": ["type": "number", "minimum": 0, "maximum": 5, "description": "Seconds to zoom out, from 0 to 5; omitted preserves the existing value."],
             "enabled": ["type": "boolean"],
@@ -157,6 +176,14 @@ public struct UpdateZoomTool: AIAssistantTool {
         guard let id = args.string("zoom_id").flatMap(UUID.init(uuidString:)) else { throw AIToolError.invalidArgument("zoom_id must identify one zoom from get_project.") }
         let project = try await DemoEditingSupport.project(raw, context: context)
         let motionPreset = try ZoomMotionToolSupport.requested(args)
+        let speed = try ZoomMotionToolSupport.followSpeed(args)
+        let inheritsSpeed = args.has("inherit_follow_speed")
+        if inheritsSpeed {
+            guard let flag = raw["inherit_follow_speed"] as? NSNumber, CFGetTypeID(flag) == CFBooleanGetTypeID(),
+                  flag.boolValue, speed == nil else {
+                throw AIToolError.invalidArgument("To restore project speed, pass inherit_follow_speed: true without follow_speed.")
+            }
+        }
         let numeric = ["start", "end", "x", "y", "scale", "ease_in", "ease_out"]
         var values: [String: Double] = [:]
         for key in numeric where args.has(key) {
@@ -168,34 +195,38 @@ public struct UpdateZoomTool: AIAssistantTool {
             guard let value = args.bool("enabled") else { throw AIToolError.invalidArgument("enabled must be boolean.") }
             enabled = value
         } else { enabled = nil }
-        guard !values.isEmpty || enabled != nil || motionPreset != nil else { throw AIToolError.invalidArgument("Supply at least one zoom property to update.") }
+        let authorsMotion = !values.isEmpty || enabled != nil || motionPreset != nil
+        guard authorsMotion || speed != nil || inheritsSpeed else { throw AIToolError.invalidArgument("Supply at least one zoom property to update.") }
         let edits = values
-        let updated = try await AIToolSupport.edit(context, projectID: project.id) { current -> (zoom: ZoomSegment, index: Int) in
+        let updated = try await AIToolSupport.edit(context, projectID: project.id) { current -> (zoom: ZoomSegment, data: AIJSONValue) in
             guard let index = current.zoomSegments.firstIndex(where: { $0.id == id }) else { throw AIToolError.invalidArgument("This zoom is no longer in the project. Read get_project again.") }
             var segment = current.zoomSegments[index]
-            if segment.kind == .automatic, segment.automaticSource == nil {
+            if authorsMotion, segment.kind == .automatic, segment.automaticSource == nil {
                 segment.automaticSource = ZoomAutomaticSource(start: segment.start, targetX: segment.targetX, targetY: segment.targetY, originalEnd: segment.end)
             }
             segment.start = edits["start"] ?? segment.start; segment.end = edits["end"] ?? segment.end
             segment.targetX = edits["x"] ?? segment.targetX; segment.targetY = edits["y"] ?? segment.targetY
             segment.scale = edits["scale"] ?? segment.scale
             if let motionPreset { segment.motionPreset = motionPreset }
+            if speed != nil || inheritsSpeed { segment.zoomFollowSpeed = speed }
             if let value = edits["ease_in"] { segment.zoomEaseIn = value }
             if let value = edits["ease_out"] { segment.zoomEaseOut = value }
             if let enabled { segment.isEnabled = enabled }
-            guard segment.start >= 0, segment.end <= current.duration,
-                  ZoomToolTimingSupport.meetsMinimumDuration(start: segment.start, end: segment.end),
-                  (0...1).contains(segment.targetX), (0...1).contains(segment.targetY), (1.1...3).contains(segment.scale),
-                  (0...5).contains(segment.zoomEaseIn ?? 0), (0...5).contains(segment.zoomEaseOut ?? 0) else {
-                throw AIToolError.invalidArgument("Zoom times must be within the project, at least 0.2 seconds apart; target 0–1, scale 1.1–3 and easing 0–5 seconds.")
+            if authorsMotion {
+                guard segment.start >= 0, segment.end <= current.duration,
+                      ZoomToolTimingSupport.meetsMinimumDuration(start: segment.start, end: segment.end),
+                      (0...1).contains(segment.targetX), (0...1).contains(segment.targetY), (1.1...3).contains(segment.scale),
+                      (0...5).contains(segment.zoomEaseIn ?? 0), (0...5).contains(segment.zoomEaseOut ?? 0) else {
+                    throw AIToolError.invalidArgument("Zoom times must be within the project, at least 0.2 seconds apart; target 0–1, scale 1.1–3 and easing 0–5 seconds.")
+                }
+                segment.kind = .manual
             }
-            segment.kind = .manual
             current.zoomSegments[index] = segment
             let number = AIToolSupport.orderedZooms(current).first { $0.segment.id == id }?.index ?? 1
-            return (segment, number)
+            return (segment, AIProjectReport.zoomData(index: number, segment: segment, settings: current.settings))
         }
         let zoom = updated.zoom
-        let data: AIJSONValue = ["project_id": AIJSONValue(project.id.uuidString), "zoom_id": AIJSONValue(id.uuidString), "zoom": AIProjectReport.zoomData(index: updated.index, segment: zoom)]
+        let data: AIJSONValue = ["project_id": AIJSONValue(project.id.uuidString), "zoom_id": AIJSONValue(id.uuidString), "zoom": updated.data]
         return AIToolResult(text: "Updated zoom \(id.uuidString): \(AIToolSupport.zoomLine(zoom)). Other zooms are unchanged.\n" + String(decoding: try data.jsonData(), as: UTF8.self), data: data)
     }
 }

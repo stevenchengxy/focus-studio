@@ -242,7 +242,7 @@ public struct MCPToolCatalog: Sendable {
         ),
         MCPToolSpec(
             tool: GetProjectTool(), title: "Get project",
-            description: "Read a project without opening it: title, duration, look, audio and export settings; available zoom_motion_presets and the first 70 zooms; region_effects with stable IDs, source rectangles and visible output ranges (null when trimmed away); chapters and sampled clicks/typing. Counts report full totals. Coordinates are 0–1 from top-left; times are seconds.",
+            description: "Read a project without opening it. selected_zoom_id is the editor selection (null if none). Includes selected_zoom, first 70 zooms, look, audio, export settings, region_effects with stable IDs and visible output ranges (null if trimmed), chapters and sampled input. Counts are totals. Coordinates 0–1 from top-left, times in seconds.",
             scope: .projectReadOnly, annotations: .reads
         ),
         MCPToolSpec(
@@ -410,12 +410,12 @@ public struct MCPToolCatalog: Sendable {
         ),
         MCPToolSpec(
             tool: UpdateZoomTool(), title: "Adjust one zoom",
-            description: "Edit one zoom by stable zoom_id from get_project: change timing, target, scale, motion_preset, easing or enabled state. Presets: classic, tiltReveal (diagonal), slideFocus (side glide), softDrift (gentle drift). Keeps its ID and other zooms; marks this one manual. Preview the moving shot.",
+            description: "Edit one zoom by stable zoom_id from get_project. Speed-only edits preserve automatic cues. Other edits mark the cue manual. Preview motion after editing.",
             scope: .project, annotations: MCPToolAnnotations(readOnly: false, idempotent: true)
         ),
         MCPToolSpec(
             tool: AddZoomTool(), title: "Add zoom",
-            description: "Add a manual zoom from start to end seconds, targeting x/y 0–1 from the top-left with optional scale. motion_preset: classic (default), tiltReveal (diagonal), slideFocus (side glide), softDrift (gentle drift). Existing zooms stay; returns its ID and opens the editor.",
+            description: "Add a manual zoom between start and end seconds, targeting x/y 0–1 from top-left. Returns its ID and opens the editor.",
             scope: .project, annotations: MCPToolAnnotations(readOnly: false)
         ),
         MCPToolSpec(

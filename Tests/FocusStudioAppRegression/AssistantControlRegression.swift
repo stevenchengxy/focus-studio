@@ -31,9 +31,12 @@ enum AssistantControlRegression {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
         let model = StudioModel(store: fixture.store, interactionTrackingAccess: { true }, inputMonitoringAccess: { false }, screenCaptureAccess: { false })
-        var first = RecordingProject(title: "Open one", sourceVideoPath: "raw.mp4", duration: 10, sourceWidth: 1280, sourceHeight: 720)
+        var first = RecordingProject(title: "Open one", sourceVideoPath: "raw.mp4", duration: 80, sourceWidth: 1280, sourceHeight: 720)
+        first.zoomSegments = (0..<72).map { ZoomSegment(start: Double($0), end: Double($0) + 0.5, targetX: 0.4, targetY: 0.5, scale: 2) }
+        let chosen = first.zoomSegments[71].id
         first.clickEvents = [ClickEvent(time: 2, x: 0.25, y: 0.5, button: .left)]
-        let second = RecordingProject(title: "Library one", sourceVideoPath: "raw.mp4", duration: 6, sourceWidth: 640, sourceHeight: 360)
+        let second = RecordingProject(title: "Library one", sourceVideoPath: "raw.mp4", duration: 6, sourceWidth: 640, sourceHeight: 360,
+                                     zoomSegments: [ZoomSegment(id: chosen, start: 0, end: 1, targetX: 0.5, targetY: 0.5, scale: 1.8)])
         for project in [first, second] { try await fixture.store.save(project) }
         model.projects = [first, second]
         model.open(first)
@@ -41,9 +44,13 @@ enum AssistantControlRegression {
         edited.title = "Edited in the editor"
         try expect(model.updateActiveProject(edited), "The editor must take the edit")
         let context = model.assistantSession.context
+        let selection = model.editorZoomSelection(for: first.id)
+        selection.wrappedValue = chosen
 
         let other = try await GetProjectTool().run(arguments: ["project_id": second.id.uuidString], context: context, progress: { _ in })
         try expect(model.destination == .editor && model.activeProject?.id == first.id, "get_project must not open another project")
+        try expect(other.data?["selected_zoom_id"] == .null && other.data?["selected_zoom"] == .null,
+                   "A closed project cannot report another editor's selection, even if cue IDs match")
         try expect(other.data?["title"] == "Library one" && other.data?["open_in_editor"] == false && other.data?["duration"] == 6,
                    "A closed project is read from the library, got \(other.data.map { "\($0)" } ?? "nil")")
         let expectedAssets = fixture.store.projectsDirectory.appendingPathComponent("\(second.id.uuidString)/ai").path
@@ -51,6 +58,22 @@ enum AssistantControlRegression {
         let open = try await GetProjectTool().run(arguments: ["project_id": first.id.uuidString], context: context, progress: { _ in })
         try expect(open.data?["title"] == "Edited in the editor" && open.data?["open_in_editor"] == true && open.data?["clicks"]?["count"] == 1,
                    "The open project is read from the editor")
+        let selectedID = open.data?["selected_zoom_id"]?.stringValue
+        try expect(selectedID == chosen.uuidString && open.data?["selected_zoom"]?["index"] == 72
+                   && open.data?["zooms"]?.arrayValue?.count == 70 && open.data?["selected_zoom"]?["inherits_follow_speed"] == true,
+                   "The actual selected cue remains addressable beyond the 70-row limit")
+        _ = try await UpdateZoomTool().run(arguments: ["zoom_id": selectedID ?? "", "follow_speed": 0.5],
+                                           context: context, progress: { _ in })
+        var expected = edited
+        expected.zoomSegments[71].zoomFollowSpeed = 0.5
+        try expect(model.activeProject == expected, "Selected-only request targets that cue without altering other edits")
+        var withoutCue = expected
+        withoutCue.zoomSegments.removeLast()
+        _ = model.updateActiveProject(withoutCue)
+        try expect(selection.wrappedValue == nil, "Deleting the selected cue clears selection")
+        _ = model.updateActiveProject(expected)
+        try expect(selection.wrappedValue == nil, "Restoring the deleted cue cannot resurrect its prior selection")
+        selection.wrappedValue = chosen
         try expect(model.project(id: UUID()) == nil && model.project(id: second.id)?.title == "Library one", "Unknown ids read as nil")
 
         let status = try await GetStatusTool().run(arguments: [:], context: context, progress: { _ in })
@@ -65,8 +88,18 @@ enum AssistantControlRegression {
         model.closeEditor()
         await model.flushProjectEdits()
         let closed = try await GetProjectTool().run(arguments: ["project_id": first.id.uuidString], context: context, progress: { _ in })
-        try expect(closed.data?["title"] == "Edited in the editor" && closed.data?["open_in_editor"] == false && model.destination == .library,
+        try expect(closed.data?["title"] == "Edited in the editor" && closed.data?["open_in_editor"] == false
+                   && closed.data?["selected_zoom_id"] == .null && model.destination == .library,
                    "After closing, the saved edit is read from the library without reopening it")
+        model.open(second)
+        let next = model.editorZoomSelection(for: second.id)
+        try expect(next.wrappedValue == nil, "Opening a project with the same cue ID starts unselected")
+        next.wrappedValue = chosen
+        selection.wrappedValue = nil
+        try expect(next.wrappedValue == chosen, "A disappearing editor cannot clear the new editor's selection")
+        next.wrappedValue = nil
+        let deselected = try await GetProjectTool().run(arguments: [:], context: context, progress: { _ in })
+        try expect(deselected.data?["selected_zoom_id"] == .null, "A cleared selection is returned as null without guessing from the playhead")
     }
 
     private static func droppedEditsThrow() async throws {

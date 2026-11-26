@@ -75,18 +75,37 @@ def run(options):
     zoom, _ = call(helper, "add_zoom", {"project_id": project_id, "start": 0.2, "end": 1.2, "x": 0.25, "y": 0.75, "scale": 1.8})
     check(zoom.get("zoom_count") == 1, f"add_zoom: {zoom}")
 
+    no_selection, _ = call(helper, "get_project", {"project_id": project_id})
+    check(no_selection["selected_zoom_id"] is None and no_selection["selected_zoom"] is None,
+          "the first cue exists without an editor selection")
+    call(helper, "add_zoom", {"project_id": project_id, "start": 1.3, "end": 1.8, "x": 0.55, "y": 0.5, "scale": 2})
+    # The host simulates a user clicking the later cue when this call presents the editor.
     settings, _ = call(helper, "update_settings", {
         "project_id": project_id, "padding": 24, "cornerRadius": 12, "frameRate": 24, "zoomFollowSpeed": 0.5,
     })
     after, _ = call(helper, "get_project", {"project_id": project_id})
-    zooms = after.get("zooms", [])
-    check(len(zooms) == 1 and zooms[0].get("start") == 0.2 and zooms[0].get("end") == 1.2 and zooms[0].get("x") == 0.25,
-          f"the zoom is in the project: {zooms}")
+    first, second = after["zooms"]
+    check(first.get("start") == 0.2 and first.get("end") == 1.2 and first.get("x") == 0.25,
+          f"the zoom is in the project: {first}")
     look = after.get("look", {})
     check(look.get("zoomFollowSpeed") == 0.5 and look.get("zoomFollowsCursor") == project["look"]["zoomFollowsCursor"],
           f"the camera speed changes independently of follow strength: {look}")
     check(look.get("padding") == 24 and look.get("cornerRadius") == 12 and after.get("frame_rate") == 24,
           f"the settings are in the project: {look}, {after.get('frame_rate')} fps (update said {settings.get('changes')})")
+    check(after["selected_zoom_id"] == second["id"] and after["selected_zoom"] == second,
+          "get_project reports the later cue selected in the timeline")
+    target = {"project_id": project_id, "zoom_id": after["selected_zoom_id"]}
+    check(first["inherits_follow_speed"] and second["inherits_follow_speed"], "new zooms inherit project speed")
+    call(helper, "update_zoom", {**target, "follow_speed": 0.25})
+    custom, _ = call(helper, "get_project", {"project_id": project_id})
+    check(custom["zooms"][0] == first and custom["look"]["zoomFollowSpeed"] == 0.5
+          and custom["zooms"][1]["follow_speed"] == 0.25 and not custom["zooms"][1]["inherits_follow_speed"],
+          "overriding the second zoom preserves its neighbour and the project speed")
+    check(custom["selected_zoom_id"] == target["zoom_id"] and custom["selected_zoom"] == custom["zooms"][1],
+          "the selected cue remains selected and reports its edited speed")
+    call(helper, "update_zoom", {**target, "inherit_follow_speed": True})
+    reset, _ = call(helper, "get_project", {"project_id": project_id})
+    check(reset["zooms"] == [first, second], "clearing the override restores both zooms to their initial settings")
 
     started = time.monotonic()
     exported, _ = call(helper, "export_project", {"project_id": project_id, "path": "out/e2e.mp4", "width": 1280}, token="export")
@@ -127,7 +146,7 @@ def main():
         print(f"mcp_e2e.py: FAIL: {error}", file=sys.stderr)
         sys.exit(1)
     print(f"mcp_e2e.py: PASS project {project_id} (initialize, tools/list, get_status, import_video by a relative path, get_project, "
-          f"add_zoom, update_settings, export_project to out/e2e.mp4 in {export_seconds:.1f} s with {progress_count} progress "
+          f"timeline selection via get_project, update_zoom on the selected cue and restore, update_settings, export_project to out/e2e.mp4 in {export_seconds:.1f} s with {progress_count} progress "
           f"notifications, rename_project, list_projects, delete_project to the Trash, exit at end of input)")
 
 

@@ -222,6 +222,8 @@ public struct ZoomSegment: Codable, Hashable, Sendable, Identifiable {
     /// Nil inherits the project transition duration. Optional for old projects.
     public var zoomEaseIn: Double?
     public var zoomEaseOut: Double?
+    /// Optional camera response override for this cue; nil inherits the project's speed.
+    public var zoomFollowSpeed: Double?
     public var motionPreset: ZoomMotionPreset
     public var automaticSource: ZoomAutomaticSource?
 
@@ -237,6 +239,7 @@ public struct ZoomSegment: Codable, Hashable, Sendable, Identifiable {
         isInstant: Bool = false,
         zoomEaseIn: Double? = nil,
         zoomEaseOut: Double? = nil,
+        zoomFollowSpeed: Double? = nil,
         motionPreset: ZoomMotionPreset = .classic,
         automaticSource: ZoomAutomaticSource? = nil
     ) {
@@ -251,13 +254,14 @@ public struct ZoomSegment: Codable, Hashable, Sendable, Identifiable {
         self.isInstant = isInstant
         self.zoomEaseIn = zoomEaseIn
         self.zoomEaseOut = zoomEaseOut
+        self.zoomFollowSpeed = zoomFollowSpeed
         self.motionPreset = motionPreset
         self.automaticSource = automaticSource
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, start, end, targetX, targetY, scale, kind, isEnabled, isInstant
-        case zoomEaseIn, zoomEaseOut, motionPreset, automaticSource
+        case zoomEaseIn, zoomEaseOut, zoomFollowSpeed, motionPreset, automaticSource
     }
 
     public init(from decoder: Decoder) throws {
@@ -273,6 +277,7 @@ public struct ZoomSegment: Codable, Hashable, Sendable, Identifiable {
         isInstant = try values.decode(Bool.self, forKey: .isInstant)
         zoomEaseIn = try values.decodeIfPresent(Double.self, forKey: .zoomEaseIn)
         zoomEaseOut = try values.decodeIfPresent(Double.self, forKey: .zoomEaseOut)
+        zoomFollowSpeed = try values.decodeIfPresent(Double.self, forKey: .zoomFollowSpeed)
         // Missing or newer unknown presets preserve old recordings' appearance.
         motionPreset = (try? values.decode(ZoomMotionPreset.self, forKey: .motionPreset)) ?? .classic
         automaticSource = try values.decodeIfPresent(ZoomAutomaticSource.self, forKey: .automaticSource)
@@ -291,8 +296,14 @@ public struct ZoomSegment: Codable, Hashable, Sendable, Identifiable {
         try values.encode(isInstant, forKey: .isInstant)
         try values.encodeIfPresent(zoomEaseIn, forKey: .zoomEaseIn)
         try values.encodeIfPresent(zoomEaseOut, forKey: .zoomEaseOut)
+        try values.encodeIfPresent(zoomFollowSpeed, forKey: .zoomFollowSpeed)
         try values.encode(motionPreset, forKey: .motionPreset)
         try values.encodeIfPresent(automaticSource, forKey: .automaticSource)
+    }
+
+    public func resolvedZoomFollowSpeed(settings: ProjectSettings) -> Double {
+        guard let zoomFollowSpeed, zoomFollowSpeed.isFinite else { return settings.resolvedZoomFollowSpeed }
+        return zoomFollowSpeed.clamped(to: ProjectSettings.zoomFollowSpeedRange)
     }
 }
 

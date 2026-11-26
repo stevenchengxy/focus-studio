@@ -61,6 +61,9 @@ Use
 `set_zoom_style` for global motion, before those local edits; automatic regeneration can change segments.
 To slow or quicken camera tracking, read `get_project.look.zoomFollowSpeed` and change it with
 `update_settings` (0.25–2×). Camera follow strength is set separately with `zoomFollowsCursor`.
+For one zoom, pass `follow_speed` to `update_zoom` or `add_zoom`. Restore inheritance with
+`update_zoom` and `inherit_follow_speed: true`. Check `follow_speed` and `inherits_follow_speed` in the returned zoom.
+For the current selection, read `get_project.selected_zoom_id` on `get_status.open_project_id`. A null selection means the user needs to choose a zoom.
 If these newer tools are absent from the connected catalog, update Focus Studio before claiming to use them.
 
 For a local highlight (a button, chart or card), inspect `get_timeline`, then

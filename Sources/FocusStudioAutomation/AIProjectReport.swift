@@ -30,7 +30,7 @@ public enum AIProjectReport {
 
     /// The project block of the assistant's prompt, in English (it is read by
     /// the model). Nil explains how to get a project open.
-    static func summary(of project: RecordingProject?, assetsDirectory: URL) -> String {
+    static func summary(of project: RecordingProject?, assetsDirectory: URL, includeZoomDetails: Bool = true) -> String {
         guard let project else { return "No recording is open. Use list_projects and open_project, or record a new demo." }
         let settings = project.settings
         var lines: [String] = []
@@ -45,7 +45,9 @@ public enum AIProjectReport {
         let audio = settings.resolvedProductDemoAudio
         let music = audio.backgroundMusicPath.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent } ?? "none"
         lines.append("Zoom style: automatic zooms \(settings.autoZoomEnabled ? "on" : "off") | hold \(seconds(settings.zoomHold)) s | ease in \(seconds(settings.zoomEaseIn)) s | ease out \(seconds(settings.zoomEaseOut)) s | chain gap \(seconds(settings.resolvedZoomChainGap)) s")
-        lines.append("Zoom motion presets (per segment): classic = direct zoom; tiltReveal = diagonal tilt in and restore; slideFocus = sideward reveal; softDrift = subtle floating move. Set motion_preset in add_zoom or update_zoom.")
+        if includeZoomDetails {
+            lines.append("Zoom motion presets (per segment): classic = direct zoom; tiltReveal = diagonal tilt in and restore; slideFocus = sideward reveal; softDrift = subtle floating move. Set motion_preset in add_zoom or update_zoom.")
+        }
         lines.append("Local highlights: \(project.regionEffects?.count ?? 0). Use capture_frame source_frame=true to inspect the uncropped source, then add_region_effect with clip_id and output start/end. Presets spotlight/lift/tilt; fixed rectangle, no object tracking. get_project lists stable effect IDs, including trimmed-away effects.")
         if settings.autoZoomEnabled, project.zoomSegments.isEmpty, !TimelineMath.hasAutomaticZoomInput(in: project) {
             lines.append("No eligible clicks or typing were captured inside the visible crop. Browser/AX automation may not emit system input events. Use add_zoom at your observed interaction times; enabling automatic zooms cannot recover missing events.")
@@ -61,7 +63,7 @@ public enum AIProjectReport {
             lines.append("Editor media library: \(media.count) asset(s). \(listed.joined(separator: ", ")). Use list_media_assets for all IDs and insert_media_asset to place one on the track.")
         }
         let zooms = AIToolSupport.orderedZooms(project)
-        if !zooms.isEmpty {
+        if includeZoomDetails, !zooms.isEmpty {
             let listed = zooms.prefix(maximumListedZooms).map { "#\($0.index) \(AIToolSupport.zoomLine($0.segment))" }
             var text = "Zooms (time order): " + listed.joined(separator: "; ")
             if zooms.count > maximumListedZooms { text += "; and \(zooms.count - maximumListedZooms) more" }
@@ -91,10 +93,12 @@ public enum AIProjectReport {
         of project: RecordingProject,
         isOpen: Bool,
         assetsDirectory: URL?,
-        musicTracks: [AIMusicTrack] = []
+        musicTracks: [AIMusicTrack] = [],
+        selectedZoomID: UUID? = nil
     ) -> AIJSONValue {
         let settings = project.settings
         let zooms = AIToolSupport.orderedZooms(project)
+        let selected = isOpen ? selectedZoomID.flatMap { id in zooms.first { $0.segment.id == id } } : nil
         let chapters = (project.chapters ?? []).sorted(by: ChapterMath.precedes)
         let typing = project.resolvedTypingActivity
         let regionPlacements = (try? RegionEffectTimeline(project: project).placements) ?? []
@@ -116,8 +120,10 @@ public enum AIProjectReport {
             "export_width": AIJSONValue(settings.exportWidth),
             "frame_rate": AIJSONValue(settings.frameRate),
             "zoom_count": AIJSONValue(zooms.count),
+            "selected_zoom_id": selected.map { AIJSONValue($0.segment.id.uuidString) } ?? .null,
+            "selected_zoom": selected.map { zoomData(index: $0.index, segment: $0.segment, settings: settings) } ?? .null,
             "zoom_motion_presets": .array(ZoomMotionPreset.allCases.map { AIJSONValue($0.rawValue) }),
-            "zooms": .array(zooms.prefix(maximumDataZooms).map { zoomData(index: $0.index, segment: $0.segment) }),
+            "zooms": .array(zooms.prefix(maximumDataZooms).map { zoomData(index: $0.index, segment: $0.segment, settings: settings) }),
             "region_effect_count": AIJSONValue(project.regionEffects?.count ?? 0),
             "region_effect_presets": .array(RegionEffectPreset.allCases.map { AIJSONValue($0.rawValue) }),
             "region_effect_backgrounds": .array(RegionEffectBackground.allCases.map { AIJSONValue($0.rawValue) }),
@@ -220,7 +226,7 @@ public enum AIProjectReport {
     }
 
     /// One zoom with its 1-based time-order number and its stable id.
-    static func zoomData(index: Int, segment: ZoomSegment) -> AIJSONValue {
+    static func zoomData(index: Int, segment: ZoomSegment, settings: ProjectSettings) -> AIJSONValue {
         [
             "index": AIJSONValue(index),
             "id": AIJSONValue(segment.id.uuidString),
@@ -230,6 +236,8 @@ public enum AIProjectReport {
             "y": .rounded(segment.targetY),
             "scale": .rounded(segment.scale),
             "motion_preset": AIJSONValue(segment.motionPreset.rawValue),
+            "follow_speed": .rounded(segment.resolvedZoomFollowSpeed(settings: settings)),
+            "inherits_follow_speed": AIJSONValue(segment.zoomFollowSpeed == nil),
             // Null means the project's zoomEaseIn/zoomEaseOut is inherited.
             "ease_in": segment.zoomEaseIn.map { .rounded($0) } ?? .null,
             "ease_out": segment.zoomEaseOut.map { .rounded($0) } ?? .null,

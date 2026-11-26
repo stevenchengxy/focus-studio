@@ -22,12 +22,21 @@ final class StudioModel: ObservableObject {
         case editor
     }
 
-    @Published var destination: Destination = .library
+    @Published var destination: Destination = .library {
+        didSet { if destination != .editor, selectedEditorZoomID != nil { selectedEditorZoomID = nil } }
+    }
     @Published var projects: [RecordingProject] = []
     @Published private(set) var globalMediaAssets: [DemoMediaAsset] = []
     @Published var activeProject: RecordingProject? {
-        didSet { assistantAssetsLocator.update(sourceVideoPath: activeProject?.sourceVideoPath) }
+        didSet {
+            assistantAssetsLocator.update(sourceVideoPath: activeProject?.sourceVideoPath)
+            if let id = selectedEditorZoomID,
+               oldValue?.id != activeProject?.id || activeProject?.zoomSegments.contains(where: { $0.id == id }) != true {
+                selectedEditorZoomID = nil
+            }
+        }
     }
+    @Published private(set) var selectedEditorZoomID: UUID?
     /// Carries the playhead across the first clip edit, which opens a separate
     /// editable copy and consequently recreates the editor view.
     var pendingEditorVideoEditResume: (time: Double, clipID: UUID?)?
@@ -2379,6 +2388,21 @@ final class StudioModel: ObservableObject {
                 return active
             },
             set: { self.updateActiveProject($0) }
+        )
+    }
+
+    /// Shared by the timeline and zoom inspector. A disappearing editor can
+    /// still deliver a selection change after another project opens.
+    func editorZoomSelection(for projectID: UUID) -> Binding<UUID?> {
+        Binding(
+            get: { self.openProjectID == projectID ? self.selectedEditorZoomID : nil },
+            set: { id in
+                guard self.openProjectID == projectID else { return }
+                let selected = id.flatMap { candidate in
+                    self.activeProject?.zoomSegments.contains { $0.id == candidate } == true ? candidate : nil
+                }
+                if self.selectedEditorZoomID != selected { self.selectedEditorZoomID = selected }
+            }
         )
     }
 

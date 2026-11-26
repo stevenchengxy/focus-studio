@@ -14,6 +14,9 @@ test('release selection uses semantic version, channels and uploaded installer a
   assert.ok(compareVersions('1.10.0','1.9.0')>0);
   assert.equal(selectRelease(data,'mac','preview').info.version,'1.10.0');
   assert.equal(selectRelease(data,'mac','stable').info.version,'1.9.0');
+  const storeChannel = releaseOptions(new URL('https://studio.test/api/releases?platform=mac')).channel;
+  assert.match(selectRelease(data,'mac',storeChannel).info.download_url,/channel=stable&version=1.9.0$/);
+  assert.match(selectRelease([release('1.10.0')],'mac',storeChannel).info.download_url,/channel=preview&version=1.10.0$/);
   assert.equal(selectRelease(data,'mac','preview','1.9.0').info.version,'1.9.0');
   assert.equal(selectRelease(data,'mac','stable','1.10.0'),null);
   assert.match(selectRelease(data,'mac','preview').info.download_url,/channel=preview&version=1.10.0$/);

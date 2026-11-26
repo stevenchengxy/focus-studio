@@ -974,6 +974,7 @@ struct AIAssistantTests {
         private var stopInFlight: Task<Void, Never>?
         var projects: [RecordingProject] = []
         var openID: UUID?
+        var selectedEditorZoomID: UUID?
         var closeCount = 0
         var tracks: [AIMusicTrack] = []
         /// Seconds recorded so far, reported while `.recording`.

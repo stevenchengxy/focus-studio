@@ -37,9 +37,9 @@
 		</dict>
 	</array>
 	<key>CFBundleShortVersionString</key>
-	<string>1.14.14</string>
+	<string>1.14.15</string>
 	<key>CFBundleVersion</key>
-	<string>77</string>
+	<string>78</string>
 	<key>FocusStudioUpdatePublicKey</key>
 	<string>bHePExwYkgIPn6mY9UBKg5w9b2TKuTzTD3PiAsYiC4c=</string>
 	<key>FocusStudioUpdateChannel</key>

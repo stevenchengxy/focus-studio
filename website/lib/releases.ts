@@ -16,7 +16,7 @@ export function compareVersions(a: string, b: string): number {
   for (let i = 0; i < 3; i++) { if (left[i] !== right[i]) return left[i] - right[i]; }
   return 0;
 }
-export function selectRelease(data: unknown, platform: ReleasePlatform, channel: ReleaseChannel, version?: string, releaseTag?: string, filename?: string) {
+export function selectRelease(data: unknown, platform: ReleasePlatform, channel?: ReleaseChannel, version?: string, releaseTag?: string, filename?: string) {
   if (!Array.isArray(data)) throw new Error('Invalid release catalog');
   const pattern = platform === 'mac' ? /^Focus-Studio-(\d+\.\d+\.\d+)-universal-(?:notarized|developer-id|local)\.dmg$/
     : platform === 'windows' ? /^Focus-Studio-Desktop-(\d+\.\d+\.\d+)-windows-x64\.exe$/
@@ -38,18 +38,23 @@ export function selectRelease(data: unknown, platform: ReleasePlatform, channel:
           url.pathname.split('/').at(-1) !== asset.name) continue;
       const tag = url.pathname.split('/').at(-2)!;
       if ((releaseTag && tag !== releaseTag) || (filename && asset.name !== filename)) continue;
-      const identity = new URLSearchParams({ channel, version: match[1], release: tag, asset: asset.name });
+      const publishedChannel = release.prerelease ? 'preview' : 'stable';
+      const downloadChannel = channel ?? publishedChannel;
+      const identity = new URLSearchParams({ channel: downloadChannel, version: match[1], release: tag, asset: asset.name });
       candidates.push({ assetURL: url.href, pinnedURL: `${ORIGIN}/api/download/${platform}?${identity}`, info: {
-        platform, version: match[1], channel: release.prerelease ? 'preview' : 'stable',
+        platform, version: match[1], channel: publishedChannel,
         title: String(release.name || 'Focus Studio').slice(0, 200), published_at: release.published_at,
-        download_url: `${ORIGIN}/api/download/${platform}?channel=${channel}&version=${match[1]}`,
+        download_url: `${ORIGIN}/api/download/${platform}?channel=${downloadChannel}&version=${match[1]}`,
         release_url: release.html_url, minimum_os: platform === 'mac' ? '15.0' : null,
       } });
     }
   }
-  candidates.sort((a, b) => compareVersions(b.info.version, a.info.version) ||
-    (Number(a.info.channel === 'preview') - Number(b.info.channel === 'preview')) ||
-    Date.parse(b.info.published_at) - Date.parse(a.info.published_at));
+  candidates.sort((a, b) => {
+    const stableFirst = Number(a.info.channel === 'preview') - Number(b.info.channel === 'preview');
+    return (channel === undefined && platform === 'mac' ? stableFirst : 0) ||
+      compareVersions(b.info.version, a.info.version) || stableFirst ||
+      Date.parse(b.info.published_at) - Date.parse(a.info.published_at);
+  });
   return candidates[0] ?? null;
 }
 
@@ -117,13 +122,13 @@ export async function releaseCatalog(fetcher: typeof fetch = fetch): Promise<unk
 
 export function releaseOptions(url: URL) {
   const platform = url.searchParams.get('platform') || 'mac';
-  const channel = url.searchParams.get('channel') || 'preview';
+  const channel = url.searchParams.get('channel');
   const version = url.searchParams.get('version') || undefined;
   const releaseTag = url.searchParams.get('release') || undefined;
   const filename = url.searchParams.get('asset') || undefined;
-  if (!['mac', 'windows', 'linux'].includes(platform) || !['stable', 'preview'].includes(channel) ||
+  if (!['mac', 'windows', 'linux'].includes(platform) || (channel !== null && !['stable', 'preview'].includes(channel)) ||
       (version && !/^\d+\.\d+\.\d+$/.test(version)) ||
       (!!releaseTag !== !!filename) || (releaseTag && !/^v\d+\.\d+\.\d+(?:-preview\.\d+)?$/.test(releaseTag)) ||
       (filename && !/^[a-zA-Z0-9._-]{1,180}$/.test(filename))) return null;
-  return { platform: platform as ReleasePlatform, channel: channel as ReleaseChannel, version, releaseTag, filename };
+  return { platform: platform as ReleasePlatform, channel: (channel ?? undefined) as ReleaseChannel | undefined, version, releaseTag, filename };
 }

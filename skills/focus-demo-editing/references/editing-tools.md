@@ -119,7 +119,7 @@ For example, after looking up the segment's real ID:
 }
 ```
 
-This changes that segment while keeping its ID. The result becomes a manual camera edit, so later automatic
+This timing change keeps the segment's ID. The result becomes a manual camera edit, so later automatic
 zoom regeneration should not be used to overwrite it. The interval must stay inside the project and be at least 0.2 s; out-of-range values are rejected.
 For a request like “斜着展示，再复原”, choose `tiltReveal` on the intended zoom ID. Use `add_zoom` with the same `motion_preset` only when there is no existing zoom. Preview motion across the full segment in an exported draft; still frames alone do not confirm the animation.
 Extending `end` does not add video duration; to show a result longer, retain enough source footage in the cut.
@@ -138,6 +138,10 @@ This changes camera framing only; the recorded cursor and click metadata stay av
 When the camera catches up too quickly, read `get_project.look.zoomFollowSpeed` and lower it with
 `update_settings` (0.25–2×). For example, try 0.5× for a slow walkthrough. Keep the follow strength
 and zoom timings as set. Judge the result in motion across a pointer move and a change of direction.
+If the request names a single zoom, send `follow_speed` to `update_zoom` with that zoom's ID.
+For “the selected zoom”, read `get_status.open_project_id` and then `get_project.selected_zoom_id`; if null, ask the user to select a zoom.
+To restore the project speed, send `inherit_follow_speed: true` on its own with the ID. Each entry in
+`get_project.zooms` reports its effective `follow_speed` and `inherits_follow_speed`.
 
 For a larger recorded pointer, set `cursorScale` with `update_settings` (0.5–8×, default 1.35×).
 Read the current value in `get_project.look.cursorScale` and check the result with `capture_frame`.

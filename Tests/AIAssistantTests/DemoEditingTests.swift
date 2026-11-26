@@ -95,6 +95,33 @@ extension AIAssistantTests {
         let secondID = zoomProject.zoomSegments[1].id
         let box = ProjectBox(zoomProject)
         let context = makeContext(root: root, box: box)
+        let custom = try await UpdateZoomTool().run(arguments: ["zoom_id": secondID.uuidString, "follow_speed": 0.45], context: context, progress: { _ in })
+        var onlySecondSpeed = zoomProject
+        onlySecondSpeed.zoomSegments[1].zoomFollowSpeed = 0.45
+        check(box.project == onlySecondSpeed && custom.data?["zoom"]?["follow_speed"] == 0.45
+              && custom.data?["zoom"]?["inherits_follow_speed"] == false,
+              "a speed-only change preserves the other zoom, the automatic cue's mode, and project settings")
+        _ = try await UpdateSettingsTool().run(arguments: ["zoomFollowSpeed": 1.3], context: context, progress: { _ in })
+        let speeds = AIProjectReport.data(of: box.project!, isOpen: true, assetsDirectory: nil)["zooms"]
+        check(speeds?[0]?["follow_speed"] == 1.3 && speeds?[0]?["inherits_follow_speed"] == true
+              && speeds?[1]?["follow_speed"] == 0.45 && speeds?[1]?["inherits_follow_speed"] == false,
+              "get_project reflects changes to the project speed only on inheriting zooms")
+        let cleared = try await UpdateZoomTool().run(arguments: ["zoom_id": secondID.uuidString, "inherit_follow_speed": true], context: context, progress: { _ in })
+        check(box.project?.zoomSegments == zoomProject.zoomSegments && cleared.data?["zoom"]?["follow_speed"] == 1.3
+              && cleared.data?["zoom"]?["inherits_follow_speed"] == true, "restoring inheritance keeps cue identity and provenance")
+        let beforeBadSpeed = box.project
+        for patch: [String: Any] in [
+            ["follow_speed": 0.1], ["follow_speed": 2.1], ["follow_speed": true], ["follow_speed": Double.nan],
+            ["follow_speed": 1.3, "inherit_follow_speed": true], ["inherit_follow_speed": "bad"]
+        ] {
+            var arguments = patch
+            arguments["zoom_id"] = secondID.uuidString
+            arguments["enabled"] = false
+            await expectThrows("bad speed or conflicting inheritance is atomic") {
+                _ = try await UpdateZoomTool().run(arguments: arguments, context: context, progress: { _ in })
+            }
+        }
+        check(box.project == beforeBadSpeed, "invalid speed edits never partially apply")
         let update = try await UpdateZoomTool().run(arguments: ["zoom_id": secondID.uuidString, "start": 1.2, "end": 2.8, "ease_in": 0.15], context: context, progress: { _ in })
         check(update.data?["zoom"]?["index"]?.intValue == 2, "updating second zoom reports its true index")
         check(box.project!.zoomSegments[0] == first && box.project!.zoomSegments[1].id == secondID && box.project!.zoomSegments[1].zoomEaseIn == 0.15, "targeted update preserves other zoom and stable identity")
@@ -132,10 +159,11 @@ extension AIAssistantTests {
         motionProject.zoomSegments = []
         let motionBox = ProjectBox(motionProject)
         let motionContext = makeContext(root: root.appendingPathComponent("motion-presets"), box: motionBox)
-        let addedMotion = try await AddZoomTool().run(arguments: ["start": 0.2, "end": 2.6, "x": 0.45, "y": 0.55, "motion_preset": "tiltReveal"], context: motionContext, progress: { _ in })
+        let addedMotion = try await AddZoomTool().run(arguments: ["start": 0.2, "end": 2.6, "x": 0.45, "y": 0.55, "motion_preset": "tiltReveal", "follow_speed": 2], context: motionContext, progress: { _ in })
         let motionID = addedMotion.data?["zoom_id"]?.stringValue ?? ""
-        check(addedMotion.data?["zoom"]?["motion_preset"] == "tiltReveal" && motionBox.project?.zoomSegments.first?.motionPreset == .tiltReveal,
-              "add_zoom stores and returns the diagonal motion preset")
+        check(addedMotion.data?["zoom"]?["motion_preset"] == "tiltReveal" && motionBox.project?.zoomSegments.first?.motionPreset == .tiltReveal
+              && addedMotion.data?["zoom"]?["follow_speed"] == 2 && addedMotion.data?["zoom"]?["inherits_follow_speed"] == false,
+              "add_zoom stores and returns the diagonal motion preset and explicit follow speed")
         let motionReport = AIProjectReport.data(of: motionBox.project!, isOpen: true, assetsDirectory: nil)
         check(motionReport["zooms"]?.arrayValue?.first?["motion_preset"] == "tiltReveal"
               && motionReport["zoom_motion_presets"]?.arrayValue?.count == ZoomMotionPreset.allCases.count,
@@ -410,6 +438,23 @@ extension AIAssistantTests {
         session.send("Extend the second zoom to end at 3.6 seconds.")
         try await waitUntil("stable zoom IDs reach the editing model") { !session.isRunning }
         check(box.project?.zoomSegments[0] == first && box.project?.zoomSegments[1].id == second.id && box.project?.zoomSegments[1].end == 3.6, "the assistant adjusts the existing zoom rather than replacing it")
+        app.selectedEditorZoomID = second.id
+        let selectedProvider = EditingReceiptCompletion { step, user in
+            switch step {
+            case 0: return action("get_project")
+            case 1:
+                let marker = "Selected zoom: "
+                let reported = user.components(separatedBy: marker).last?.prefix(36) ?? ""
+                check(user.contains(marker) && reported == second.id.uuidString, "a selection read identifies the exact cue to the model")
+                return action("update_zoom", "{\"zoom_id\":\"\(reported)\",\"follow_speed\":0.5}")
+            default: return reply("已调整当前缩放。")
+            }
+        }
+        let selectedSession = AIAssistantSession(context: context, completion: selectedProvider)
+        selectedSession.send("把当前选中的这段调到 0.5×")
+        try await waitUntil("selected-only edit resolves the live editor selection") { !selectedSession.isRunning }
+        check(box.project?.zoomSegments[0] == first && box.project?.zoomSegments[1].zoomFollowSpeed == 0.5
+              && box.project?.settings == project.settings, "the in-app assistant only changes the selected cue's speed")
         let data: AIJSONValue = ["zoom_id": AIJSONValue(second.id.uuidString)]
         let json = String(decoding: try data.jsonData(), as: UTF8.self)
         let once = AIAssistantSession.modelReceipt(AIToolResult(text: "Result\n" + json, data: data))

@@ -6,6 +6,7 @@ import Foundation
 /// Pointer smoothing, click anchoring, stable semantic shapes and camera follow.
 func cursorMotionFailures() -> [String] {
     var failures: [String] = cursorStabilityFailures()
+    failures.append(contentsOf: cueFollowSpeedFailures())
     func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
         if !condition() { failures.append(message) }
     }

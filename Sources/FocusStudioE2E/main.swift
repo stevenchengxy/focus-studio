@@ -145,6 +145,7 @@ enum FocusStudioE2E {
             try await CursorVisibilityValidation.run(project: project, outputDirectory: outputDirectory)
             try await PauseRecordingValidation.run(sourceURL: sourceURL, outputDirectory: outputDirectory)
             try await validateZoomTimingRendering(project: project, outputDirectory: outputDirectory)
+            try await validateSegmentFollowSpeed(project: project, outputDirectory: outputDirectory)
             try await validateZoomMotionPresetRendering(project: project, outputDirectory: outputDirectory)
             try await validateRegionEffectRendering(project: project, outputDirectory: outputDirectory)
             let chapterCaptionDifference = try await validateChapterCaptionRendering(
@@ -1554,6 +1555,61 @@ enum FocusStudioE2E {
         }
         CGImageDestinationAddImage(destination, exportedFrame, nil)
         try require(CGImageDestinationFinalize(destination), "could not save click feedback review frame")
+    }
+
+    private static func validateSegmentFollowSpeed(project: RecordingProject, outputDirectory: URL) async throws {
+        var original = project
+        original.settings.backgroundStyle = .none
+        original.settings.zoomFollowSpeed = 1
+        original.settings.zoomChainGap = 0
+        original.settings.motionBlur = 0
+        original.settings.cursorAnimation = .none
+        original.clickEvents = []
+        original.typingActivity = []
+        original.chapters = []
+        original.editCutTimes = [1.2]
+        original.zoomSegments = [0.0, 1.2].map { start in
+            ZoomSegment(start: start, end: start + 1.1, targetX: 0.35, targetY: 0.5,
+                        scale: 2.5, zoomEaseIn: 0.12, zoomEaseOut: 0.12)
+        }
+        original.cursorSamples = (0...288).map { index in
+            let time = Double(index) / 120
+            let local = time.truncatingRemainder(dividingBy: 1.2)
+            let sweep = min(1, max(0, (local - 0.25) / 0.55))
+            return CursorSample(time: time, x: 0.35 + 0.38 * sweep, y: 0.5)
+        }
+        var edited = original
+        edited.zoomSegments[1].zoomFollowSpeed = 0.25
+        edited = try JSONDecoder().decode(RecordingProject.self, from: JSONEncoder().encode(edited))
+        var cleared = edited
+        cleared.zoomSegments[1].zoomFollowSpeed = nil
+
+        let originalPreview = makeImageGenerator(for: try await ProjectVideoRenderer.prepare(project: original))
+        let editedPreview = makeImageGenerator(for: try await ProjectVideoRenderer.prepare(project: edited))
+        let clearedPreview = makeImageGenerator(for: try await ProjectVideoRenderer.prepare(project: cleared))
+        let url = outputDirectory.appendingPathComponent("focus-studio-segment-follow-speed.mp4")
+        _ = try await ProjectVideoRenderer.export(project: edited, to: url)
+        let encoded = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+        encoded.requestedTimeToleranceBefore = .zero
+        encoded.requestedTimeToleranceAfter = .zero
+        // Both shots contain the same pointer sweep. Only the second has an override.
+        for index: Int64 in [15, 17, 44, 46, 56] {
+            let time = CMTime(value: index, timescale: 24)
+            let before = try await originalPreview.image(at: time).image
+            let after = try await editedPreview.image(at: time).image
+            let reset = try await clearedPreview.image(at: time).image
+            let movie = try await encoded.image(at: time).image
+            try require(imageDifference(before, reset).meanAbsolute < 0.001,
+                        "clearing a segment follow speed must restore the original camera at frame \(index)")
+            try require(imageDifference(after, movie).meanAbsolute < 3,
+                        "segment follow speed must match between preview and export at frame \(index)")
+            let change = imageDifference(before, after).meanAbsolute
+            if index == 44 || index == 46 {
+                try require(change > 3, "a slower follow speed must visibly affect the selected segment")
+            } else {
+                try require(change < 0.001, "a segment follow speed must not affect the other shot or the overview")
+            }
+        }
     }
 
     private static func validateZoomTimingRendering(project: RecordingProject, outputDirectory: URL) async throws {

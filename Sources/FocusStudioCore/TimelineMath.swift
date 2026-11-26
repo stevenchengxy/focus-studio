@@ -247,6 +247,7 @@ public enum TimelineMath {
             updated.isInstant = previous.isInstant
             updated.zoomEaseIn = previous.zoomEaseIn
             updated.zoomEaseOut = previous.zoomEaseOut
+            updated.zoomFollowSpeed = previous.zoomFollowSpeed
             updated.motionPreset = previous.motionPreset
             return updated
         }
@@ -258,7 +259,16 @@ public enum TimelineMath {
         segments: [ZoomSegment],
         settings: ProjectSettings
     ) -> ZoomState {
-        guard time.isFinite else { return ZoomState() }
+        evaluatedZoom(at: time, segments: segments, settings: settings).state
+    }
+
+    static func evaluatedZoom(
+        at time: Double,
+        segments: [ZoomSegment],
+        settings: ProjectSettings
+    ) -> (state: ZoomState, followSpeed: Double) {
+        var followSpeed = settings.resolvedZoomFollowSpeed
+        guard time.isFinite else { return (ZoomState(), followSpeed) }
         let active = segments
             .filter {
                 $0.isEnabled && $0.start.isFinite && $0.end.isFinite
@@ -295,7 +305,7 @@ public enum TimelineMath {
                 return (segment: segment, amount: amount)
             }
 
-        guard !active.isEmpty else { return ZoomState() }
+        guard !active.isEmpty else { return (ZoomState(), followSpeed) }
 
         // Auto zooms can overlap when clicks happen close together. Combining
         // their envelopes as a smooth union (1 - Π(1 - amount)) keeps the camera
@@ -319,6 +329,7 @@ public enum TimelineMath {
         // Folding in timeline order lets a newer click finish at its own target.
         var focusX = 0.5
         var focusY = 0.5
+        var focusCoverage = 0.0
         var rotation = 0.0
         var offsetX = 0.0
         var offsetY = 0.0
@@ -355,6 +366,18 @@ public enum TimelineMath {
             }
             focusX += (visibleX - focusX) * weight
             focusY += (visibleY - focusY) * weight
+            // Speed belongs to the visible cues. The overview carries no vote,
+            // so one cue gets its exact rate even partway through its entrance.
+            if weight > 0 {
+                let speed = entry.segment.resolvedZoomFollowSpeed(settings: settings)
+                let retainedCoverage = (1 - weight) * focusCoverage
+                focusCoverage = weight + retainedCoverage
+                if retainedCoverage == 0 {
+                    followSpeed = speed
+                } else {
+                    followSpeed += (speed - followSpeed) * (weight / focusCoverage)
+                }
+            }
             let motion = motionOffset(
                 for: entry.segment, at: time, settings: settings
             )
@@ -365,7 +388,7 @@ public enum TimelineMath {
             offsetY += (motion.y - offsetY) * entry.amount
             previousVisible = (visibleX, visibleY)
         }
-        return ZoomState(
+        let state = ZoomState(
             scale: scale,
             centerX: clampedFocus(focusX, scale: scale),
             centerY: clampedFocus(focusY, scale: scale),
@@ -374,6 +397,7 @@ public enum TimelineMath {
             offsetX: offsetX,
             offsetY: offsetY
         )
+        return (state, followSpeed)
     }
 
     private static func motionOffset(

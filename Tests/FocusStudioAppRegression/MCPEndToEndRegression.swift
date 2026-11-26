@@ -34,7 +34,18 @@ enum MCPEndToEndRegression {
         let fixture = try await EndToEndFixture()
         defer { fixture.cleanup() }
         var windowRequests = 0
-        fixture.bridge.presentWindow = { windowRequests += 1 }
+        let model = fixture.model
+        var simulatedSelection: UUID?
+        fixture.bridge.presentWindow = {
+            windowRequests += 1
+            // Stand in for the user's click in EditorTimelineView. The driver brings
+            // the editor forward after both cues exist, then reads this binding over MCP.
+            if simulatedSelection == nil, let project = model.activeProject, project.zoomSegments.count == 2,
+               let second = project.zoomSegments.max(by: { $0.start < $1.start }) {
+                model.editorZoomSelection(for: project.id).wrappedValue = second.id
+                simulatedSelection = second.id
+            }
+        }
         let server = fixture.makeServer()
         server.start()
         defer { server.stop() }
@@ -59,8 +70,12 @@ enum MCPEndToEndRegression {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let saved = try decoder.decode(RecordingProject.self, from: Data(contentsOf: trashed.appendingPathComponent("project.json")))
-        try ControlServerRegression.expect(saved.title == "E2E renamed" && saved.zoomSegments.count == 1 && saved.settings.padding == 24 && saved.settings.cornerRadius == 12 && saved.settings.frameRate == 24,
-                                           "Its last saved state has the rename, the zoom and the settings: \(saved.title), \(saved.zoomSegments.count) zooms, padding \(saved.settings.padding), \(saved.settings.frameRate) fps")
+        try ControlServerRegression.expect(saved.title == "E2E renamed" && saved.zoomSegments.count == 2 && saved.settings.padding == 24 && saved.settings.cornerRadius == 12 && saved.settings.frameRate == 24,
+                                           "Its last saved state has the rename, both zooms and the settings: \(saved.title), \(saved.zoomSegments.count) zooms, padding \(saved.settings.padding), \(saved.settings.frameRate) fps")
+        try ControlServerRegression.expect(simulatedSelection != nil && saved.zoomSegments.max(by: { $0.start < $1.start })?.id == simulatedSelection,
+                                           "The fixture selected the later cue through the timeline's editor binding")
+        try ControlServerRegression.expect(saved.settings.resolvedZoomFollowSpeed == 0.5 && saved.zoomSegments.allSatisfy { $0.zoomFollowSpeed == nil },
+                                           "Both zooms inherit the project's speed after the override is cleared and the project reopens")
         let export = fixture.cwd.appendingPathComponent("out/e2e.mp4")
         try ControlServerRegression.expect(((try? FileManager.default.attributesOfItem(atPath: export.path)[.size] as? Int) ?? 0) > 1_000, "The export is in the client's folder")
         try ControlServerRegression.expect(FileManager.default.fileExists(atPath: fixture.cwd.appendingPathComponent("clip.mp4").path), "The imported video is copied, not moved")

@@ -797,6 +797,7 @@
 "Choose recording source" = "Choose recording source";
 "Follow cursor" = "Follow cursor";
 "Follow speed" = "Follow speed";
+"Project · %.2f×" = "Project · %.2f×";
 
 /* zoom transition boundaries */
 "Zoom in ends" = "Zoom in ends";

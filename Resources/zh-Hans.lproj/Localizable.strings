@@ -797,6 +797,7 @@
 "Choose recording source" = "选择录制来源";
 "Follow cursor" = "跟随光标";
 "Follow speed" = "跟随速度";
+"Project · %.2f×" = "继承项目 · %.2f×";
 
 /* zoom transition boundaries */
 "Zoom in ends" = "放大完成于";

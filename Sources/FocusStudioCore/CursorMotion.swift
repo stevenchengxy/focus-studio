@@ -341,16 +341,32 @@ public enum CursorFollow {
         discontinuities: [Double] = [],
         cursorIsAvailable: ((Double) -> Bool)? = nil
     ) -> [Sample] {
+        offsets(from: 0, through: duration, segments: segments, settings: settings, cursor: cursor,
+                strength: strength, sourceCrop: sourceCrop, discontinuities: discontinuities,
+                cursorIsAvailable: cursorIsAvailable)
+    }
+
+    /// Simulate a fresh camera for one shot while evaluating authored zooms
+    /// and pointer samples on the same presentation clock as the renderer.
+    static func offsets(
+        from start: Double, through end: Double,
+        segments: [ZoomSegment], settings: ProjectSettings, cursor: [CursorSample],
+        strength: Double, sourceCrop: SourceCropInsets,
+        discontinuities: [Double] = [], cursorIsAvailable: ((Double) -> Bool)? = nil
+    ) -> [Sample] {
         let strength = strength.isFinite ? strength.clamped(to: 0...1) : 0
         let cues = segments.filter { $0.isEnabled && $0.start.isFinite && $0.end.isFinite }
             .sorted { $0.start < $1.start }
-        guard strength > 0, duration.isFinite, duration > 0, !cursor.isEmpty, !cues.isEmpty else { return [] }
+        guard strength > 0, start.isFinite, end.isFinite, end > start, !cursor.isEmpty, !cues.isEmpty else { return [] }
 
         let cuts = discontinuities.filter { $0.isFinite && $0 >= 0 }.sorted()
-        let count = max(1, Int((duration * sampleRate - 1e-9).rounded(.up))) + 1
+        // Exact shot edges plus the original 60 Hz grid, including for cuts
+        // between ticks. A fractional cut must not re-time every later frame.
+        let firstInteriorFrame = Int((start * sampleRate + 1e-9).rounded(.down)) + 1
+        let endFrame = Int((end * sampleRate - 1e-9).rounded(.up))
+        let count = 2 + max(0, endFrame - firstInteriorFrame)
         let margin = softZone + (1 - strength) * 0.24
         let limit = hardZone + (1 - strength) * 0.16
-        let responseTime = response / settings.resolvedZoomFollowSpeed
         // Below the default follow strength the user can deliberately keep
         // more of the authored framing. The default gets full travel at the
         // edges; stronger settings start panning closer to the centre.
@@ -364,15 +380,20 @@ public enum CursorFollow {
         var active: [ZoomSegment] = []
         var result: [Sample] = []
         result.reserveCapacity(count)
+        var previousTime = start
         for index in 0..<count {
-            let time = min(duration, Double(index) / sampleRate)
-            let dt = index > 0 ? time - Double(index - 1) / sampleRate : 0
+            let time: Double
+            if index == 0 { time = start }
+            else if index == count - 1 { time = end }
+            else { time = Double(firstInteriorFrame + index - 1) / sampleRate }
+            let dt = time - previousTime
+            previousTime = time
             while nextCue < cues.count, cues[nextCue].start <= time {
                 active.append(cues[nextCue])
                 nextCue += 1
             }
             active.removeAll { $0.end < time }
-            let zoom = TimelineMath.zoomState(at: time, segments: active, settings: settings)
+            let (zoom, followSpeed) = TimelineMath.evaluatedZoom(at: time, segments: active, settings: settings)
             let crossedCut = nextCut < cuts.count && cuts[nextCut] <= time
             while nextCut < cuts.count, cuts[nextCut] <= time { nextCut += 1 }
             let available = cursorIsAvailable?(time) ?? true
@@ -409,7 +430,7 @@ public enum CursorFollow {
                 } else if let pointer {
                     if followSince == nil { followSince = time }
                     let engage = TimelineMath.smootherStep((time - (followSince ?? time)) / 0.10)
-                    let mix = -expm1(-dt / responseTime)
+                    let mix = -expm1(-dt / (response / followSpeed))
                     func track(_ offset: Double, pointer: Double, base: Double) -> Double {
                         let delta = (pointer - base) * travel
                         // The dead zone moves with the actual framing. A small

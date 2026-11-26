@@ -30,8 +30,8 @@ public struct GetProjectTool: AIAssistantTool {
     ) async throws -> AIToolResult {
         let app = try AIToolSupport.requireApp(context)
         let requested = try await Self.projectID(AIToolArguments(raw), context: context, app: app)
-        let (found, openID, tracks, library) = await MainActor.run {
-            (app.project(id: requested), app.openProjectID, app.bundledMusicTracks, app.libraryDirectory)
+        let (found, openID, tracks, library, selectedZoomID) = await MainActor.run {
+            (app.project(id: requested), app.openProjectID, app.bundledMusicTracks, app.libraryDirectory, app.selectedEditorZoomID)
         }
         guard let project = found else {
             throw AIToolError.invalidArgument("No project has the id \(requested.uuidString). Call list_projects for the current ids.")
@@ -40,9 +40,14 @@ public struct GetProjectTool: AIAssistantTool {
         let assets = AIProjectReport.assetsDirectory(for: project, libraryRoot: context.projectsDirectory ?? library)
         let title = AIProjectSummary(project: project).displayTitle
         var lines = ["Project \"\(title)\" (id \(project.id.uuidString), \(isOpen ? "open in the editor" : "not open in the editor"))"]
-        lines.append(AIProjectReport.summary(of: project, assetsDirectory: assets ?? context.assetsDirectory))
-        lines.append("Recorded input: \(project.clickEvents.count) clicks, \((project.typingActivity ?? []).count) typing moments. The structured result lists up to 200 of each, sampled evenly, and the first 70 zooms with their ids and motion presets.")
-        let data = AIProjectReport.data(of: project, isOpen: isOpen, assetsDirectory: assets, musicTracks: tracks)
+        // The structured response already lists the cues. Avoid repeating long
+        // cue lists in prose so projects retain the full structured row budget.
+        lines.append(AIProjectReport.summary(of: project, assetsDirectory: assets ?? context.assetsDirectory,
+                                             includeZoomDetails: project.zoomSegments.count <= AIProjectReport.maximumListedZooms))
+        let data = AIProjectReport.data(of: project, isOpen: isOpen, assetsDirectory: assets, musicTracks: tracks,
+                                        selectedZoomID: selectedZoomID)
+        if let id = data["selected_zoom_id"]?.stringValue { lines.append("Selected zoom: \(id)") }
+        lines.append("Structured detail includes the selected zoom, the first 70 zooms, and up to 200 sampled clicks and typing moments each.")
         return AIToolResult(text: lines.joined(separator: "\n"), data: data)
     }
 

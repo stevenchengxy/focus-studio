@@ -22,7 +22,7 @@ public enum EditedTimelineMotion {
             result.append(contentsOf: rendered)
             // Interpolation between the old endpoint and next shot must occur
             // only in an epsilon-sized boundary, never across a sparse tail.
-            if shot.end < duration, var hold = result.last, hold.time < shot.end - boundaryEpsilon {
+            if shot.end < duration, var hold = rendered.last, hold.time < shot.end - boundaryEpsilon {
                 hold.time = shot.end - boundaryEpsilon
                 result.append(hold)
             }
@@ -33,32 +33,24 @@ public enum EditedTimelineMotion {
     public static func followOffsets(duration: Double, segments: [ZoomSegment], settings: ProjectSettings, cursor: [CursorSample], strength: Double, cutTimes: [Double], sourceCrop: SourceCropInsets = SourceCropInsets()) -> [CursorFollow.Sample] {
         var result: [CursorFollow.Sample] = []
         for shot in shots(duration: duration, cutTimes: cutTimes) {
-            let localCursor = cursor.filter { $0.time >= shot.start && ($0.time < shot.end || shot.end == duration && $0.time == duration) }.map {
-                CursorSample(time: $0.time - shot.start, x: $0.x, y: $0.y, cursorKind: $0.cursorKind, isDragging: $0.isDragging)
-            }
-            let localZooms = segments.compactMap { zoom -> ZoomSegment? in
-                guard zoom.start < shot.end, zoom.end > shot.start else { return nil }
-                var copy = zoom
-                copy.start = max(shot.start, zoom.start) - shot.start
-                copy.end = min(shot.end, zoom.end) - shot.start
-                return copy
-            }
-            let localOffsets = CursorFollow.offsets(duration: shot.duration, segments: localZooms, settings: settings, cursor: localCursor, strength: strength, sourceCrop: sourceCrop)
-            if localOffsets.isEmpty {
+            // Two cues may already overlap when this shot begins. Slicing
+            // their envelopes to the cut would restart both entrances and
+            // could reverse their authored order. Only cursor/inertia reset.
+            let lastTime = shot.end == duration ? shot.end : shot.end.nextDown
+            let shotCursor = cursor.filter { $0.time >= shot.start && $0.time <= lastTime }
+            let shotZooms = segments.filter { $0.start <= lastTime && $0.end >= shot.start }
+            let offsets = CursorFollow.offsets(from: shot.start, through: lastTime,
+                                              segments: shotZooms, settings: settings, cursor: shotCursor,
+                                              strength: strength, sourceCrop: sourceCrop)
+            if offsets.isEmpty {
                 result.append(.init(time: shot.start, dx: 0, dy: 0))
-                result.append(.init(time: shot.end == duration ? shot.end : shot.end - boundaryEpsilon, dx: 0, dy: 0))
-                continue
-            }
-            for offset in localOffsets {
-                let time = shot.start + offset.time
-                if time < shot.end || shot.end == duration {
-                    result.append(.init(time: time, dx: offset.dx, dy: offset.dy))
+                if lastTime > shot.start {
+                    result.append(.init(time: lastTime, dx: 0, dy: 0))
                 }
-            }
-            if shot.end < duration, let last = result.last, last.time < shot.end - boundaryEpsilon {
-                result.append(.init(time: shot.end - boundaryEpsilon, dx: last.dx, dy: last.dy))
+            } else {
+                result.append(contentsOf: offsets)
             }
         }
-        return result.sorted { $0.time < $1.time }
+        return result
     }
 }

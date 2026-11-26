@@ -239,6 +239,7 @@ struct EditorInspectorView: View {
                         .font(.system(size: 10))
                         .foregroundStyle(StudioTheme.secondaryText)
                 }
+                segmentFollowSpeedControl(selected)
             }
             InspectorSection("Scale") {
                 LabeledSlider(value: zoom.scale, range: 1.1...3, suffix: "×", decimals: 2)
@@ -1355,6 +1356,41 @@ struct EditorInspectorView: View {
                 project = updated
             }
         )
+    }
+
+    @ViewBuilder
+    private func segmentFollowSpeedControl(_ segment: ZoomSegment) -> some View {
+        let override = Binding<Double?>(
+            get: { project.zoomSegments.first { $0.id == segment.id }?.zoomFollowSpeed },
+            set: { value in
+                guard let index = project.zoomSegments.firstIndex(where: { $0.id == segment.id }) else { return }
+                // Speed alone leaves an automatic cue's timing and entrance intact.
+                project.zoomSegments[index].zoomFollowSpeed = value
+            }
+        )
+        let projectSpeed = project.settings.resolvedZoomFollowSpeed
+        Picker("Follow speed", selection: Binding(
+            get: { override.wrappedValue != nil },
+            set: { custom in override.wrappedValue = custom ? projectSpeed : nil }
+        )) {
+            Text("Project · \(projectSpeed, specifier: "%.2f")×").tag(false)
+            Text("Custom").tag(true)
+        }
+        .accessibilityIdentifier("editor.zoomFollowSpeedMode")
+        if segment.zoomFollowSpeed != nil {
+            let speed = segment.resolvedZoomFollowSpeed(settings: project.settings)
+            HStack {
+                Slider(value: Binding(get: { speed }, set: { override.wrappedValue = $0 }),
+                       in: ProjectSettings.zoomFollowSpeedRange)
+                    .accessibilityLabel(Text("Follow speed"))
+                    .accessibilityValue(Text("\(speed, specifier: "%.2f")×"))
+                    .accessibilityIdentifier("editor.zoomFollowSpeed")
+                Text("\(speed, specifier: "%.2f")×")
+                    .font(.system(size: 10).monospacedDigit())
+                    .foregroundStyle(StudioTheme.secondaryText)
+            }
+            .controlSize(.small)
+        }
     }
 
     private var zoomFollowBinding: Binding<Double> {

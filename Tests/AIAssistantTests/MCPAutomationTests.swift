@@ -116,6 +116,10 @@ extension AIAssistantTests {
         check(motionValues == Set(["classic", "tiltReveal", "slideFocus", "softDrift"]), "add_zoom advertises all camera motion presets")
         let updateMotionValues = Set(catalog.tool(named: "update_zoom")?.inputSchema["properties"]?["motion_preset"]?["enum"]?.arrayValue?.compactMap(\.stringValue) ?? [])
         check(updateMotionValues == motionValues && catalog.tool(named: "update_zoom")!.description.contains("zoom_id"), "update_zoom can apply a preset to one stable zoom ID")
+        let addSpeed = addZoom.inputSchema["properties"]?["follow_speed"]
+        let updateProperties = catalog.tool(named: "update_zoom")!.inputSchema["properties"]
+        check(addSpeed?["minimum"] == 0.25 && addSpeed?["maximum"] == 2 && addSpeed == updateProperties?["follow_speed"]
+              && updateProperties?["inherit_follow_speed"]?["type"] == "boolean", "MCP can add, adjust and clear a per-cue camera speed")
         let region = catalog.tool(named: "add_region_effect")!
         check(region.inputSchema["required"] == ["project_id", "clip_id", "start", "end", "x", "y", "width", "height"], "region authoring requires explicit clip and rectangle")
         check(region.inputSchema["properties"]?["preset"]?["enum"] == ["spotlight", "lift", "tilt", "perspective", "magnify", "outline"], "region presets agree with the renderer")

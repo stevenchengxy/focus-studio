@@ -12,7 +12,6 @@ struct EditorView: View {
     @State private var isPlaying = false
     @State private var seekRevision = 0
     @State private var showsShortcuts = false
-    @State private var selectedZoomID: UUID?
     @State private var selectedChapterID: UUID?
     @State private var selectedClipID: UUID?
     @State private var selectedRegionEffectID: UUID?
@@ -32,6 +31,8 @@ struct EditorView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
+
+    private var zoomSelection: Binding<UUID?> { model.editorZoomSelection(for: project.id) }
 
     var body: some View {
         let _ = EditorPlaybackMetrics.record("editor.body")
@@ -65,7 +66,7 @@ struct EditorView: View {
                         project: $project,
                         currentTime: seekBinding,
                         playbackClock: playbackClock,
-                        selectedZoomID: $selectedZoomID,
+                        selectedZoomID: zoomSelection,
                         selectedChapterID: $selectedChapterID,
                         selectedClipID: $selectedClipID,
                         selectedRegionEffectID: $selectedRegionEffectID,
@@ -80,7 +81,7 @@ struct EditorView: View {
                 Divider().overlay(StudioTheme.line)
                 EditorInspectorView(
                     project: $project,
-                    selectedZoomID: $selectedZoomID,
+                    selectedZoomID: zoomSelection,
                     selectedChapterID: $selectedChapterID,
                     selectedClipID: $selectedClipID,
                     selectedRegionEffectID: $selectedRegionEffectID,
@@ -117,7 +118,10 @@ struct EditorView: View {
             }
         }
         .onAppear(perform: restoreVideoEditPosition)
-        .onDisappear { isPlaying = false }
+        .onDisappear {
+            isPlaying = false
+            zoomSelection.wrappedValue = nil
+        }
         .animation(reduceMotion ? nil : StudioMotion.panelAnimation, value: selectedTool)
         .overlay {
             if model.isExportingFromEditor {
@@ -157,15 +161,15 @@ struct EditorView: View {
         } message: {
             Text(videoEditMessage ?? "")
         }
-        .onChange(of: selectedZoomID) { _, id in
+        .onChange(of: zoomSelection.wrappedValue) { _, id in
             if id != nil { selectedChapterID = nil; selectedRegionEffectID = nil; selectedTool = .zoom }
         }
         .onChange(of: selectedChapterID) { _, id in
-            if id != nil { selectedZoomID = nil; selectedRegionEffectID = nil; selectedTool = .chapters }
+            if id != nil { zoomSelection.wrappedValue = nil; selectedRegionEffectID = nil; selectedTool = .chapters }
         }
         .onChange(of: selectedClipID) { _, id in
             if id != nil {
-                selectedZoomID = nil
+                zoomSelection.wrappedValue = nil
                 selectedChapterID = nil
                 selectedRegionEffectID = nil
                 selectedTool = .video
@@ -173,7 +177,7 @@ struct EditorView: View {
         }
         .onChange(of: selectedRegionEffectID) { _, id in
             if id != nil {
-                selectedZoomID = nil
+                zoomSelection.wrappedValue = nil
                 selectedChapterID = nil
                 selectedClipID = nil
                 selectedTool = .focus
@@ -543,7 +547,7 @@ struct EditorView: View {
         case .redo: redoVideoEdit()
         case .deselect:
             selectedRegionEffectID = nil
-            selectedZoomID = nil
+            zoomSelection.wrappedValue = nil
             selectedChapterID = nil
             selectedClipID = nil
         }
